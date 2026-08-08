@@ -156,6 +156,26 @@ def load_part_names(parts_path):
     return names, list(data.keys())
 
 
+def detect_cylinder_part(parts_path):
+    """从零件表自动检测被拉伸的缸体零件基础名
+
+    通用规则: 零件名包含"缸体"二字的为基础件缸体。
+    找不到返回 None(由调用方决定是否报错)。
+    """
+    names, _ = load_part_names(parts_path)
+    candidates = [n for n in set(names) if "缸体" in n]
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        # 多个含"缸体"的,取系列号开头的主缸体(如 "250缸体" 优先于 "250缸体盖")
+        series_prefix = names[0].split("-")[0] if names else ""
+        main = [c for c in candidates if c.startswith(series_prefix[:3])]
+        if len(main) == 1:
+            return main[0]
+        return candidates[0]
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("series_dir", nargs="?",
@@ -196,13 +216,16 @@ def main():
     if os.path.exists(args.parts):
         all_names, _ = load_part_names(args.parts)
         base_parts = sorted(n for n in set(all_names) if n not in controlled)
+        cylinder_part = detect_cylinder_part(args.parts)
     else:
         base_parts = []
+        cylinder_part = None
         print(f"  ⚠ 零件表不存在,base_parts 留空: {args.parts}")
 
     config = {
         "series": series_name,
         "cylinder": cylinder,
+        "cylinder_part": cylinder_part,
         "base_parts": base_parts,
         "controlled_count": len(controlled),
         "mount": mount,
@@ -221,6 +244,7 @@ def main():
     print(f"  电机:     {list(motor.keys())}")
     print(f"  缸体:     C={cylinder.get('C')}, base_D1={cylinder.get('base_D1')}, "
           f"formula={cylinder.get('formula')}")
+    print(f"  缸体零件: {cylinder_part or '(未检测到,需手动配置)'}")
     print(f"  常显件({len(base_parts)}): {base_parts}")
     print(f"  受控件:   {len(controlled)}")
 

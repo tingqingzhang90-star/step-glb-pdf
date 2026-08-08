@@ -617,19 +617,52 @@ def build_assembly(model_code, motor=None, series=None):
     # Step 1: 读取零件
     shapes, t_read = step1_read_all_parts(parts_data)
 
-    # 缸体拉伸(主流程)
+    # 缸体拉伸(主流程) + 配合零件位移补偿(通用数据驱动)
+    # cylinder_part 来自配置 JSON, 不硬编码关键词; 主轴方向自动检测
     t_stretch_main = 0.0
-    if cyl:
+    cyl_part_name = config.get("cylinder_part")
+    if cyl and cyl_part_name:
         for key, shape in list(shapes.items()):
             m = _KEY_RE.match(key)
             base = m.group(1) if m else key
-            if "缸体" in base:
+            if base == cyl_part_name:
                 axis = find_cylinder_axis(shape)
+                axis_name = ['X', 'Y', 'Z'][axis]
+
+                # 计算拉伸后主轴方向位移 delta(mm)
+                bbox = shape_bbox(shape)
+                cyl_min = bbox[axis]
+                cyl_max = bbox[axis + 3]
+                cyl_len = cyl_max - cyl_min
+                new_len = cyl_len * scale
+                delta_mm = new_len - cyl_len  # 正值=沿主轴正向延伸
+
                 ts = time.time()
                 shapes[key] = stretch_shape_axis(shape, axis, scale)
                 t_stretch_main = time.time() - ts
-                log(f"  ✓ 主流程缸体 {key} 沿 {['X','Y','Z'][axis]} 轴拉伸 ×{scale:.3f}")
+                log(f"  ✓ 主流程 {key} 沿 {axis_name} 轴拉伸 ×{scale:.3f}"
+                    f" (主轴位移 {delta_mm:+.1f}mm)")
+
+                # 配合零件位移补偿: 沿主轴方向坐标 > 缸体中心的零件同步位移
+                if abs(delta_mm) > 0.01:
+                    cyl_center_mm = parts_data[key]["transform_matrix"][9 + axis] * 1000.0
+                    delta_m = delta_mm / 1000.0  # 变换矩阵平移单位是米
+                    adjusted = 0
+                    for pkey, pinfo in parts_data.items():
+                        if pinfo.get("suppressed", False):
+                            continue
+                        pm = _KEY_RE.match(pkey)
+                        pbase = pm.group(1) if pm else pkey
+                        if pbase == cyl_part_name:
+                            continue
+                        pcoord_mm = pinfo["transform_matrix"][9 + axis] * 1000.0
+                        if pcoord_mm > cyl_center_mm:
+                            pinfo["transform_matrix"][9 + axis] += delta_m
+                            adjusted += 1
+                    log(f"  ✓ 配合零件位移补偿: {adjusted} 件 沿 {axis_name} 轴 × {delta_mm:+.1f}mm")
                 break
+    elif cyl and not cyl_part_name:
+        log("  ⚠ 配置缺少 cylinder_part, 跳过缸体拉伸(请重新运行 build_config.py)")
 
     # Step 2: 合并
     compound, t_merge = step2_apply_transform_and_merge(shapes, parts_data)
