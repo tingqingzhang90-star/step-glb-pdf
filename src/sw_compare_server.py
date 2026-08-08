@@ -115,6 +115,53 @@ def _set_cylinder_d1(part_doc, d1_mm, part_label=""):
     return False, msg
 
 
+def _get_model_doc2_robust(sw_app, comp):
+    """获取组件的零件文档,带轻量化 fallback(参考 sw_com.Component.get_model_doc2)。
+
+    1. 优先 comp.GetModelDoc2()
+    2. 轻量化返回 None 时:SetComponentState(FULLY_RESOLVED) → GetPathName
+       → OpenDoc6 重新打开零件文档返回。
+
+    背景:SolidWorks 默认以轻量化方式打开装配体组件,此时 GetModelDoc2()
+    返回 null/不完整对象,对其调用 Parameter() 会报 DISP_E_MEMBERNOTFOUND
+    "找不到成员"。必须强制 fully-resolve 后用 OpenDoc6 重开零件,才能拿到
+    完整的 IPartDoc,使 Parameter()/GetParameter() 可用。
+
+    返回:零件文档 IDispatch 或 None。
+    """
+    SW_DOC_PART = 1
+    SW_OPEN_SILENT = 1
+    SW_COMPONENT_FULLY_RESOLVED = 2
+    # 1) 优先 GetModelDoc2
+    try:
+        md = comp.GetModelDoc2
+        doc = md() if callable(md) else md
+        if doc is not None:
+            return doc
+    except Exception:
+        pass
+    # 2) 轻量化 fallback:强制 fully-resolve,再用 OpenDoc6 重开
+    try:
+        comp.SetComponentState(SW_COMPONENT_FULLY_RESOLVED)
+    except Exception:
+        pass
+    try:
+        gp = comp.GetPathName
+        path = gp() if callable(gp) else gp
+    except Exception:
+        path = None
+    if not path:
+        return None
+    try:
+        errors = _make_byref_int()
+        warnings = _make_byref_int()
+        opened = sw_app.OpenDoc6(path, SW_DOC_PART, SW_OPEN_SILENT,
+                                 "", errors, warnings)
+        return opened
+    except Exception:
+        return None
+
+
 def sw_apply_selection(model_code, motor=None, series_name=None):
     """在 SW 中重新打开装配体并应用选型(抑制/取消抑制)
 
@@ -230,15 +277,16 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
             pass
 
         # 9. 缸体 D1 修改(参考 jdg_controller apply_config 的顺序)
-        #    必须在 抑制循环 + EditRebuild3 之后做:此时缸体组件已 fully resolved,
-        #    GetModelDoc2() 返回完整零件文档,Parameter() 才能命中维度对象。
-        #    (缸体为常显件,不会被抑制,故此处 GetModelDoc2 必非空。)
+        #    必须在 抑制循环 + EditRebuild3 之后做:此时缸体组件已 resolved。
+        #    用 _get_model_doc2_robust 取零件文档(带轻量化 fallback):
+        #    轻量化组件 GetModelDoc2 返回 null → Parameter 报"找不到成员",
+        #    robust 版会 SetComponentState(FULLY_RESOLVED)+OpenDoc6 重开零件。
         if d1 and cyl_part_name:
             try:
                 for c in components:
                     cn = str(c.Name2 or "").split("@")[0]
                     if cn == cyl_part_name or cn.startswith(cyl_part_name + "-"):
-                        part_doc = c.GetModelDoc2()
+                        part_doc = _get_model_doc2_robust(sw, c)
                         if part_doc is not None:
                             ok, cyl_msg = _set_cylinder_d1(part_doc, d1, cn)
                         break
