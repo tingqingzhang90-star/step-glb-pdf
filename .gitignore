@@ -1,0 +1,47 @@
+# 大型二进制文件
+*.step
+*.STEP
+*.glb
+*.stl
+
+# SolidWorks 源文件
+*.SLDPRT
+*.SLDASM
+*.SLDDRW
+
+# 数据库与 Excel
+*.accdb
+*.xlsx
+*.xls
+~$*
+
+# 零件 STEP 目录（导出的中间产物）
+parts_step/
+
+# 日志文件
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+
+# 临时文件
+*.tmp
+*.bak
+*.cache
+
+# 诊断脚本（临时）
+diagnose_*.py
+check_*.py
