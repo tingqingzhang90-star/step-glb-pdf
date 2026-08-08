@@ -455,11 +455,11 @@ def step2_apply_transform_and_merge(shapes, parts_data):
     return compound, total
 
 
-def step3_export_assembly_step(compound):
-    """步骤 3: 导出装配体 STEP"""
+def step3_export_assembly_step(compound, out_name):
+    """步骤 3: 导出装配体 STEP(文件名由调用方指定,避免覆盖)"""
     from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
     log("\n=== Step 3: 导出装配体 STEP ===")
-    out_path = os.path.join(OUT_DIR, "250直连_assembly_rebuilt.step")
+    out_path = os.path.join(OUT_DIR, out_name)
     t0 = time.time()
     writer = STEPControl_Writer()
     writer.Transfer(compound, STEPControl_AsIs)
@@ -470,8 +470,8 @@ def step3_export_assembly_step(compound):
     return out_path, total
 
 
-def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale):
-    """步骤 4: 缸体按选型 D1 拉伸验证(真实参数)
+def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_name):
+    """步骤 4: 缸体按选型 D1 拉伸验证(真实参数,文件名由调用方指定)
 
     D1 = stroke + C, scale = D1 / base_D1
     沿缸体主轴(最长边)非均匀缩放,导出拉伸后缸体验证。
@@ -527,19 +527,19 @@ def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale):
     new_axis_len = [nxmax-nxmin, nymax-nymin, nzmax-nzmin][axis_idx]
     log(f"  主轴长度: {max_len:.2f} → {new_axis_len:.2f} (期望 {max_len*scale:.2f})")
 
-    out_path = os.path.join(OUT_DIR, "250缸体_stretched.step")
+    out_path = os.path.join(OUT_DIR, out_name)
     t1 = time.time()
     write_step(new_shape, out_path)
     log(f"  ✓ 导出验证: {out_path} ({time.time()-t1:.2f}s)")
     return new_shape, elapsed
 
 
-def step5_export_glb(compound):
-    """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB)"""
+def step5_export_glb(compound, out_name):
+    """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB,文件名由调用方指定)"""
     log("\n=== Step 5: 装配体 GLB 导出 ===")
     import trimesh
     stl_path = os.path.join(tempfile.gettempdir(), "assembly_tmp.stl")
-    glb_path = os.path.join(OUT_DIR, "250直连_assembly.glb")
+    glb_path = os.path.join(OUT_DIR, out_name)
 
     # 5.1 三角化 + STL 导出
     t0 = time.time()
@@ -567,33 +567,27 @@ def step5_export_glb(compound):
     return glb_path, t_stl + t_glb
 
 
-def main():
-    import argparse
-    ap = argparse.ArgumentParser(description="按选型装配 3D 模型并导出 STEP/GLB")
-    ap.add_argument("model_code", nargs="?", default=DEFAULT_MODEL_CODE,
-                    help="型号编码,如 250-E-H2K1-L100-D11 (末段电机编号可选)")
-    ap.add_argument("--motor", default=DEFAULT_MOTOR, help="电机选型(型号含电机编号时覆盖)")
-    ap.add_argument("--series", default=None, help="系列目录名(覆盖型号推断,如 250直连)")
-    args = ap.parse_args()
+def build_assembly(model_code, motor=None, series=None):
+    """按选型装配并导出 STEP/GLB,返回产物路径字典(供 server/API 调用)
 
+    Args:
+        model_code: 型号编码,如 "250-E-H2K1-L100-D11"
+        motor: 电机选型(型号含电机编号时此项被覆盖)
+        series: 系列目录名(覆盖型号推断,如 "250直连")
+    Returns:
+        dict: {model_code, motor, series, shown, hidden, d1, scale,
+               step_path, glb_path, cylinder_path, total_time, times}
+    """
     os.makedirs(OUT_DIR, exist_ok=True)
-    log("=" * 60)
-    log(f"pythonOCC 选型装配: {args.model_code}")
-    log("=" * 60)
 
-    if not check_env():
-        sys.exit(1)
-
-    # 解析型号
-    sel = parse_model_code(args.model_code)
-    # 电机:优先从型号编码解析,回退 --motor 参数
-    motor = sel.get("motor") or args.motor
-    log(f"\n选型解析: 系列={sel['series']} 类型={sel['type']} "
+    sel = parse_model_code(model_code)
+    motor = sel.get("motor") or motor or DEFAULT_MOTOR
+    log(f"选型解析: 系列={sel['series']} 类型={sel['type']} "
         f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']} 电机={motor}")
 
-    # 确定系列目录名(E=直连, 其他按 --series 或折返)
-    if args.series:
-        series_name = args.series
+    # 确定系列目录名
+    if series:
+        series_name = series
     elif sel['type'].upper() == 'E':
         series_name = f"{sel['series']}直连"
     else:
@@ -602,12 +596,8 @@ def main():
     # 加载配置
     config_path = os.path.join(CONFIG_DIR, f"{series_name}.json")
     if not os.path.exists(config_path):
-        log(f"✗ 配置不存在: {config_path}")
-        log(f"  请先运行: python src/build_config.py 图库项目\\{series_name}")
-        sys.exit(1)
+        raise FileNotFoundError(f"配置不存在: {config_path},请先运行 build_config.py")
     config = load_config(series_name)
-    log(f"配置加载: {series_name} (常显 {len(config['base_parts'])} 件, "
-        f"受控 {config.get('controlled_count', '?')} 件)")
 
     # 计算选型显隐
     visibility = resolve_visibility(config, sel['mount'], sel['load'], motor)
@@ -623,12 +613,11 @@ def main():
         log(f"缸体拉伸: stroke={stroke_num} → D1={d1}, 缩放 ×{scale:.3f}")
     else:
         stroke_num, d1, scale = None, None, 1.0
-        log("缸体拉伸: 无配置,跳过")
 
-    # Step 1: 读取零件 STEP(跳过被抑制)
+    # Step 1: 读取零件
     shapes, t_read = step1_read_all_parts(parts_data)
 
-    # 缸体拉伸(集成到主流程:装配体里的缸体按选型 D1 拉伸)
+    # 缸体拉伸(主流程)
     t_stretch_main = 0.0
     if cyl:
         for key, shape in list(shapes.items()):
@@ -642,40 +631,89 @@ def main():
                 log(f"  ✓ 主流程缸体 {key} 沿 {['X','Y','Z'][axis]} 轴拉伸 ×{scale:.3f}")
                 break
 
-    # Step 2: 应用变换 + 合并
+    # Step 2: 合并
     compound, t_merge = step2_apply_transform_and_merge(shapes, parts_data)
 
-    # Step 3: 导出装配体 STEP
-    asm_step, t_step = step3_export_assembly_step(compound)
+    # 输出文件名带型号(避免覆盖)
+    prefix = model_code
+    asm_name = f"{prefix}_assembly.step"
+    glb_name = f"{prefix}_assembly.glb"
+    cyl_name = f"{prefix}_cylinder.step"
 
-    # Step 4: 缸体拉伸验证(单独导出拉伸缸体)
-    cylinder_path = os.path.join(PARTS_DIR, CYLINDER_STEP)
-    if os.path.exists(cylinder_path) and cyl:
-        cylinder_shape = read_step(cylinder_path)
-        _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale)
-    else:
-        log(f"\n跳过 Step 4: 缸体 STEP 不存在或无拉伸参数")
-        t_stretch = 0
+    # Step 3: 装配体 STEP
+    asm_step, t_step = step3_export_assembly_step(compound, asm_name)
 
-    # Step 5: GLB 导出
-    glb_path, t_glb = step5_export_glb(compound)
+    # Step 4: 缸体验证
+    t_stretch = 0.0
+    cyl_out = None
+    cylinder_src = os.path.join(PARTS_DIR, CYLINDER_STEP)
+    if os.path.exists(cylinder_src) and cyl:
+        cylinder_shape = read_step(cylinder_src)
+        _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_name)
+        cyl_out = os.path.join(OUT_DIR, cyl_name)
 
-    # 速度汇总
+    # Step 5: GLB
+    glb_path, t_glb = step5_export_glb(compound, glb_name)
+
     total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
-    log("\n" + "=" * 60)
-    log(f"速度汇总 ({args.model_code})")
+    return {
+        "model_code": model_code,
+        "motor": motor,
+        "series": series_name,
+        "shown": shown,
+        "hidden": hidden,
+        "d1": d1,
+        "scale": round(scale, 3) if cyl else None,
+        "step_path": asm_step,
+        "glb_path": glb_path,
+        "cylinder_path": cyl_out,
+        "total_time": round(total, 2),
+        "times": {
+            "read": round(t_read, 2),
+            "stretch": round(t_stretch_main, 3),
+            "merge": round(t_merge, 3),
+            "step": round(t_step, 2),
+            "cylinder": round(t_stretch, 3),
+            "glb": round(t_glb, 2),
+        },
+    }
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="按选型装配 3D 模型并导出 STEP/GLB")
+    ap.add_argument("model_code", nargs="?", default=DEFAULT_MODEL_CODE,
+                    help="型号编码,如 250-E-H2K1-L100-D11 (末段电机编号可选)")
+    ap.add_argument("--motor", default=DEFAULT_MOTOR, help="电机选型(型号含电机编号时覆盖)")
+    ap.add_argument("--series", default=None, help="系列目录名(覆盖型号推断,如 250直连)")
+    args = ap.parse_args()
+
     log("=" * 60)
-    log(f"  Step 1 读取零件 STEP     : {t_read:.2f}s")
-    log(f"  缸体拉伸(主流程)         : {t_stretch_main*1000:.0f}ms")
-    log(f"  Step 2 应用变换+合并      : {t_merge*1000:.0f}ms")
-    log(f"  Step 3 导出装配体 STEP   : {t_step:.2f}s")
-    log(f"  Step 4 缸体拉伸验证       : {t_stretch*1000:.0f}ms")
-    log(f"  Step 5 GLB 导出          : {t_glb:.2f}s")
+    log(f"pythonOCC 选型装配: {args.model_code}")
+    log("=" * 60)
+
+    if not check_env():
+        sys.exit(1)
+
+    result = build_assembly(args.model_code, args.motor, args.series)
+
+    log("\n" + "=" * 60)
+    log(f"速度汇总 ({result['model_code']})")
+    log("=" * 60)
+    t = result['times']
+    log(f"  Step 1 读取零件 STEP     : {t['read']:.2f}s")
+    log(f"  缸体拉伸(主流程)         : {t['stretch']*1000:.0f}ms")
+    log(f"  Step 2 应用变换+合并      : {t['merge']*1000:.0f}ms")
+    log(f"  Step 3 导出装配体 STEP   : {t['step']:.2f}s")
+    log(f"  Step 4 缸体拉伸验证       : {t['cylinder']*1000:.0f}ms")
+    log(f"  Step 5 GLB 导出          : {t['glb']:.2f}s")
     log(f"  -----------------------------")
-    log(f"  总耗时                   : {total:.2f}s")
-    log(f"  显示 {shown} 件 / 抑制 {hidden} 件 / D1={d1 if cyl else 'N/A'}")
-    log("")
-    log("对比原方案 (SW COM + 沙箱): ~55s,本方案不依赖 SW,可多进程并发")
+    log(f"  总耗时                   : {result['total_time']:.2f}s")
+    log(f"  显示 {result['shown']} 件 / 抑制 {result['hidden']} 件 / D1={result['d1'] or 'N/A'}")
+    log(f"  装配体 STEP: {result['step_path']}")
+    log(f"  装配体 GLB : {result['glb_path']}")
+    if result['cylinder_path']:
+        log(f"  缸体 STEP  : {result['cylinder_path']}")
 
 
 if __name__ == "__main__":
