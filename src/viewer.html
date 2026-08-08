@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D 模型查看器</title>
+<!-- o3dv 渲染库(本地静态资源,由 server.py 提供) -->
+<script src="/static/o3dv/o3dv.min.js"></script>
+<!-- Feather Icons CDN -->
+<script src="https://cdn.bootcdn.net/ajax/libs/feather-icons/4.29.0/feather.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --gray-800:#424242;--gray-850:#303030;--gray-900:#212121;--gray-950:#1a1a1a;
+    --primary-500:#2196f3;--primary-600:#1e88e5;--primary-700:#1976d2;
+    --shadow-sm:0 1px 2px 0 rgba(0,0,0,.05);--shadow-md:0 2px 4px 0 rgba(0,0,0,.08);
+    --shadow-lg:0 4px 8px 0 rgba(0,0,0,.12);--shadow-xl:0 8px 16px 0 rgba(0,0,0,.16);
+    --bg-canvas:#1a1a1a;--bg-surface:#212121;--bg-elevated:#2a2a2a;--bg-overlay:#303030;
+    --border-subtle:rgba(255,255,255,.08);--border-normal:rgba(255,255,255,.12);
+    --border-strong:rgba(255,255,255,.16);
+    --text-primary:#e0e0e0;--text-secondary:#9e9e9e;--text-tertiary:#757575;
+  }
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Roboto','Microsoft YaHei',Arial,sans-serif;
+       background:var(--bg-canvas);color:var(--text-primary);overflow:hidden;
+       -webkit-font-smoothing:antialiased}
+  .app{display:flex;height:100vh}
+  /* 侧边栏 */
+  .sidebar{width:320px;background:var(--bg-surface);display:flex;flex-direction:column;
+           border-right:1px solid var(--border-normal);box-shadow:var(--shadow-lg)}
+  .sidebar-header{padding:20px 24px;background:var(--bg-elevated);
+                  border-bottom:1px solid var(--border-normal);
+                  display:flex;align-items:center;gap:12px}
+  .sidebar-header .logo{width:36px;height:36px;background:var(--primary-700);border-radius:8px;
+                        display:flex;align-items:center;justify-content:center;flex-shrink:0;
+                        box-shadow:var(--shadow-md)}
+  .sidebar-header .logo i{width:20px;height:20px;stroke:#fff;stroke-width:2.5}
+  .sidebar-header .header-text{flex:1}
+  .sidebar-header h1{font-size:16px;font-weight:600;margin-bottom:2px;letter-spacing:-.01em}
+  .sidebar-header p{font-size:11px;opacity:.65;text-transform:uppercase;letter-spacing:.5px}
+  .back-btn{padding:7px 12px;border:1px solid var(--border-normal);border-radius:6px;
+            background:var(--bg-elevated);color:var(--text-secondary);cursor:pointer;
+            font-size:12px;font-weight:500;text-decoration:none;transition:.15s;
+            display:flex;align-items:center;gap:5px;flex-shrink:0}
+  .back-btn:hover{background:var(--bg-overlay);border-color:var(--border-strong);color:var(--text-primary)}
+  .back-btn i{width:14px;height:14px;stroke-width:2.5}
+  .sidebar-content{flex:1;overflow-y:auto;padding:20px}
+  .section{margin-bottom:24px}
+  .section-title{font-size:11px;font-weight:600;text-transform:uppercase;color:var(--text-secondary);
+                 margin-bottom:12px;letter-spacing:.8px;display:flex;align-items:center;gap:8px}
+  .section-title i{width:14px;height:14px;stroke-width:2.5}
+  .file-upload{border:2px dashed var(--border-normal);border-radius:8px;padding:24px;
+               text-align:center;cursor:pointer;transition:.15s;background:var(--bg-canvas)}
+  .file-upload:hover{border-color:var(--border-strong);background:var(--bg-elevated)}
+  .file-upload.dragover{border-color:var(--primary-600);border-style:solid;
+                        background:color-mix(in srgb,var(--primary-600) 8%,var(--bg-elevated))}
+  .file-upload input{display:none}
+  .upload-icon{width:48px;height:48px;margin:0 auto 16px;stroke:var(--primary-600);stroke-width:1.5}
+  .upload-text{font-size:13px;color:var(--text-secondary);line-height:1.6}
+  .upload-text strong{color:var(--text-primary);font-weight:500}
+  .control-group{margin-bottom:16px}
+  .btn{width:100%;padding:11px 16px;border:1px solid var(--border-normal);border-radius:6px;
+       font-size:13px;font-weight:500;cursor:pointer;transition:.15s;background:var(--bg-elevated);
+       color:var(--text-primary);display:flex;align-items:center;justify-content:center;gap:8px;
+       box-shadow:var(--shadow-sm)}
+  .btn i{width:16px;height:16px;stroke-width:2.5}
+  .btn:hover:not(:disabled){background:var(--bg-overlay);border-color:var(--border-strong)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-primary{background:var(--primary-700);border-color:var(--primary-700);color:#fff}
+  .btn-primary:hover:not(:disabled){background:var(--primary-600);border-color:var(--primary-600)}
+  select{width:100%;padding:10px 12px;border:1px solid var(--border-normal);border-radius:6px;
+         background:var(--bg-canvas);color:var(--text-primary);font-size:14px;cursor:pointer;transition:.15s}
+  select:hover{border-color:var(--border-strong);background:var(--bg-elevated)}
+  select:focus{outline:none;border-color:var(--primary-600);
+               box-shadow:0 0 0 3px color-mix(in srgb,var(--primary-600) 15%,transparent)}
+  select option{background:var(--bg-surface);color:var(--text-primary);padding:8px}
+  .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .stat-card{background:var(--bg-elevated);padding:16px;border-radius:8px;
+             border:1px solid var(--border-normal);box-shadow:var(--shadow-sm);transition:.15s}
+  .stat-card:hover{border-color:var(--border-strong)}
+  .stat-value{font-size:24px;font-weight:600;color:var(--primary-500);margin-bottom:4px}
+  .stat-label{font-size:12px;color:var(--text-secondary);font-weight:500;letter-spacing:.3px}
+  .view-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+  .view-btn{padding:10px;border:1px solid var(--border-normal);border-radius:6px;
+            background:var(--bg-elevated);color:var(--text-secondary);cursor:pointer;
+            font-size:12px;font-weight:500;transition:.15s;display:flex;align-items:center;
+            justify-content:center;gap:6px;box-shadow:var(--shadow-sm)}
+  .view-btn i{width:14px;height:14px;stroke-width:2.5}
+  .view-btn:hover{background:var(--bg-overlay);border-color:var(--border-strong);color:var(--text-primary)}
+  .view-btn:active{background:var(--bg-elevated)}
+  /* 主视图 */
+  .main-view{flex:1;display:flex;flex-direction:column;overflow:hidden}
+  .toolbar{padding:16px 24px;background:var(--bg-surface);border-bottom:1px solid var(--border-normal);
+           display:flex;gap:12px;align-items:center;box-shadow:var(--shadow-sm)}
+  .toolbar-btn{padding:9px 14px;border:1px solid var(--border-normal);border-radius:6px;
+               background:var(--bg-elevated);color:var(--text-secondary);cursor:pointer;
+               font-size:13px;font-weight:500;transition:.15s;display:flex;align-items:center;
+               gap:8px;box-shadow:var(--shadow-sm)}
+  .toolbar-btn i{width:16px;height:16px;stroke-width:2.5}
+  .toolbar-btn:hover:not(:disabled){background:var(--bg-overlay);border-color:var(--border-strong);color:var(--text-primary)}
+  .toolbar-btn:disabled{opacity:.5;cursor:not-allowed}
+  .toolbar-btn.file-name{background:transparent;border-color:transparent;box-shadow:none;cursor:default}
+  .toolbar-btn.file-name:hover{background:transparent;border-color:transparent;color:var(--text-secondary)}
+  .spacer{flex:1}
+  .menu-toggle{display:none;padding:8px 12px;border:1px solid var(--border-normal);border-radius:6px;
+               background:var(--bg-elevated);color:var(--text-secondary);cursor:pointer;align-items:center;justify-content:center}
+  .menu-toggle i{width:18px;height:18px;stroke-width:2.5}
+  .viewer-area{flex:1;position:relative;overflow:hidden}
+  .viewer-container{width:100%;height:100%}
+  .empty-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+                 background:var(--bg-canvas);z-index:10;transition:opacity .3s}
+  .empty-overlay.hidden{opacity:0;pointer-events:none}
+  .empty-content{text-align:center;color:var(--text-secondary)}
+  .empty-icon{font-size:80px;margin-bottom:16px;display:inline-block}
+  .empty-content h2{font-size:24px;margin-bottom:8px;font-weight:600;color:var(--text-primary)}
+  .empty-content p{font-size:14px}
+  .loading-overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+                   background:rgba(26,26,26,.85);z-index:20;backdrop-filter:blur(4px)}
+  .loading-overlay.active{display:flex}
+  .loader{text-align:center;background:var(--bg-elevated);padding:32px 48px;border-radius:12px;
+          border:1px solid var(--border-normal);box-shadow:var(--shadow-xl)}
+  .spinner{width:48px;height:48px;border:4px solid var(--border-normal);
+           border-top-color:var(--primary-600);border-radius:50%;
+           animation:spin .8s linear infinite;margin:0 auto 16px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loader p{font-size:14px;color:var(--text-primary)}
+  .sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
+                   backdrop-filter:blur(2px);z-index:1000;opacity:0;transition:opacity .3s}
+  .sidebar-overlay.active{display:block;opacity:1}
+  /* 响应式 */
+  @media(max-width:768px){
+    .sidebar{position:fixed;left:0;top:0;bottom:0;z-index:1001;transform:translateX(-100%);
+             transition:transform .3s ease;box-shadow:var(--shadow-xl)}
+    .sidebar.open{transform:translateX(0)}
+    .menu-toggle{display:flex}
+    .toolbar-btn span,.view-btn span{font-size:11px}
+  }
+  @media(max-width:480px){
+    .sidebar{width:90vw}
+    .stats-grid{grid-template-columns:1fr}
+    .toolbar-btn:not(.menu-toggle):not(:first-child) span{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+<div class="app">
+  <!-- 侧边栏 -->
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo"><i data-feather="box"></i></div>
+      <div class="header-text">
+        <h1>3D 模型查看器</h1>
+        <p>Powered by o3dv</p>
+      </div>
+      <a class="back-btn" href="/" title="返回生成面板"><i data-feather="arrow-left"></i>返回</a>
+    </div>
+    <div class="sidebar-content">
+      <!-- 文件上传 -->
+      <div class="section">
+        <div class="section-title"><i data-feather="upload"></i><span>加载模型</span></div>
+        <div class="file-upload" id="fileUpload">
+          <input type="file" id="fileInput" multiple
+                 accept=".obj,.stl,.gltf,.glb,.ply,.off,.3ds,.fbx,.step,.stp,.iges,.igs,.brep,.brp,.ifc,.fcstd,.3dm,.dae,.wrl,.3mf,.amf">
+          <i data-feather="package" class="upload-icon"></i>
+          <div class="upload-text">
+            <strong>点击或拖拽文件</strong><br>
+            <span>OBJ, STL, GLTF, GLB, STEP, IGES, IFC...</span>
+          </div>
+        </div>
+      </div>
+      <!-- 相机视角 -->
+      <div class="section">
+        <div class="section-title"><i data-feather="camera"></i><span>相机视角</span></div>
+        <div class="view-buttons">
+          <button class="view-btn" data-view="front"><i data-feather="arrow-up"></i><span>前视图</span></button>
+          <button class="view-btn" data-view="back"><i data-feather="arrow-down"></i><span>后视图</span></button>
+          <button class="view-btn" data-view="left"><i data-feather="arrow-left"></i><span>左视图</span></button>
+          <button class="view-btn" data-view="right"><i data-feather="arrow-right"></i><span>右视图</span></button>
+          <button class="view-btn" data-view="top"><i data-feather="chevron-up"></i><span>俯视图</span></button>
+          <button class="view-btn" data-view="bottom"><i data-feather="chevron-down"></i><span>仰视图</span></button>
+        </div>
+        <div class="control-group">
+          <button class="btn" id="resetCameraBtn" disabled>
+            <i data-feather="rotate-ccw"></i><span>重置相机</span>
+          </button>
+        </div>
+      </div>
+      <!-- 投影模式 -->
+      <div class="section">
+        <div class="section-title"><i data-feather="aperture"></i><span>投影模式</span></div>
+        <div class="control-group">
+          <select id="projectionSelect">
+            <option value="perspective">透视投影</option>
+            <option value="orthographic">正交投影</option>
+          </select>
+        </div>
+      </div>
+      <!-- 背景设置 -->
+      <div class="section">
+        <div class="section-title"><i data-feather="droplet"></i><span>外观设置</span></div>
+        <div class="control-group">
+          <select id="bgColorSelect">
+            <option value="dark">深色背景</option>
+            <option value="light">浅色背景</option>
+            <option value="gray">灰色背景</option>
+            <option value="black">纯黑背景</option>
+          </select>
+        </div>
+      </div>
+      <!-- 操作 -->
+      <div class="section">
+        <div class="section-title"><i data-feather="tool"></i><span>操作</span></div>
+        <div class="control-group">
+          <button class="btn" id="resetViewBtn" disabled>
+            <i data-feather="refresh-cw"></i><span>重置视图</span>
+          </button>
+        </div>
+        <div class="control-group">
+          <button class="btn btn-primary" id="fullscreenBtn">
+            <i data-feather="maximize"></i><span>全屏</span>
+          </button>
+        </div>
+      </div>
+      <!-- 模型统计 -->
+      <div class="section">
+        <div class="section-title"><i data-feather="bar-chart-2"></i><span>模型统计</span></div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-value" id="meshCount">-</div><div class="stat-label">网格数</div></div>
+          <div class="stat-card"><div class="stat-value" id="triangleCount">-</div><div class="stat-label">三角面</div></div>
+          <div class="stat-card"><div class="stat-value" id="vertexCount">-</div><div class="stat-label">顶点数</div></div>
+          <div class="stat-card"><div class="stat-value" id="materialCount">-</div><div class="stat-label">材质数</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- 主视图 -->
+  <div class="main-view">
+    <div class="toolbar">
+      <button class="menu-toggle" id="menuToggle"><i data-feather="menu"></i></button>
+      <button class="toolbar-btn" id="toolbarResetBtn" disabled>
+        <i data-feather="refresh-cw"></i><span>重置</span>
+      </button>
+      <div class="spacer"></div>
+      <div class="toolbar-btn file-name" id="currentFileName">
+        <i data-feather="file"></i><span>未加载模型</span>
+      </div>
+    </div>
+    <div class="viewer-area">
+      <div class="viewer-container" id="viewerContainer"></div>
+      <div class="empty-overlay" id="emptyOverlay">
+        <div class="empty-content">
+          <i data-feather="box" class="empty-icon" style="width:80px;height:80px;stroke-width:1.5"></i>
+          <h2>开始使用</h2>
+          <p>选择或拖拽 3D 模型文件,或从生成面板点击「查看模型」</p>
+        </div>
+      </div>
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="loader">
+          <div class="spinner"></div>
+          <p>正在加载模型...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let viewer = null;
+  let currentModel = null;
+  let bgColors = null;
+
+  // 等 o3dv 库加载完成
+  window.addEventListener('load', function () {
+    if (typeof OV === 'undefined') {
+      alert('3D 渲染库(o3dv)加载失败,请检查 /static/o3dv/o3dv.min.js 是否可访问');
+      return;
+    }
+    console.log('OV 库加载成功');
+
+    if (typeof feather !== 'undefined') {
+      feather.replace();
+    }
+
+    // 背景颜色配置
+    bgColors = {
+      dark: new OV.RGBAColor(15, 20, 25, 255),
+      light: new OV.RGBAColor(248, 249, 250, 255),
+      gray: new OV.RGBAColor(128, 128, 128, 255),
+      black: new OV.RGBAColor(0, 0, 0, 255)
+    };
+
+    initViewer();
+    initEventListeners();
+    initMobileMenu();
+    // 检查 URL 参数,自动加载模型
+    loadModelFromUrl();
+  });
+
+  // 初始化 viewer
+  function initViewer() {
+    const container = document.getElementById('viewerContainer');
+    const viewerConfig = {
+      backgroundColor: new OV.RGBAColor(15, 20, 25, 255),
+      defaultColor: new OV.RGBColor(200, 200, 200),
+      edgeSettings: new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1),
+      onModelLoaded: () => {
+        if (window._currentLoadTimeout) {
+          clearTimeout(window._currentLoadTimeout);
+          window._currentLoadTimeout = null;
+        }
+        hideEmptyState();
+        currentModel = viewer.GetModel();
+        updateModelStats();
+        enableControls();
+        hideLoading();
+        console.log('模型加载完成');
+      }
+    };
+    try {
+      viewer = new OV.EmbeddedViewer(container, viewerConfig);
+      console.log('Viewer 初始化成功');
+    } catch (error) {
+      console.error('Viewer 初始化失败:', error);
+      alert('3D 查看器初始化失败:\n' + error.message);
+    }
+  }
+
+  // 事件监听
+  function initEventListeners() {
+    const fileInput = document.getElementById('fileInput');
+    const fileUpload = document.getElementById('fileUpload');
+
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) loadModel(e.target.files);
+    });
+    fileUpload.addEventListener('click', () => fileInput.click());
+    fileUpload.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      fileUpload.classList.add('dragover');
+    });
+    fileUpload.addEventListener('dragleave', () => fileUpload.classList.remove('dragover'));
+    fileUpload.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fileUpload.classList.remove('dragover');
+      if (e.dataTransfer.files.length > 0) loadModel(e.dataTransfer.files);
+    });
+
+    // 背景颜色
+    document.getElementById('bgColorSelect').addEventListener('change', (e) => {
+      const color = bgColors[e.target.value];
+      if (color && viewer) {
+        try {
+          const innerViewer = viewer.GetViewer();
+          if (innerViewer && innerViewer.SetBackgroundColor) {
+            innerViewer.SetBackgroundColor(color);
+          }
+        } catch (error) { console.log('背景色设置失败'); }
+      }
+    });
+
+    // 重置视图
+    document.getElementById('resetViewBtn').addEventListener('click', resetView);
+    document.getElementById('toolbarResetBtn').addEventListener('click', resetView);
+
+    // 全屏
+    document.getElementById('fullscreenBtn').addEventListener('click', toggleFullscreen);
+
+    // 相机视角
+    document.querySelectorAll('.view-btn').forEach(btn => {
+      btn.addEventListener('click', () => setCameraView(btn.dataset.view));
+    });
+
+    // 重置相机
+    document.getElementById('resetCameraBtn').addEventListener('click', resetCamera);
+
+    // 投影模式
+    document.getElementById('projectionSelect').addEventListener('change', (e) => {
+      setProjectionMode(e.target.value);
+    });
+  }
+
+  // 移动端菜单
+  function initMobileMenu() {
+    const menuToggle = document.getElementById('menuToggle');
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('sidebarOverlay');
+    menuToggle.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+      overlay.classList.toggle('active');
+    });
+    overlay.addEventListener('click', () => {
+      sidebar.classList.remove('open');
+      overlay.classList.remove('active');
+    });
+  }
+
+  // 加载模型(本地 File 列表)
+  function loadModel(files) {
+    if (!viewer || !files || files.length === 0) return;
+    try {
+      const totalSize = Array.from(files).reduce((sum, f) => sum + f.size, 0);
+      console.log(`加载文件: ${files[0].name} (${(totalSize / 1024 / 1024).toFixed(2)}MB)`);
+
+      const fileNameDiv = document.getElementById('currentFileName');
+      fileNameDiv.innerHTML = `<i data-feather="file"></i><span>${files[0].name}</span>`;
+      if (typeof feather !== 'undefined') feather.replace();
+
+      showLoading();
+      const loadTimeout = setTimeout(() => {
+        hideLoading();
+        alert('模型加载超时,请尝试较小的文件');
+      }, 30000);
+      window._currentLoadTimeout = loadTimeout;
+
+      viewer.LoadModelFromFileList(files);
+    } catch (error) {
+      console.error('加载失败:', error);
+      alert('模型加载失败: ' + error.message);
+      hideLoading();
+    }
+  }
+
+  // 从 URL 参数读取并加载模型
+  function loadModelFromUrl() {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const modelUrl = urlParams.get('modelUrl');
+      const productName = urlParams.get('productName');
+      if (modelUrl) {
+        console.log('检测到 URL 参数 - 模型 URL:', decodeURIComponent(modelUrl));
+        // 延迟加载,确保 viewer 已完全初始化
+        setTimeout(() => {
+          loadModelFromRemoteUrl(
+            decodeURIComponent(modelUrl),
+            productName ? decodeURIComponent(productName) : '产品模型'
+          );
+        }, 500);
+      } else {
+        console.log('未检测到模型 URL 参数,等待用户上传文件');
+      }
+    } catch (error) {
+      console.error('解析 URL 参数失败:', error);
+    }
+  }
+
+  // 从远程 URL 加载模型
+  async function loadModelFromRemoteUrl(url, productName = '产品模型') {
+    if (!viewer || !url) {
+      console.error('Viewer 未初始化或 URL 为空');
+      return;
+    }
+    try {
+      console.log('开始从远程 URL 加载模型:', url);
+      showLoading();
+
+      const fileNameDiv = document.getElementById('currentFileName');
+      fileNameDiv.innerHTML = `<i data-feather="file"></i><span>${productName}</span>`;
+      if (typeof feather !== 'undefined') feather.replace();
+
+      const extension = url.split('.').pop().toLowerCase().split('?')[0];
+      console.log('文件扩展名:', extension);
+
+      // 超时保护(60 秒,远程文件可能较大)
+      const loadTimeout = setTimeout(() => {
+        hideLoading();
+        alert('模型加载超时,请检查网络连接或尝试较小的文件');
+      }, 60000);
+      window._currentLoadTimeout = loadTimeout;
+
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP 错误! 状态: ${response.status}`);
+
+      const blob = await response.blob();
+      console.log('文件下载成功,大小:', (blob.size / 1024 / 1024).toFixed(2), 'MB');
+
+      const fileName = url.split('/').pop().split('?')[0] || `${productName}.${extension}`;
+      const file = new File([blob], fileName, { type: blob.type });
+      viewer.LoadModelFromFileList([file]);
+      console.log('模型加载指令已发送到 Viewer');
+    } catch (error) {
+      console.error('从远程 URL 加载模型失败:', error);
+      hideLoading();
+      if (window._currentLoadTimeout) {
+        clearTimeout(window._currentLoadTimeout);
+        window._currentLoadTimeout = null;
+      }
+      alert(`模型加载失败: ${error.message}\n\n可能原因:\n1. 网络连接问题\n2. 文件不存在\n3. 跨域限制\n4. 文件格式不支持`);
+    }
+  }
+
+  // 重置视图
+  function resetView() {
+    if (viewer) viewer.Resize();
+  }
+
+  // 全屏切换
+  function toggleFullscreen() {
+    const mainView = document.querySelector('.main-view');
+    if (!document.fullscreenElement) {
+      mainView.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  }
+
+  // 更新模型统计
+  function updateModelStats() {
+    if (!currentModel) return;
+    let meshCount = 0, vertexCount = 0, triangleCount = 0;
+    const materialCount = currentModel.MaterialCount();
+    for (let i = 0; i < currentModel.MeshCount(); i++) {
+      const mesh = currentModel.GetMesh(i);
+      meshCount++;
+      vertexCount += mesh.VertexCount();
+      triangleCount += mesh.TriangleCount();
+    }
+    document.getElementById('meshCount').textContent = meshCount;
+    document.getElementById('vertexCount').textContent = formatNumber(vertexCount);
+    document.getElementById('triangleCount').textContent = formatNumber(triangleCount);
+    document.getElementById('materialCount').textContent = materialCount;
+  }
+
+  function formatNumber(num) {
+    if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+    return num.toString();
+  }
+
+  function hideEmptyState() {
+    document.getElementById('emptyOverlay').classList.add('hidden');
+    hideLoading();
+  }
+  function showLoading() { document.getElementById('loadingOverlay').classList.add('active'); }
+  function hideLoading() { document.getElementById('loadingOverlay').classList.remove('active'); }
+
+  function enableControls() {
+    document.getElementById('resetViewBtn').disabled = false;
+    document.getElementById('toolbarResetBtn').disabled = false;
+    document.getElementById('resetCameraBtn').disabled = false;
+  }
+
+  // 设置相机视角
+  function setCameraView(view) {
+    if (!viewer || !currentModel) return;
+    try {
+      const innerViewer = viewer.GetViewer();
+      if (!innerViewer) return;
+      const bbox = OV.GetBoundingBox(currentModel);
+      const center = new OV.Coord3D(
+        (bbox.min.x + bbox.max.x) / 2,
+        (bbox.min.y + bbox.max.y) / 2,
+        (bbox.min.z + bbox.max.z) / 2
+      );
+      const size = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z);
+      const distance = size * 2;
+      let eye, up;
+      switch (view) {
+        case 'front':  eye = new OV.Coord3D(center.x, center.y, center.z + distance); up = new OV.Coord3D(0, 1, 0); break;
+        case 'back':   eye = new OV.Coord3D(center.x, center.y, center.z - distance); up = new OV.Coord3D(0, 1, 0); break;
+        case 'left':   eye = new OV.Coord3D(center.x - distance, center.y, center.z); up = new OV.Coord3D(0, 1, 0); break;
+        case 'right':  eye = new OV.Coord3D(center.x + distance, center.y, center.z); up = new OV.Coord3D(0, 1, 0); break;
+        case 'top':    eye = new OV.Coord3D(center.x, center.y + distance, center.z); up = new OV.Coord3D(0, 0, -1); break;
+        case 'bottom': eye = new OV.Coord3D(center.x, center.y - distance, center.z); up = new OV.Coord3D(0, 0, 1); break;
+      }
+      const camera = new OV.Camera(eye, center, up, 45.0);
+      innerViewer.SetCamera(camera);
+    } catch (error) { console.error('设置相机视角失败:', error); }
+  }
+
+  // 重置相机
+  function resetCamera() {
+    if (!viewer || !currentModel) return;
+    try {
+      const innerViewer = viewer.GetViewer();
+      if (!innerViewer) return;
+      const bbox = OV.GetBoundingBox(currentModel);
+      const center = new OV.Coord3D(
+        (bbox.min.x + bbox.max.x) / 2,
+        (bbox.min.y + bbox.max.y) / 2,
+        (bbox.min.z + bbox.max.z) / 2
+      );
+      const size = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z);
+      const distance = size * 2;
+      const eye = new OV.Coord3D(
+        center.x - distance * 0.7,
+        center.y + distance * 0.7,
+        center.z + distance * 0.7
+      );
+      const up = new OV.Coord3D(0, 1, 0);
+      const camera = new OV.Camera(eye, center, up, 45.0);
+      innerViewer.SetCamera(camera);
+    } catch (error) { console.error('重置相机失败:', error); }
+  }
+
+  // 设置投影模式
+  function setProjectionMode(mode) {
+    if (!viewer) return;
+    try {
+      const innerViewer = viewer.GetViewer();
+      if (!innerViewer || !innerViewer.SetProjectionMode) return;
+      const projectionMode = mode === 'perspective'
+        ? OV.ProjectionMode.Perspective
+        : OV.ProjectionMode.Orthographic;
+      innerViewer.SetProjectionMode(projectionMode);
+    } catch (error) { console.error('设置投影模式失败:', error); }
+  }
+
+  // 暴露给外部调用
+  window.loadModelFromRemoteUrl = loadModelFromRemoteUrl;
+  window.loadModel = loadModel;
+</script>
+</body>
+</html>

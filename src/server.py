@@ -10,7 +10,7 @@
 
 启动:
     conda run -n pdf1 python src/server.py
-    # 浏览器打开 http://127.0.0.1:5000
+    # 浏览器打开 http://127.0.0.1:5001
 
 依赖:
     flask, pythonocc-core, trimesh, openpyxl(仅重建配置时)
@@ -27,13 +27,16 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from flask import (Flask, request, jsonify, send_from_directory,
-                   render_template_string)
+                   send_file, render_template_string)
 
 import rebuild_assembly as rb
 
 _PROJECT_ROOT = os.path.dirname(_HERE)
 OUT_DIR = rb.OUT_DIR
 CONFIG_DIR = rb.CONFIG_DIR
+# 3D 查看器相关路径(viewer.html 与 o3dv 静态资源均位于 src/ 下)
+_STATIC_DIR = os.path.join(_HERE, "static")
+_VIEWER_HTML = os.path.join(_HERE, "viewer.html")
 
 app = Flask(__name__)
 
@@ -103,6 +106,7 @@ HTML = r"""<!DOCTYPE html>
   .file .sz{color:var(--txt2);font-size:12px;margin-left:8px;white-space:nowrap}
   .file a{color:var(--accent);text-decoration:none;font-size:12px;margin-left:10px;white-space:nowrap}
   .file a:hover{text-decoration:underline}
+  .file a.view-link{color:var(--accent2)}
   .grp{margin-bottom:14px}
   .grp-hd{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:7px;
           padding-bottom:5px;border-bottom:1px solid var(--border)}
@@ -111,6 +115,8 @@ HTML = r"""<!DOCTYPE html>
   .dl-row a{flex:1;min-width:140px;text-align:center;padding:10px;background:var(--panel2);
             border:1px solid var(--border);border-radius:7px;color:var(--accent);text-decoration:none;font-size:13px}
   .dl-row a:hover{border-color:var(--accent);background:#1e2a3a}
+  .dl-row a.view-link{color:var(--accent2);border-color:var(--accent2)}
+  .dl-row a.view-link:hover{background:#0f2a1a}
   .err-msg{background:#3b1219;border:1px solid var(--err);color:#fecaca;
            padding:12px;border-radius:8px;font-size:13px;margin-top:12px;white-space:pre-wrap}
   .ok-msg{background:#0f2a1a;border:1px solid var(--ok);color:#bbf7d0;
@@ -275,9 +281,16 @@ function renderResult(r){
   if(r.step_file) dlLinks.push(`<a href="/download/${encodeURIComponent(r.step_file)}" download>↓ 装配体 STEP</a>`);
   if(r.glb_file) dlLinks.push(`<a href="/download/${encodeURIComponent(r.glb_file)}" download>↓ 装配体 GLB</a>`);
   if(r.cylinder_file) dlLinks.push(`<a href="/download/${encodeURIComponent(r.cylinder_file)}" download>↓ 缸体 STEP</a>`);
+  // 查看模型按钮(仅 GLB 可被 o3dv 渲染),新标签页打开 3D 查看器
+  const viewLinks = [];
+  if(r.glb_file){
+    const modelUrl = encodeURIComponent('/download/' + r.glb_file);
+    const productName = encodeURIComponent(r.model_code || '装配体');
+    viewLinks.push(`<a class="view-link" href="/viewer?modelUrl=${modelUrl}&productName=${productName}" target="_blank">👁 查看模型</a>`);
+  }
   document.getElementById('resultArea').innerHTML = `
     <div class="ok-msg">✓ 生成完成: <b>${r.model_code}</b> · 系列 ${r.series} · 电机 ${r.motor}</div>
-    <div class="dl-row">${dlLinks.join('')}</div>
+    <div class="dl-row">${dlLinks.join('')}${viewLinks.join('')}</div>
     <div class="stats">
       <div class="stat"><div class="v">${r.total_time}s</div><div class="l">总耗时</div></div>
       <div class="stat"><div class="v">${r.shown}</div><div class="l">显示件数</div></div>
@@ -307,11 +320,17 @@ async function loadFiles(){
   list.innerHTML = data.groups.map(g=>`
     <div class="grp">
       <div class="grp-hd">${g.model} <span class="grp-cnt">${g.files.length} 件</span></div>
-      ${g.files.map(f=>`
+      ${g.files.map(f=>{
+        const isGlb = f.name.toLowerCase().endsWith('.glb');
+        const viewLink = isGlb
+          ? `<a class="view-link" href="/viewer?modelUrl=${encodeURIComponent('/download/'+f.rel)}&productName=${encodeURIComponent(f.name)}" target="_blank">查看</a>`
+          : '';
+        return `
         <div class="file">
           <span><span class="nm">${f.name}</span><span class="sz">${fmtSize(f.size)}</span></span>
-          <a href="/download/${encodeURIComponent(f.rel)}" download>下载</a>
-        </div>`).join('')}
+          <a href="/download/${encodeURIComponent(f.rel)}" download>下载</a>${viewLink}
+        </div>`;
+      }).join('')}
     </div>`).join('');
 }
 
@@ -332,6 +351,23 @@ loadOptions();
 @app.route("/")
 def index():
     return render_template_string(HTML)
+
+
+@app.route("/viewer")
+def viewer():
+    """3D 模型查看器页面
+
+    通过 URL 参数 modelUrl / productName 指定要加载的模型:
+        /viewer?modelUrl=/download/250-E-H2K1-L100-D11/assembly.glb&productName=250-E-H2K1-L100-D11
+    modelUrl 与 productName 均需 URL 编码。
+    """
+    return send_file(_VIEWER_HTML)
+
+
+@app.route("/static/o3dv/<path:filename>")
+def static_o3dv(filename):
+    """提供 o3dv 渲染库及其依赖静态资源(o3dv.min.js / 字体 / 图标等)"""
+    return send_from_directory(os.path.join(_STATIC_DIR, "o3dv"), filename)
 
 
 @app.route("/api/options")
@@ -417,7 +453,8 @@ if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     print("=" * 56)
     print("  装配体生成可视化面板")
-    print("  浏览器打开: http://127.0.0.1:5000")
+    print("  浏览器打开: http://127.0.0.1:5001")
+    print("  3D 查看器:   http://127.0.0.1:5001/viewer")
     print("=" * 56)
     # pythonOCC 非线程安全,用单线程串行处理请求
-    app.run(host="127.0.0.1", port=5000, debug=False, threaded=False)
+    app.run(host="127.0.0.1", port=5001, debug=False, threaded=False)
