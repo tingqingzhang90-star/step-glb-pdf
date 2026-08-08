@@ -29,7 +29,7 @@ ASSEMBLY_PATH = r"E:\分享代码\pdf修改\图库项目\250直连\250直连装�
 # 输出：所有产出统一到 step__glb_pdf 工作目录
 OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
 MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
-LOG_FILE = os.path.join(_PROJECT_ROOT, "parts_export.log")
+LOG_FILE = os.path.join(_PROJECT_ROOT, "logs", "parts_export.log")
 
 # 零件路径回退搜索目录（当装配体引用的路径失效时，按 basename 在这些目录找本机文件）
 # 优先级从上到下
@@ -198,6 +198,8 @@ def export_single_part(sw, part_path, step_output):
 
 def export_parts():
     pythoncom.CoInitialize()
+    # 确保日志目录存在
+    os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
     # 清空日志
     try:
         open(LOG_FILE, "w", encoding="utf-8").close()

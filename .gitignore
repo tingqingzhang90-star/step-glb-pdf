@@ -24,6 +24,12 @@ parts_step/
 # 输出目录（STEP/GLB 产物）
 output/
 
+# 日志目录
+logs/
+
+# 对照参考文件（SW 直接导出的 STEP，体积大，不入库）
+reference/
+
 # 日志文件
 *.log
 
@@ -48,6 +54,5 @@ ENV/
 *.bak
 *.cache
 
-# 诊断脚本（临时）
-diagnose_*.py
-check_*.py
+# 诊断脚本目录（调试用，不入库）
+tools/diagnose/
