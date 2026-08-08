@@ -103,6 +103,10 @@ HTML = r"""<!DOCTYPE html>
   .file .sz{color:var(--txt2);font-size:12px;margin-left:8px;white-space:nowrap}
   .file a{color:var(--accent);text-decoration:none;font-size:12px;margin-left:10px;white-space:nowrap}
   .file a:hover{text-decoration:underline}
+  .grp{margin-bottom:14px}
+  .grp-hd{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:7px;
+          padding-bottom:5px;border-bottom:1px solid var(--border)}
+  .grp-cnt{font-size:11px;color:var(--txt2);font-weight:400;margin-left:6px}
   .dl-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
   .dl-row a{flex:1;min-width:140px;text-align:center;padding:10px;background:var(--panel2);
             border:1px solid var(--border);border-radius:7px;color:var(--accent);text-decoration:none;font-size:13px}
@@ -295,15 +299,19 @@ async function loadFiles(){
   const r = await fetch('/api/files');
   const data = await r.json();
   const list = document.getElementById('fileList');
-  document.getElementById('fileCount').textContent = data.files.length;
-  if(!data.files.length){
+  document.getElementById('fileCount').textContent = data.total;
+  if(!data.groups.length){
     list.innerHTML = '<div class="empty" style="padding:14px">暂无文件</div>';
     return;
   }
-  list.innerHTML = data.files.map(f=>`
-    <div class="file">
-      <span><span class="nm">${f.name}</span><span class="sz">${fmtSize(f.size)}</span></span>
-      <a href="/download/${encodeURIComponent(f.name)}" download>下载</a>
+  list.innerHTML = data.groups.map(g=>`
+    <div class="grp">
+      <div class="grp-hd">${g.model} <span class="grp-cnt">${g.files.length} 件</span></div>
+      ${g.files.map(f=>`
+        <div class="file">
+          <span><span class="nm">${f.name}</span><span class="sz">${fmtSize(f.size)}</span></span>
+          <a href="/download/${encodeURIComponent(f.rel)}" download>下载</a>
+        </div>`).join('')}
     </div>`).join('');
 }
 
@@ -376,19 +384,27 @@ def api_build():
 
 @app.route("/api/files")
 def api_files():
-    """列出 output 目录已生成文件"""
-    files = []
+    """列出 output 目录已生成文件(按型号子目录分组)"""
+    groups = []
     if os.path.isdir(OUT_DIR):
-        for name in sorted(os.listdir(OUT_DIR)):
-            p = os.path.join(OUT_DIR, name)
-            if os.path.isfile(p):
-                st = os.stat(p)
-                files.append({
-                    "name": name,
-                    "size": st.st_size,
-                    "mtime": int(st.st_mtime),
-                })
-    return jsonify({"files": files})
+        for dname in sorted(os.listdir(OUT_DIR)):
+            dpath = os.path.join(OUT_DIR, dname)
+            if not os.path.isdir(dpath):
+                continue
+            files = []
+            for fname in sorted(os.listdir(dpath)):
+                fp = os.path.join(dpath, fname)
+                if os.path.isfile(fp):
+                    st = os.stat(fp)
+                    files.append({
+                        "name": fname,
+                        "rel": f"{dname}/{fname}",
+                        "size": st.st_size,
+                        "mtime": int(st.st_mtime),
+                    })
+            if files:
+                groups.append({"model": dname, "files": files})
+    return jsonify({"groups": groups, "total": sum(len(g["files"]) for g in groups)})
 
 
 @app.route("/download/<path:filename>")

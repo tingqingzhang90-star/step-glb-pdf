@@ -455,11 +455,11 @@ def step2_apply_transform_and_merge(shapes, parts_data):
     return compound, total
 
 
-def step3_export_assembly_step(compound, out_name):
-    """步骤 3: 导出装配体 STEP(文件名由调用方指定,避免覆盖)"""
+def step3_export_assembly_step(compound, out_path):
+    """步骤 3: 导出装配体 STEP(out_path 为完整输出路径)"""
     from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
     log("\n=== Step 3: 导出装配体 STEP ===")
-    out_path = os.path.join(OUT_DIR, out_name)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     t0 = time.time()
     writer = STEPControl_Writer()
     writer.Transfer(compound, STEPControl_AsIs)
@@ -470,8 +470,8 @@ def step3_export_assembly_step(compound, out_name):
     return out_path, total
 
 
-def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_name):
-    """步骤 4: 缸体按选型 D1 拉伸验证(真实参数,文件名由调用方指定)
+def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_path):
+    """步骤 4: 缸体按选型 D1 拉伸验证(out_path 为完整输出路径)
 
     D1 = stroke + C, scale = D1 / base_D1
     沿缸体主轴(最长边)非均匀缩放,导出拉伸后缸体验证。
@@ -527,19 +527,20 @@ def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_name):
     new_axis_len = [nxmax-nxmin, nymax-nymin, nzmax-nzmin][axis_idx]
     log(f"  主轴长度: {max_len:.2f} → {new_axis_len:.2f} (期望 {max_len*scale:.2f})")
 
-    out_path = os.path.join(OUT_DIR, out_name)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     t1 = time.time()
     write_step(new_shape, out_path)
     log(f"  ✓ 导出验证: {out_path} ({time.time()-t1:.2f}s)")
     return new_shape, elapsed
 
 
-def step5_export_glb(compound, out_name):
-    """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB,文件名由调用方指定)"""
+def step5_export_glb(compound, out_path):
+    """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB,out_path 为完整输出路径)"""
     log("\n=== Step 5: 装配体 GLB 导出 ===")
     import trimesh
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
     stl_path = os.path.join(tempfile.gettempdir(), "assembly_tmp.stl")
-    glb_path = os.path.join(OUT_DIR, out_name)
+    glb_path = out_path
 
     # 5.1 三角化 + STL 导出
     t0 = time.time()
@@ -667,14 +668,15 @@ def build_assembly(model_code, motor=None, series=None):
     # Step 2: 合并
     compound, t_merge = step2_apply_transform_and_merge(shapes, parts_data)
 
-    # 输出文件名带型号(避免覆盖)
-    prefix = model_code
-    asm_name = f"{prefix}_assembly.step"
-    glb_name = f"{prefix}_assembly.glb"
-    cyl_name = f"{prefix}_cylinder.step"
+    # 输出到型号子目录 output/<model_code>/
+    model_dir = os.path.join(OUT_DIR, model_code)
+    os.makedirs(model_dir, exist_ok=True)
+    asm_path = os.path.join(model_dir, "assembly.step")
+    glb_path = os.path.join(model_dir, "assembly.glb")
+    cyl_path = os.path.join(model_dir, "cylinder.step")
 
     # Step 3: 装配体 STEP
-    asm_step, t_step = step3_export_assembly_step(compound, asm_name)
+    asm_step, t_step = step3_export_assembly_step(compound, asm_path)
 
     # Step 4: 缸体验证
     t_stretch = 0.0
@@ -682,11 +684,11 @@ def build_assembly(model_code, motor=None, series=None):
     cylinder_src = os.path.join(PARTS_DIR, CYLINDER_STEP)
     if os.path.exists(cylinder_src) and cyl:
         cylinder_shape = read_step(cylinder_src)
-        _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_name)
-        cyl_out = os.path.join(OUT_DIR, cyl_name)
+        _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_path)
+        cyl_out = cyl_path
 
     # Step 5: GLB
-    glb_path, t_glb = step5_export_glb(compound, glb_name)
+    glb_path, t_glb = step5_export_glb(compound, glb_path)
 
     total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
     return {
