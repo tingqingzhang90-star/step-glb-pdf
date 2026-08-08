@@ -36,8 +36,16 @@ CYLINDER_STEP = "250缸体.step"  # 缸体零件（用于拉伸验证）
 # 若某个零件确实导出失败，可在此处添加其 step 文件名
 MISSING_PARTS = set()
 
-# 默认选型参数（电机不在型号编码内，作为独立维度传入）
-DEFAULT_MODEL_CODE = "250-E-H2K1-L100"
+# 电机编号映射 (D=电机, 功率去小数点, B=刹车)
+MOTOR_CODES = {
+    "D11":  "11kw电机",
+    "D55":  "5.5KW电机",
+    "D55B": "5.5KW刹车电机",
+    "D75":  "7.5kw电机",
+    "D75B": "7.5kw电机刹车",
+}
+# 默认选型参数 (电机已纳入型号: 系列-类型-H*K*-行程-电机编号)
+DEFAULT_MODEL_CODE = "250-E-H2K1-L100-D11"
 DEFAULT_MOTOR = "11kw电机"
 
 
@@ -179,13 +187,14 @@ _HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
 def parse_model_code(code):
     """解析型号编码 → 选型参数
 
-    例: "250-E-H2K1-L100" → {series:250, type:E, mount:H2, load:K1, stroke:L100}
-    结构: 系列-连接类型-(安装方式+负载连接)-行程
+    例: "250-E-H2K1-L100-D11" → {series:250, type:E, mount:H2, load:K1, stroke:L100, motor:11kw电机}
+    结构: 系列-连接类型-(安装方式+负载连接)-行程-[电机编号]
     行程可能是 L100 或纯数字(100),统一归一为 L100 形式
+    电机编号可选(D11/D55/D55B/D75/D75B),不填则 motor=None(回退 --motor 参数)
     """
     parts = code.split("-")
     if len(parts) < 4:
-        raise ValueError(f"型号格式错误(需 系列-类型-H*K*-行程): {code}")
+        raise ValueError(f"型号格式错误(需 系列-类型-H*K*-行程[-电机]): {code}")
     series = parts[0]
     conn_type = parts[1]
     hk = parts[2]
@@ -200,8 +209,14 @@ def parse_model_code(code):
         stroke = "L" + stroke_raw
     else:
         stroke = stroke_raw
+    # 电机编号(可选,第5段)
+    motor_code = parts[4] if len(parts) >= 5 else None
+    motor = MOTOR_CODES.get(motor_code) if motor_code else None
+    if motor_code and not motor:
+        raise ValueError(f"未知电机编号: {motor_code} (可选: {', '.join(MOTOR_CODES)})")
     return {"series": series, "type": conn_type, "mount": mount,
-            "load": load, "stroke": stroke}
+            "load": load, "stroke": stroke,
+            "motor_code": motor_code, "motor": motor}
 
 
 def load_config(series_name):
@@ -556,14 +571,14 @@ def main():
     import argparse
     ap = argparse.ArgumentParser(description="按选型装配 3D 模型并导出 STEP/GLB")
     ap.add_argument("model_code", nargs="?", default=DEFAULT_MODEL_CODE,
-                    help="型号编码,如 250-E-H2K1-L100")
-    ap.add_argument("--motor", default=DEFAULT_MOTOR, help="电机选型,如 11kw电机")
+                    help="型号编码,如 250-E-H2K1-L100-D11 (末段电机编号可选)")
+    ap.add_argument("--motor", default=DEFAULT_MOTOR, help="电机选型(型号含电机编号时覆盖)")
     ap.add_argument("--series", default=None, help="系列目录名(覆盖型号推断,如 250直连)")
     args = ap.parse_args()
 
     os.makedirs(OUT_DIR, exist_ok=True)
     log("=" * 60)
-    log(f"pythonOCC 选型装配: {args.model_code} (电机: {args.motor})")
+    log(f"pythonOCC 选型装配: {args.model_code}")
     log("=" * 60)
 
     if not check_env():
@@ -571,8 +586,10 @@ def main():
 
     # 解析型号
     sel = parse_model_code(args.model_code)
+    # 电机:优先从型号编码解析,回退 --motor 参数
+    motor = sel.get("motor") or args.motor
     log(f"\n选型解析: 系列={sel['series']} 类型={sel['type']} "
-        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']}")
+        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']} 电机={motor}")
 
     # 确定系列目录名(E=直连, 其他按 --series 或折返)
     if args.series:
@@ -593,7 +610,7 @@ def main():
         f"受控 {config.get('controlled_count', '?')} 件)")
 
     # 计算选型显隐
-    visibility = resolve_visibility(config, sel['mount'], sel['load'], args.motor)
+    visibility = resolve_visibility(config, sel['mount'], sel['load'], motor)
     with open(MATRIX_JSON, "r", encoding="utf-8") as f:
         parts_data = json.load(f)
     shown, hidden = apply_selection(parts_data, visibility)
