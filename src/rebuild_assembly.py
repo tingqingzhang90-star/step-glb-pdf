@@ -18,6 +18,7 @@ pythonOCC 验证脚本：250 直连装配体重建 + 缸体拉伸可行性
 """
 import os
 import sys
+import re
 import json
 import time
 import tempfile
@@ -27,12 +28,17 @@ import tempfile
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PARTS_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
 MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
+CONFIG_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")
 OUT_DIR = os.path.join(_PROJECT_ROOT, "output")
 CYLINDER_STEP = "250缸体.step"  # 缸体零件（用于拉伸验证）
 
 # 路径回退修复后，4 个电机/刹车件已能从装配体同目录找到并导出，无需跳过
 # 若某个零件确实导出失败，可在此处添加其 step 文件名
 MISSING_PARTS = set()
+
+# 默认选型参数（电机不在型号编码内，作为独立维度传入）
+DEFAULT_MODEL_CODE = "250-E-H2K1-L100"
+DEFAULT_MOTOR = "11kw电机"
 
 
 def log(msg):
@@ -163,6 +169,142 @@ def matrix_to_trsf(m):
     if abs(m[12] - 1.0) > 1e-9:
         trsf.SetScaleFactor(m[12])
     return trsf
+
+
+# ---------- 选型装配:型号解析 + 配置驱动显隐 + 缸体拉伸 ----------
+_KEY_RE = re.compile(r"^(.+)-(\d+)$")  # "250前盖-1" → 基础名"250前盖"
+_HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
+
+
+def parse_model_code(code):
+    """解析型号编码 → 选型参数
+
+    例: "250-E-H2K1-L100" → {series:250, type:E, mount:H2, load:K1, stroke:L100}
+    结构: 系列-连接类型-(安装方式+负载连接)-行程
+    行程可能是 L100 或纯数字(100),统一归一为 L100 形式
+    """
+    parts = code.split("-")
+    if len(parts) < 4:
+        raise ValueError(f"型号格式错误(需 系列-类型-H*K*-行程): {code}")
+    series = parts[0]
+    conn_type = parts[1]
+    hk = parts[2]
+    stroke_raw = parts[3]
+    m = _HK_RE.search(hk)
+    if not m:
+        raise ValueError(f"型号中 H*K* 段解析失败: {hk}")
+    mount = "H" + m.group(1)
+    load = "K" + m.group(2)
+    # 行程归一:L100 → L100; 100 → L100
+    if re.match(r"^\d+$", stroke_raw):
+        stroke = "L" + stroke_raw
+    else:
+        stroke = stroke_raw
+    return {"series": series, "type": conn_type, "mount": mount,
+            "load": load, "stroke": stroke}
+
+
+def load_config(series_name):
+    """加载系列配置 JSON(由 build_config.py 生成)"""
+    path = os.path.join(CONFIG_DIR, f"{series_name}.json")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def resolve_visibility(config, mount, load, motor):
+    """根据选型参数计算每个零件基础名的显隐(True=显示)
+
+    逻辑:常显件(base_parts)恒显示;安装方式/负载/电机表的
+    OnFeature 显示、OffFeature 抑制。on 优先于 off(同零件不会跨表冲突)。
+    """
+    visible = {}
+    for n in config.get("base_parts", []):
+        visible[n] = True
+    # 先收集 off,再 on 覆盖(on 优先显示)
+    for spec in (config.get("mount", {}).get(mount, {}),
+                 config.get("load", {}).get(load, {}),
+                 config.get("motor", {}).get(motor, {})):
+        for n in spec.get("off", []):
+            visible[n] = False
+        for n in spec.get("on", []):
+            visible[n] = True
+    return visible
+
+
+def apply_selection(parts_data, visibility):
+    """将选型显隐应用到 parts_data,覆盖 suppressed 字段
+
+    未出现在 visibility 中的零件(既非 base 也非受控)默认显示。
+    返回 (显示数, 抑制数)。
+    """
+    shown = 0
+    hidden = 0
+    for key, info in parts_data.items():
+        m = _KEY_RE.match(key)
+        base = m.group(1) if m else key
+        is_on = visibility.get(base, True)
+        info["suppressed"] = not is_on
+        if is_on:
+            shown += 1
+        else:
+            hidden += 1
+    return shown, hidden
+
+
+def compute_cylinder_scale(config, stroke):
+    """计算缸体拉伸参数: D1 = stroke + C, scale = D1 / base_D1
+
+    返回 (stroke_num, D1, scale) 或 None(无缸体配置)
+    """
+    cyl = config.get("cylinder") or {}
+    if not cyl:
+        return None
+    m = re.match(r"^L?(\d+)$", stroke)
+    if not m:
+        raise ValueError(f"行程格式错误: {stroke}")
+    stroke_num = int(m.group(1))
+    c = cyl.get("C")
+    base_d1 = cyl.get("base_D1")
+    if c is None or base_d1 is None:
+        # 回退:查表
+        table = cyl.get("table", {})
+        if stroke in table:
+            d1 = table[stroke]
+            return stroke_num, d1, d1 / base_d1 if base_d1 else 1.0
+        raise ValueError(f"无法计算缸体 D1(stroke={stroke})")
+    d1 = stroke_num + c
+    return stroke_num, d1, d1 / base_d1
+
+
+def stretch_shape_axis(shape, axis_idx, scale):
+    """沿指定轴(axis_idx: 0=X,1=Y,2=Z)非均匀缩放 shape"""
+    from OCC.Core.gp import gp_GTrsf
+    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_GTransform
+    gtrsf = gp_GTrsf()
+    for i in range(1, 4):
+        for j in range(1, 4):
+            gtrsf.SetValue(i, j, 1.0 if i == j else 0.0)
+        gtrsf.SetValue(i, 4, 0.0)
+    gtrsf.SetValue(axis_idx + 1, axis_idx + 1, scale)
+    tr = BRepBuilderAPI_GTransform(gtrsf)
+    tr.Perform(shape, True)
+    return tr.ModifiedShape(shape)
+
+
+def shape_bbox(shape):
+    """返回 shape 的包围盒 (xmin,ymin,zmin,xmax,ymax,zmax)"""
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRepBndLib import brepbndlib
+    bbox = Bnd_Box()
+    brepbndlib.Add(shape, bbox)
+    return bbox.Get()
+
+
+def find_cylinder_axis(shape):
+    """根据包围盒最长边确定缸体主轴索引(0=X,1=Y,2=Z)"""
+    xmin, ymin, zmin, xmax, ymax, zmax = shape_bbox(shape)
+    lens = [xmax - xmin, ymax - ymin, zmax - zmin]
+    return lens.index(max(lens))
 
 
 def read_step(path):
@@ -313,23 +455,15 @@ def step3_export_assembly_step(compound):
     return out_path, total
 
 
-def step4_cylinder_stretch(cylinder_shape):
-    """步骤 4: 缸体沿 Z 轴缩放验证（模拟 D1=stroke+C 拉伸）
+def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale):
+    """步骤 4: 缸体按选型 D1 拉伸验证(真实参数)
 
-    物理意义:
-        缸体长度 = D1 = stroke + C
-        假设原 STEP 对应 stroke=100, 新 stroke=200
-        缩放因子 = (200+C) / (100+C)
-    本步骤只验证 pythonOCC 能对 BRep 几何做非均匀缩放（沿 Z 轴）
+    D1 = stroke + C, scale = D1 / base_D1
+    沿缸体主轴(最长边)非均匀缩放,导出拉伸后缸体验证。
     """
     from OCC.Core.gp import gp_GTrsf
     from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_GTransform
-    from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
-    from OCC.Core.TopExp import TopExp_Explorer
-    from OCC.Core.TopAbs import TopAbs_EDGE
-    from OCC.Core.BRep import BRep_Tool
-    from OCC.Core.GCPnts import GCPnts_AbscissaPoint
-    log("\n=== Step 4: 缸体沿 Z 轴缩放验证（模拟 D1 拉伸）===")
+    log("\n=== Step 4: 缸体按选型拉伸验证 ===")
 
     # 先测量缸体边界框（确定轴向和长度）
     from OCC.Core.Bnd import Bnd_Box
@@ -354,43 +488,35 @@ def step4_cylinder_stretch(cylinder_shape):
         axis_idx, axis_name = 1, "Y"
     log(f"  缸体主轴: {axis_name} (长度 {max_len:.2f})")
 
-    # 模拟: stroke 从 100 → 200, D1 = stroke + C (C 是常数)
-    # 假设 C = 100, 原 D1 = 200, 新 D1 = 300, 缩放因子 = 1.5
-    scale_factor = 1.5
-    log(f"  模拟: stroke 100→200, 假设 C=100, D1 200→300")
-    log(f"  沿 {axis_name} 轴缩放因子 = {scale_factor}")
+    log(f"  选型: stroke={stroke_num}, D1={d1}, 沿 {axis_name} 轴缩放 ×{scale:.3f}")
 
     # 构造非均匀缩放变换（仅沿主轴缩放）
     gtrsf = gp_GTrsf()
-    # 初始化为单位矩阵
     for i in range(1, 4):
         for j in range(1, 4):
             gtrsf.SetValue(i, j, 1.0 if i == j else 0.0)
-        gtrsf.SetValue(i, 4, 0.0)  # 平移列
-    # 沿主轴缩放
-    gtrsf.SetValue(axis_idx + 1, axis_idx + 1, scale_factor)
+        gtrsf.SetValue(i, 4, 0.0)
+    gtrsf.SetValue(axis_idx + 1, axis_idx + 1, scale)
 
     t0 = time.time()
     transform = BRepBuilderAPI_GTransform(gtrsf)
     transform.Perform(cylinder_shape, True)
     new_shape = transform.ModifiedShape(cylinder_shape)
     elapsed = time.time() - t0
-    log(f"  ✓ 缸体缩放完成 ({elapsed*1000:.0f}ms)")
+    log(f"  ✓ 缸体拉伸完成 ({elapsed*1000:.0f}ms)")
 
     # 验证新边界框
     new_bbox = Bnd_Box()
     brepbndlib.Add(new_shape, new_bbox)
     nxmin, nymin, nzmin, nxmax, nymax, nzmax = new_bbox.Get()
-    log(f"  缩放后边界框: X={nxmax-nxmin:.2f} Y={nymax-nymin:.2f} Z={nzmax-nzmin:.2f}")
     new_axis_len = [nxmax-nxmin, nymax-nymin, nzmax-nzmin][axis_idx]
-    log(f"  主轴长度: {max_len:.2f} → {new_axis_len:.2f} (期望 {max_len*scale_factor:.2f})")
+    log(f"  主轴长度: {max_len:.2f} → {new_axis_len:.2f} (期望 {max_len*scale:.2f})")
 
-    # 导出验证
     out_path = os.path.join(OUT_DIR, "250缸体_stretched.step")
     t1 = time.time()
     write_step(new_shape, out_path)
-    log(f"  ✓ 导出: {out_path} ({time.time()-t1:.2f}s)")
-    return out_path, elapsed
+    log(f"  ✓ 导出验证: {out_path} ({time.time()-t1:.2f}s)")
+    return new_shape, elapsed
 
 
 def step5_export_glb(compound):
@@ -427,21 +553,77 @@ def step5_export_glb(compound):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="按选型装配 3D 模型并导出 STEP/GLB")
+    ap.add_argument("model_code", nargs="?", default=DEFAULT_MODEL_CODE,
+                    help="型号编码,如 250-E-H2K1-L100")
+    ap.add_argument("--motor", default=DEFAULT_MOTOR, help="电机选型,如 11kw电机")
+    ap.add_argument("--series", default=None, help="系列目录名(覆盖型号推断,如 250直连)")
+    args = ap.parse_args()
+
     os.makedirs(OUT_DIR, exist_ok=True)
     log("=" * 60)
-    log("pythonOCC 验证: 250 直连装配体重建 + 缸体拉伸")
+    log(f"pythonOCC 选型装配: {args.model_code} (电机: {args.motor})")
     log("=" * 60)
 
     if not check_env():
         sys.exit(1)
 
-    # 加载变换矩阵
+    # 解析型号
+    sel = parse_model_code(args.model_code)
+    log(f"\n选型解析: 系列={sel['series']} 类型={sel['type']} "
+        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']}")
+
+    # 确定系列目录名(E=直连, 其他按 --series 或折返)
+    if args.series:
+        series_name = args.series
+    elif sel['type'].upper() == 'E':
+        series_name = f"{sel['series']}直连"
+    else:
+        series_name = f"{sel['series']}折返"
+
+    # 加载配置
+    config_path = os.path.join(CONFIG_DIR, f"{series_name}.json")
+    if not os.path.exists(config_path):
+        log(f"✗ 配置不存在: {config_path}")
+        log(f"  请先运行: python src/build_config.py 图库项目\\{series_name}")
+        sys.exit(1)
+    config = load_config(series_name)
+    log(f"配置加载: {series_name} (常显 {len(config['base_parts'])} 件, "
+        f"受控 {config.get('controlled_count', '?')} 件)")
+
+    # 计算选型显隐
+    visibility = resolve_visibility(config, sel['mount'], sel['load'], args.motor)
     with open(MATRIX_JSON, "r", encoding="utf-8") as f:
         parts_data = json.load(f)
-    log(f"\n加载变换矩阵: {len(parts_data)} 个组件")
+    shown, hidden = apply_selection(parts_data, visibility)
+    log(f"零件显隐: 显示 {shown} 个, 抑制 {hidden} 个 (共 {len(parts_data)})")
 
-    # Step 1: 读取所有 STEP
+    # 缸体拉伸参数
+    cyl = compute_cylinder_scale(config, sel['stroke'])
+    if cyl:
+        stroke_num, d1, scale = cyl
+        log(f"缸体拉伸: stroke={stroke_num} → D1={d1}, 缩放 ×{scale:.3f}")
+    else:
+        stroke_num, d1, scale = None, None, 1.0
+        log("缸体拉伸: 无配置,跳过")
+
+    # Step 1: 读取零件 STEP(跳过被抑制)
     shapes, t_read = step1_read_all_parts(parts_data)
+
+    # 缸体拉伸(集成到主流程:装配体里的缸体按选型 D1 拉伸)
+    t_stretch_main = 0.0
+    if cyl:
+        for key, shape in list(shapes.items()):
+            m = _KEY_RE.match(key)
+            base = m.group(1) if m else key
+            if "缸体" in base:
+                axis = find_cylinder_axis(shape)
+                ts = time.time()
+                shapes[key] = stretch_shape_axis(shape, axis, scale)
+                t_stretch_main = time.time() - ts
+                log(f"  ✓ 主流程缸体 {key} 沿 {['X','Y','Z'][axis]} 轴拉伸 ×{scale:.3f}")
+                break
 
     # Step 2: 应用变换 + 合并
     compound, t_merge = step2_apply_transform_and_merge(shapes, parts_data)
@@ -449,40 +631,34 @@ def main():
     # Step 3: 导出装配体 STEP
     asm_step, t_step = step3_export_assembly_step(compound)
 
-    # Step 4: 缸体拉伸验证
+    # Step 4: 缸体拉伸验证(单独导出拉伸缸体)
     cylinder_path = os.path.join(PARTS_DIR, CYLINDER_STEP)
-    if os.path.exists(cylinder_path):
+    if os.path.exists(cylinder_path) and cyl:
         cylinder_shape = read_step(cylinder_path)
-        _, t_stretch = step4_cylinder_stretch(cylinder_shape)
+        _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale)
     else:
-        log(f"\n跳过 Step 4: 缸体 STEP 不存在 {cylinder_path}")
+        log(f"\n跳过 Step 4: 缸体 STEP 不存在或无拉伸参数")
         t_stretch = 0
 
     # Step 5: GLB 导出
     glb_path, t_glb = step5_export_glb(compound)
 
     # 速度汇总
-    total = t_read + t_merge + t_step + t_stretch + t_glb
+    total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
     log("\n" + "=" * 60)
-    log("速度汇总")
+    log(f"速度汇总 ({args.model_code})")
     log("=" * 60)
-    log(f"  Step 1 读取所有 STEP      : {t_read:.2f}s")
-    log(f"  Step 2 应用变换+合并       : {t_merge*1000:.0f}ms")
-    log(f"  Step 3 导出装配体 STEP    : {t_step:.2f}s")
-    log(f"  Step 4 缸体拉伸           : {t_stretch*1000:.0f}ms")
-    log(f"  Step 5 GLB 导出           : {t_glb:.2f}s")
+    log(f"  Step 1 读取零件 STEP     : {t_read:.2f}s")
+    log(f"  缸体拉伸(主流程)         : {t_stretch_main*1000:.0f}ms")
+    log(f"  Step 2 应用变换+合并      : {t_merge*1000:.0f}ms")
+    log(f"  Step 3 导出装配体 STEP   : {t_step:.2f}s")
+    log(f"  Step 4 缸体拉伸验证       : {t_stretch*1000:.0f}ms")
+    log(f"  Step 5 GLB 导出          : {t_glb:.2f}s")
     log(f"  -----------------------------")
-    log(f"  总耗时                    : {total:.2f}s")
+    log(f"  总耗时                   : {total:.2f}s")
+    log(f"  显示 {shown} 件 / 抑制 {hidden} 件 / D1={d1 if cyl else 'N/A'}")
     log("")
-    log("对比原方案 (SW COM + 沙箱):")
-    log("  原方案 worker 总耗时: ~55s (STEP 16MB + GLB + PDF)")
-    log("  原方案主要瓶颈: SW COM (apply_config + SaveAs + 工程图)")
-    log("")
-    log("说明:")
-    log("  - 本脚本未含 PDF 生成 (PDF 仍依赖 SW 工程图, 是剩余瓶颈)")
-    log("  - 缸体拉伸用 Z 轴缩放近似, 真正特征参数化需 SW 离线预生成离散库")
-    log("  - 4 个电机/刹车件缺失, 实际装配体为 16 个零件")
-    log("  - pythonOCC 方案优势: 不依赖 SW, 可多进程并发, 适合多用户")
+    log("对比原方案 (SW COM + 沙箱): ~55s,本方案不依赖 SW,可多进程并发")
 
 
 if __name__ == "__main__":
