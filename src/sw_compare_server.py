@@ -97,7 +97,22 @@ def _set_cylinder_d1(part_doc, d1_mm, part_label=""):
                 continue
     except Exception:
         pass
-    return False, f"未找到 D1@ 尺寸参数{label}(需手动改缸体尺寸)"
+    # 诊断:dump 零件前 20 个参数名,便于排查"为什么找不到 D1"
+    msg = f"未找到 D1@ 尺寸参数{label}(需手动改缸体尺寸)"
+    try:
+        sample = []
+        if hasattr(part_doc, "GetParameterCount"):
+            cnt2 = int(part_doc.GetParameterCount())
+            for i in range(min(cnt2, 20)):
+                try:
+                    sample.append(str(part_doc.GetParameter(i).Name))
+                except Exception:
+                    pass
+        if sample:
+            msg += f"; param_sample={sample}"
+    except Exception:
+        pass
+    return False, msg
 
 
 def sw_apply_selection(model_code, motor=None, series_name=None):
@@ -149,21 +164,17 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
         if model is None:
             return {"ok": False, "error": f"打开装配体失败(errors={errors.value})"}
 
-        # 7. 缸体 D1 修改(在抑制前做,因为需要缸体组件未抑制才能获取零件文档)
+        # 7. 解决所有轻量化组件(参考 jdg_controller apply_config)
+        #    组件处于轻量化状态时,GetModelDoc2() 返回的零件文档不完整,
+        #    调用 Parameter() 会报 DISP_E_MEMBERNOTFOUND "找不到成员"。
+        #    必须先把轻量化组件全部 resolve,后续才能修改缸体 D1。
+        try:
+            model.ResolveAllLightWeightComponents(False)
+        except Exception:
+            pass
+
         cyl_msg = ""
         cyl_part_name = config.get("cylinder_part")
-        if d1 and cyl_part_name:
-            try:
-                pre_comps = model.GetComponents(False)
-                for c in pre_comps:
-                    cn = str(c.Name2 or "").split("@")[0]
-                    if cn == cyl_part_name or cn.startswith(cyl_part_name + "-"):
-                        part_doc = c.GetModelDoc2()
-                        if part_doc is not None:
-                            ok, cyl_msg = _set_cylinder_d1(part_doc, d1, cn)
-                        break
-            except Exception as e:
-                cyl_msg = f"缸体 D1 修改异常: {e}"
 
         # 8. 获取所有组件
         components = model.GetComponents(False)
@@ -218,7 +229,23 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
         except Exception:
             pass
 
-        # 9. 强制重建 + 刷新窗口
+        # 9. 缸体 D1 修改(参考 jdg_controller apply_config 的顺序)
+        #    必须在 抑制循环 + EditRebuild3 之后做:此时缸体组件已 fully resolved,
+        #    GetModelDoc2() 返回完整零件文档,Parameter() 才能命中维度对象。
+        #    (缸体为常显件,不会被抑制,故此处 GetModelDoc2 必非空。)
+        if d1 and cyl_part_name:
+            try:
+                for c in components:
+                    cn = str(c.Name2 or "").split("@")[0]
+                    if cn == cyl_part_name or cn.startswith(cyl_part_name + "-"):
+                        part_doc = c.GetModelDoc2()
+                        if part_doc is not None:
+                            ok, cyl_msg = _set_cylinder_d1(part_doc, d1, cn)
+                        break
+            except Exception as e:
+                cyl_msg = f"缸体 D1 修改异常: {e}"
+
+        # 10. 强制重建 + 刷新窗口
         try:
             model.ForceRebuild3(False)
         except Exception:
@@ -504,5 +531,5 @@ def index():
 
 
 if __name__ == "__main__":
-    print("SW 选型对比面板: http://127.0.0.1:5001")
-    app.run(host="127.0.0.1", port=5001, debug=False, threaded=True)
+    print("SW 选型对比面板: http://127.0.0.1:5002")
+    app.run(host="127.0.0.1", port=5002, debug=False, threaded=True)
