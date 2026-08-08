@@ -68,26 +68,36 @@ def _make_byref_int():
     return win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
 
-def _try_update_cylinder_eq(model, d1):
-    """尝试通过方程式修改缸体 D1,返回 (是否修改, 消息)"""
+def _set_cylinder_d1(part_doc, d1_mm, part_label=""):
+    """通过零件尺寸参数修改缸体 D1(参考 PythonServer/toolkit/cylinder_d1.py)
+
+    1. 优先尝试硬编码 D1@凸台-拉伸1(160 系列)
+    2. 失败后枚举零件参数找第一个 D1@*
+    返回 (是否成功, 消息)
+    """
+    label = f" ({part_label})" if part_label else ""
+    # 1) 优先历史硬编码特征名
     try:
-        eq_mgr = model.EquationMgr
-        if eq_mgr is None:
-            return False, "装配体无方程式管理器"
-        count = eq_mgr.GetCount
-        updated = 0
-        for i in range(count):
-            eq = str(eq_mgr.Equation(i))
-            # 匹配 D1 / d1 / 缸体长度 相关方程式
-            if re.search(r'\bD1\b|\bd1\b|缸体|长度', eq, re.IGNORECASE):
-                eq_mgr.Equation(i, f'"D1" = {d1}')
-                updated += 1
-        if updated > 0:
-            model.ForceRebuild3(False)
-            return True, f"修改了 {updated} 个方程式 → D1={d1}"
-        return False, "未找到 D1/缸体相关方程式(需手动改缸体尺寸)"
-    except Exception as e:
-        return False, f"方程式修改异常: {e}"
+        param = part_doc.Parameter("D1@凸台-拉伸1")
+        param.SetSystemValue3(d1_mm / 1000.0, 2, "")  # 2=米制,值用米
+        return True, f"D1={d1_mm}mm @ 凸台-拉伸1{label}"
+    except Exception:
+        pass
+    # 2) 退化:扫描所有参数找 D1@*
+    try:
+        cnt = int(part_doc.GetParameterCount())
+        for i in range(cnt):
+            try:
+                p = part_doc.GetParameter(i)
+                name = str(p.Name)
+                if name.startswith("D1@"):
+                    p.SetSystemValue3(d1_mm / 1000.0, 2, "")
+                    return True, f"D1={d1_mm}mm @ {name}{label}"
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False, f"未找到 D1@ 尺寸参数{label}(需手动改缸体尺寸)"
 
 
 def sw_apply_selection(model_code, motor=None, series_name=None):
@@ -139,18 +149,37 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
         if model is None:
             return {"ok": False, "error": f"打开装配体失败(errors={errors.value})"}
 
-        # 7. 尝试方程式修改缸体 D1
-        eq_msg = ""
-        if d1:
-            eq_ok, eq_msg = _try_update_cylinder_eq(model, d1)
+        # 7. 缸体 D1 修改(在抑制前做,因为需要缸体组件未抑制才能获取零件文档)
+        cyl_msg = ""
+        cyl_part_name = config.get("cylinder_part")
+        if d1 and cyl_part_name:
+            try:
+                pre_comps = model.GetComponents(False)
+                for c in pre_comps:
+                    cn = str(c.Name2 or "").split("@")[0]
+                    if cn == cyl_part_name or cn.startswith(cyl_part_name + "-"):
+                        part_doc = c.GetModelDoc2()
+                        if part_doc is not None:
+                            ok, cyl_msg = _set_cylinder_d1(part_doc, d1, cn)
+                        break
+            except Exception as e:
+                cyl_msg = f"缸体 D1 修改异常: {e}"
 
-        # 8. 获取所有组件并应用抑制状态
+        # 8. 获取所有组件
         components = model.GetComponents(False)
         count = len(components) if components else 0
+
+        # ★ FIX: 必须先 EditAssembly() 进入编辑装配体模式,
+        # 否则 SetSuppression2 会静默失败(状态不翻转)
+        try:
+            model.EditAssembly()
+        except Exception:
+            pass
 
         details = []
         suppressed_count = 0
         resolved_count = 0
+        skipped_count = 0
         error_count = 0
 
         for i in range(count):
@@ -167,12 +196,13 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
             should_show = visibility.get(base, True)
 
             try:
+                # ★ FIX: 用 SetSuppression2 而非 SetSuppressionState(后者静默失败)
                 if should_show:
-                    comp.SetSuppressionState(SW_RESOLVED)
+                    comp.SetSuppression2(SW_RESOLVED)
                     resolved_count += 1
                     state = "显示"
                 else:
-                    comp.SetSuppressionState(SW_SUPPRESSED)
+                    comp.SetSuppression2(SW_SUPPRESSED)
                     suppressed_count += 1
                     state = "抑制"
             except Exception as e:
@@ -181,18 +211,16 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
 
             details.append({"name": name, "base": base, "state": state})
 
-        # 9. 重建(让抑制/还原生效)
+        # ★ FIX: SetSuppression2 后必须 EditRebuild3() 才能生效
+        # (H11 fix: SetSuppression2 silently no-op without EditRebuild3)
+        try:
+            model.EditRebuild3()
+        except Exception:
+            pass
+
+        # 9. 强制重建 + 刷新窗口
         try:
             model.ForceRebuild3(False)
-        except Exception:
-            try:
-                model.EditRebuild3()
-            except Exception:
-                pass
-
-        # 10. 强制刷新窗口
-        try:
-            model.WindowRedraw()
         except Exception:
             pass
 
@@ -205,7 +233,7 @@ def sw_apply_selection(model_code, motor=None, series_name=None):
             "assembly": asm_path,
             "d1": d1,
             "scale": round(scale, 3) if scale else None,
-            "eq_msg": eq_msg,
+            "cyl_msg": cyl_msg,
             "total": count,
             "resolved": resolved_count,
             "suppressed": suppressed_count,
@@ -450,7 +478,7 @@ function renderResult(d){
   if(d.errors>0) html += `<div class="stat bad">错误 <span class="n">${d.errors}</span></div>`;
   if(d.d1) html += `<div class="stat">D1 <span class="n">${d.d1}</span> mm</div>`;
   html += `<div class="hint">${d.elapsed_hint}</div>`;
-  if(d.eq_msg) html += `<div class="hint">缸体方程式: ${d.eq_msg}</div>`;
+  if(d.cyl_msg) html += `<div class="hint">缸体 D1: ${d.cyl_msg}</div>`;
 
   // 详情表
   html += `<table><thead><tr><th>#</th><th>组件名</th><th>基础名</th><th>状态</th></tr></thead><tbody>`;
