@@ -23,9 +23,11 @@ import time
 import tempfile
 
 # ---------- 配置 ----------
-PARTS_DIR = r"e:\分享代码\step__glb_pdf\parts_step"
-MATRIX_JSON = r"e:\分享代码\step__glb_pdf\parts_transform.json"
-OUT_DIR = r"e:\分享代码\step__glb_pdf"
+# 路径相对于项目根目录 e:\分享代码\step__glb_pdf
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PARTS_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
+MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
+OUT_DIR = os.path.join(_PROJECT_ROOT, "output")
 CYLINDER_STEP = "250缸体.step"  # 缸体零件（用于拉伸验证）
 
 # 路径回退修复后，4 个电机/刹车件已能从装配体同目录找到并导出，无需跳过

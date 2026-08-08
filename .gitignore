@@ -18,6 +18,9 @@
 # 零件 STEP 目录（导出的中间产物）
 parts_step/
 
+# 输出目录（STEP/GLB 产物）
+output/
+
 # 日志文件
 *.log
 

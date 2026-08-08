@@ -22,12 +22,14 @@ import win32com.client
 import pythoncom
 
 # 配置
+# 项目根目录
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 输入：装配体原文件（保持在原位置，不移动）
 ASSEMBLY_PATH = r"E:\分享代码\pdf修改\图库项目\250直连\250直连装配体.SLDASM"
 # 输出：所有产出统一到 step__glb_pdf 工作目录
-OUTPUT_DIR = r"e:\分享代码\step__glb_pdf\parts_step"
-MATRIX_JSON = r"e:\分享代码\step__glb_pdf\parts_transform.json"
-LOG_FILE = r"e:\分享代码\step__glb_pdf\parts_export.log"
+OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
+MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
+LOG_FILE = os.path.join(_PROJECT_ROOT, "parts_export.log")
 
 # 零件路径回退搜索目录（当装配体引用的路径失效时，按 basename 在这些目录找本机文件）
 # 优先级从上到下
