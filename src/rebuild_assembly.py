@@ -155,13 +155,19 @@ def matrix_to_trsf(m):
     """SW MathTransform (16 doubles) → pythonOCC gp_Trsf
 
     SW ArrayData 格式:
-        [0-8]   : 3x3 旋转矩阵（行主序）
+        [0-8]   : 3x3 旋转矩阵（★ 列主序! SW 文档标注行主序，但实际为列主序）
         [9-11]  : 平移向量 (tx, ty, tz) — ★ 单位是米(m)!
         [12]    : 比例因子（通常 1.0）
         [13-15] : 保留（通常 0,0,0）
 
-    ★ 关键: SW MathTransform 的平移单位是米, STEP 文件用毫米
+    ★ 关键1: SW MathTransform 的平移单位是米, STEP 文件用毫米
              必须将平移向量 × 1000
+    ★ 关键2: SW ArrayData 旋转矩阵实际为列主序存储（转置后才是"零件→装配体"变换）
+             直接按行主序解读会导致旋转方向反转
+             验证: 鱼眼轴承杆长422mm(Y轴), 推杆Z=510.8→鱼眼轴承Z=957.8(差447mm≈杆长)
+             行主序: 零件Y→装配体-Z(杆向后, 错误)
+             列主序: 零件Y→装配体+Z(杆向前, 正确)
+             → 必须转置旋转矩阵后再传给 gp_Trsf
 
     pythonOCC 7.9.x: gp_Trsf.SetValues(a11..a14, a21..a24, a31..a34)
     """
@@ -169,10 +175,13 @@ def matrix_to_trsf(m):
 
     trsf = gp_Trsf()
     # 平移 × 1000 (米 → 毫米)
+    # ★ 旋转矩阵转置: SW ArrayData 是列主序, gp_Trsf 需要行主序
+    #   SW: [m0,m1,m2] = Col0, [m3,m4,m5] = Col1, [m6,m7,m8] = Col2
+    #   转置后: Row0=[m0,m3,m6], Row1=[m1,m4,m7], Row2=[m2,m5,m8]
     trsf.SetValues(
-        m[0], m[1], m[2],  m[9] * 1000.0,
-        m[3], m[4], m[5],  m[10] * 1000.0,
-        m[6], m[7], m[8],  m[11] * 1000.0,
+        m[0], m[3], m[6],  m[9] * 1000.0,
+        m[1], m[4], m[7],  m[10] * 1000.0,
+        m[2], m[5], m[8],  m[11] * 1000.0,
     )
     if abs(m[12] - 1.0) > 1e-9:
         trsf.SetScaleFactor(m[12])

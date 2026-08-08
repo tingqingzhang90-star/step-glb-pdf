@@ -116,7 +116,9 @@ def get_transform_matrix(comp):
         xform = comp.Transform2
         if xform is None:
             return None
-        # MathTransform 的 ArrayData 是 16 个 double（4x4 齐次矩阵，行主序）
+        # MathTransform 的 ArrayData 是 16 个 double（4x4 齐次矩阵）
+        # ★ 旋转矩阵[0-8]实际为列主序存储(转置后才是"零件→装配体"变换)
+        #   在 rebuild_assembly.py 的 matrix_to_trsf 中已做转置处理
         arr = xform.ArrayData
         if arr is None or len(arr) < 16:
             return None
