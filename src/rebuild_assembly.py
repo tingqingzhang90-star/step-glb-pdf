@@ -166,15 +166,43 @@ def matrix_to_trsf(m):
 
 
 def read_step(path):
-    """读取 STEP 文件，返回 TopoDS_Shape"""
+    """读取 STEP 文件，返回 TopoDS_Shape（带 BRep 缓存）
+
+    首次读取 STEP 后缓存为 .brep 二进制文件，后续直接读 .brep（快 10-100x）
+    """
     from OCC.Core.STEPControl import STEPControl_Reader
     from OCC.Core.IFSelect import IFSelect_RetDone
+    from OCC.Core.BRepTools import breptools_Read, breptools_Write
+    from OCC.Core.TopoDS import TopoDS_Shape
+    from OCC.Core.BRep import BRep_Builder
+
+    # 尝试读取 BRep 缓存
+    brep_path = path.rsplit(".", 1)[0] + ".brep"
+    if os.path.exists(brep_path):
+        try:
+            shape = TopoDS_Shape()
+            builder = BRep_Builder()
+            breptools_Read(shape, brep_path, builder)
+            if not shape.IsNull():
+                return shape
+        except Exception:
+            pass  # 缓存损坏，回退到 STEP
+
+    # 读取 STEP
     reader = STEPControl_Reader()
     status = reader.ReadFile(path)
     if status != IFSelect_RetDone:
         raise RuntimeError(f"读取 STEP 失败: {path}")
     reader.TransferRoots()
-    return reader.OneShape()
+    shape = reader.OneShape()
+
+    # 写入 BRep 缓存
+    try:
+        breptools_Write(shape, brep_path)
+    except Exception:
+        pass  # 缓存写入失败不影响主流程
+
+    return shape
 
 
 def write_step(shape, path):
@@ -199,11 +227,16 @@ def write_stl(shape, path, linear_deflection=0.5, angular_deflection=0.5):
 
 
 def step1_read_all_parts(parts_data):
-    """步骤 1: 读取所有零件 STEP"""
-    log("\n=== Step 1: 读取所有零件 STEP ===")
+    """步骤 1: 读取零件 STEP（跳过被抑制的零件，避免无谓 IO）"""
+    log("\n=== Step 1: 读取零件 STEP ===")
     shapes = {}
     t0 = time.time()
+    skipped_suppressed = 0
     for name, info in parts_data.items():
+        # ★ 先检查抑制状态，被抑制的零件不需要读取（省 9s+）
+        if info.get("suppressed", False):
+            skipped_suppressed += 1
+            continue
         step_file = info.get("step_file", "")
         if not step_file or step_file in MISSING_PARTS:
             log(f"  ⏭ 跳过 {name} (缺失或无 step_file)")
@@ -221,7 +254,7 @@ def step1_read_all_parts(parts_data):
         except Exception as e:
             log(f"  ✗ 读取失败 {name}: {e}")
     total = time.time() - t0
-    log(f"  小计: 读取 {len(shapes)} 个零件, 总耗时 {total:.2f}s")
+    log(f"  小计: 读取 {len(shapes)} 个, 跳过抑制 {skipped_suppressed} 个, 总耗时 {total:.2f}s")
     return shapes, total
 
 
