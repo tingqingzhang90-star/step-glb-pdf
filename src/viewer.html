@@ -4,12 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>3D 模型查看器</title>
-<!-- o3dv 渲染库(本地静态资源,由 server.py 提供) -->
-<script src="/static/o3dv/o3dv.min.js"></script>
-<!-- Three.js for B-rep edge rendering -->
-<script src="https://cdn.bootcdn.net/ajax/libs/three.js/r128/three.min.js"></script>
-<!-- Feather Icons CDN -->
-<script src="https://cdn.bootcdn.net/ajax/libs/feather-icons/4.29.0/feather.min.js"></script>
+<!-- o3dv 渲染库(本地静态资源,defer 不阻塞 HTML 渲染) -->
+<script src="/static/o3dv/o3dv.min.js" defer></script>
+<!-- Feather Icons CDN(defer 不阻塞页面) -->
+<script src="https://cdn.bootcdn.net/ajax/libs/feather-icons/4.29.0/feather.min.js" defer></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   :root{
@@ -275,12 +273,9 @@
   let viewer = null;
   let currentModel = null;
   let bgColors = null;
-  // B-rep 硬边渲染(Three.js 叠加层)
-  let edgeScene = null, edgeCamera = null, edgeRenderer = null, edgeLines = null;
-  let edgesUrl = null; // 当前模型的 edges.json URL
 
-  // 等 o3dv 库加载完成
-  window.addEventListener('load', function () {
+  // 等 DOM 解析完成即初始化(配合 defer 脚本,o3dv 已就绪)
+  document.addEventListener('DOMContentLoaded', function () {
     if (typeof OV === 'undefined') {
       alert('3D 渲染库(o3dv)加载失败,请检查 /static/o3dv/o3dv.min.js 是否可访问');
       return;
@@ -335,104 +330,8 @@
     }
   }
 
-  // ---- B-rep 硬边叠加渲染(Three.js) ----
-  function initEdgeOverlay() {
-    const container = document.getElementById('viewerContainer');
-    const w = container.clientWidth, h = container.clientHeight;
-
-    edgeScene = new THREE.Scene();
-    edgeCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100000);
-    edgeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-    edgeRenderer.setSize(w, h);
-    edgeRenderer.setPixelRatio(window.devicePixelRatio);
-    edgeRenderer.domElement.style.cssText =
-      'position:absolute;top:0;left:0;pointer-events:none;z-index:5';
-    container.appendChild(edgeRenderer.domElement);
-
-    // 窗口缩放同步
-    window.addEventListener('resize', () => {
-      const w2 = container.clientWidth, h2 = container.clientHeight;
-      edgeCamera.aspect = w2 / h2;
-      edgeCamera.updateProjectionMatrix();
-      edgeRenderer.setSize(w2, h2);
-    });
-  }
-
-  function loadEdgesOverlay() {
-    if (!edgesUrl) { clearEdges(); return; }
-    fetch(edgesUrl).then(r => {
-      if (!r.ok) throw new Error('edges.json 不存在');
-      return r.json();
-    }).then(data => {
-      clearEdges();
-      if (!data.edges || !data.edges.length) return;
-
-      const material = new THREE.LineBasicMaterial({
-        color: 0x888888,
-        transparent: true,
-        opacity: 0.6,
-        depthTest: true,
-      });
-
-      // 将所有边合并为一个 BufferGeometry (性能优化)
-      const positions = [];
-      for (const edge of data.edges) {
-        if (edge.length < 2) continue;
-        for (let i = 0; i < edge.length - 1; i++) {
-          positions.push(edge[i][0], edge[i][1], edge[i][2]);
-          positions.push(edge[i+1][0], edge[i+1][1], edge[i+1][2]);
-        }
-      }
-      if (positions.length === 0) return;
-
-      const geom = new THREE.BufferGeometry();
-      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-      edgeLines = new THREE.LineSegments(geom, material);
-      edgeScene.add(edgeLines);
-
-      // 同步 o3dv 相机到边线相机
-      syncEdgeCamera();
-      renderEdges();
-      console.log(`硬边渲染: ${data.edges.length} 条边, ${positions.length/6} 段线段`);
-    }).catch(err => {
-      console.log('edges.json 加载跳过:', err.message);
-    });
-  }
-
-  function syncEdgeCamera() {
-    if (!viewer || !edgeCamera) return;
-    try {
-      const innerViewer = viewer.GetViewer();
-      if (!innerViewer) return;
-      // 从 o3dv 内部获取相机参数
-      const cam = innerViewer.camera;
-      if (!cam) return;
-      const eye = cam.eye, center = cam.center, up = cam.up;
-      edgeCamera.position.set(eye.x, eye.y, eye.z);
-      edgeCamera.up.set(up.x, up.y, up.z);
-      edgeCamera.lookAt(center.x, center.y, center.z);
-      edgeCamera.fov = cam.fov || 45;
-      edgeCamera.updateProjectionMatrix();
-    } catch (e) { /* o3dv 内部 API 可能变化 */ }
-  }
-
-  function renderEdges() {
-    if (edgeRenderer && edgeScene && edgeCamera) {
-      edgeRenderer.render(edgeScene, edgeCamera);
-    }
-  }
-
-  function clearEdges() {
-    if (edgeLines) {
-      edgeScene.remove(edgeLines);
-      edgeLines.geometry.dispose();
-      edgeLines.material.dispose();
-      edgeLines = null;
-    }
-  }
-
-  // 初始化边线叠加层(已禁用,改用 o3dv 原生 EdgeSettings)
-  // initEdgeOverlay();
+  // ★ 硬边叠加渲染(Three.js)已移除,改用 o3dv 原生 EdgeSettings(见 initViewer)
+  // 如需恢复 Three.js 硬边叠加层,请参考 git 历史中的 initEdgeOverlay/loadEdgesOverlay 等函数
 
   // 事件监听
   function initEventListeners() {
@@ -553,13 +452,11 @@
       const productName = urlParams.get('productName');
       if (modelUrl) {
         console.log('检测到 URL 参数 - 模型 URL:', decodeURIComponent(modelUrl));
-        // 延迟加载,确保 viewer 已完全初始化
-        setTimeout(() => {
-          loadModelFromRemoteUrl(
-            decodeURIComponent(modelUrl),
-            productName ? decodeURIComponent(productName) : '产品模型'
-          );
-        }, 500);
+        // 直接加载,无需延迟(DOMContentLoaded 时 viewer 已通过 defer 就绪)
+        loadModelFromRemoteUrl(
+          decodeURIComponent(modelUrl),
+          productName ? decodeURIComponent(productName) : '产品模型'
+        );
       } else {
         console.log('未检测到模型 URL 参数,等待用户上传文件');
       }
@@ -575,15 +472,12 @@
       return;
     }
     try {
-      console.log('开始从远程 URL 加载模型:', url);
+      console.log('开始从 URL 加载模型:', url);
       showLoading();
 
       const fileNameDiv = document.getElementById('currentFileName');
       fileNameDiv.innerHTML = `<i data-feather="file"></i><span>${productName}</span>`;
       if (typeof feather !== 'undefined') feather.replace();
-
-      const extension = url.split('.').pop().toLowerCase().split('?')[0];
-      console.log('文件扩展名:', extension);
 
       // 超时保护(60 秒,远程文件可能较大)
       const loadTimeout = setTimeout(() => {
@@ -592,18 +486,23 @@
       }, 60000);
       window._currentLoadTimeout = loadTimeout;
 
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP 错误! 状态: ${response.status}`);
-
-      const blob = await response.blob();
-      console.log('文件下载成功,大小:', (blob.size / 1024 / 1024).toFixed(2), 'MB');
-
-      const fileName = url.split('/').pop().split('?')[0] || `${productName}.${extension}`;
-      const file = new File([blob], fileName, { type: blob.type });
-      viewer.LoadModelFromFileList([file]);
-      console.log('模型加载指令已发送到 Viewer');
+      // ★ 优先使用 o3dv 原生 URL 加载(避免 fetch+blob 双重内存)
+      if (typeof viewer.LoadModelFromUrlList === 'function') {
+        viewer.LoadModelFromUrlList([url]);
+        console.log('模型加载指令已发送(LoadModelFromUrlList)');
+      } else {
+        // 回退:fetch + File 方式(旧版兼容)
+        console.log('LoadModelFromUrlList 不可用,回退到 fetch 方式');
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP 错误! 状态: ${response.status}`);
+        const blob = await response.blob();
+        console.log('文件下载成功,大小:', (blob.size / 1024 / 1024).toFixed(2), 'MB');
+        const fileName = url.split('/').pop().split('?')[0] || `${productName}.glb`;
+        const file = new File([blob], fileName, { type: blob.type });
+        viewer.LoadModelFromFileList([file]);
+      }
     } catch (error) {
-      console.error('从远程 URL 加载模型失败:', error);
+      console.error('从 URL 加载模型失败:', error);
       hideLoading();
       if (window._currentLoadTimeout) {
         clearTimeout(window._currentLoadTimeout);
