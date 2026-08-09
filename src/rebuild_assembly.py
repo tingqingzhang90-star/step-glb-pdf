@@ -193,6 +193,41 @@ _KEY_RE = re.compile(r"^(.+)-(\d+)$")  # "250前盖-1" → 基础名"250前盖"
 _HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
 
 
+def _to_ascii_name(name):
+    """将中文零件名转为纯 ASCII,解决 SolidWorks 不支持 STEP Unicode 转义的问题
+
+    SolidWorks 导入 STEP 时, \X2\...\X0\ Unicode 转义序列会显示为下划线。
+    策略: 提取 ASCII 部分(型号前缀+零件标识),中文部分用拼音首字母或下划线替代。
+
+    例: "250前盖" → "250QG"  "250缸体" → "250GT"  "装配体" → "ASM"
+        "11kw电机" → "11kwDJ"  "AB180" → "AB180"
+    """
+    import unicodedata
+    # 提取所有 ASCII 字符
+    ascii_parts = []
+    for ch in name:
+        if ch.isascii() and (ch.isalnum() or ch in "_-"):
+            ascii_parts.append(ch)
+        elif '\u4e00' <= ch <= '\u9fff':
+            # 中文: 取拼音首字母(简化映射,覆盖常见零件名)
+            _pinyin_map = {
+                '前': 'Q', '后': 'H', '左': 'Z', '右': 'Y', '上': 'S', '下': 'X',
+                '盖': 'G', '体': 'T', '杆': 'G', '轴': 'Z', '座': 'Z', '套': 'T',
+                '缸': 'G', '筒': 'T', '板': 'B', '块': 'K', '环': 'H', '圈': 'Q',
+                '销': 'X', '钉': 'D', '螺': 'L', '母': 'M', '垫': 'D', '圈': 'Q',
+                '电': 'D', '机': 'J', '泵': 'B', '阀': 'F', '管': 'G', '接': 'J',
+                '连': 'L', '接': 'J', '轴': 'Z', '承': 'C', '轮': 'L', '盘': 'P',
+                '壳': 'K', '罩': 'Z', '盖': 'G', '端': 'D', '头': 'T', '尾': 'W',
+                '中': 'Z', '内': 'N', '外': 'W', '主': 'Z', '副': 'F', '辅': 'F',
+                '装': 'Z', '配': 'P', '组': 'Z', '件': 'J', '零': 'L',
+            }
+            ascii_parts.append(_pinyin_map.get(ch, '_'))
+    result = ''.join(ascii_parts)
+    # 清理: 去除首尾下划线,压缩连续下划线
+    result = re.sub(r'_+', '_', result).strip('_')
+    return result if result else 'PART'
+
+
 def parse_model_code(code):
     """解析型号编码 → 选型参数
 
@@ -379,7 +414,7 @@ def write_step(shape, path):
     writer.Write(path)
 
 
-def write_stl(shape, path, linear_deflection=0.2, angular_deflection=0.1):
+def write_stl(shape, path, linear_deflection=0.2, angular_deflection=1):
     """三角化 TopoDS_Shape 并导出 STL
 
     angular_deflection 控制曲面三角化精度:
@@ -701,17 +736,20 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
         # 提取基础名(去掉 -N 后缀,如 "250前盖-1" → "250前盖")
         m = _KEY_RE.match(name)
         base_name = m.group(1) if m else name
+        # ★ SolidWorks 不支持 STEP 中 \X2\...\X0\ Unicode 转义序列,
+        #   中文名称会显示为下划线。用纯 ASCII 名称(保留型号前缀+零件标识)
+        ascii_name = _to_ascii_name(base_name)
         part_label = shape_tool.AddShape(shape, False)
-        TDataStd_Name.Set(part_label, base_name)
+        TDataStd_Name.Set(part_label, ascii_name)
         part_labels[name] = part_label
-        log(f"  ✓ 零件: {base_name}")
+        log(f"  ✓ 零件: {base_name} → {ascii_name}")
 
     # 2. 创建装配体 label(用空 Compound 作为占位 shape)
     builder = BRep_Builder()
     asm_compound = TopoDS_Compound()
     builder.MakeCompound(asm_compound)
     asm_label = shape_tool.AddShape(asm_compound, True)
-    TDataStd_Name.Set(asm_label, asm_name)
+    TDataStd_Name.Set(asm_label, _to_ascii_name(asm_name))
 
     # 3. 为每个零件添加 Component(带变换矩阵作为 Location)
     for name, part_label in part_labels.items():
@@ -813,11 +851,10 @@ def step5_export_glb(compound, out_path):
 
     # 5.1 三角化 + STL 导出
     t0 = time.time()
-    write_stl(compound, stl_path, linear_deflection=0.2, angular_deflection=0.1)
+    write_stl(compound, stl_path, linear_deflection=0.2, angular_deflection=1)
     t_stl = time.time() - t0
     stl_size_mb = os.path.getsize(stl_path) / 1024 / 1024
     log(f"  ✓ STL 中转: {stl_path} ({stl_size_mb:.2f} MB, {t_stl:.2f}s)")
-
     # 5.2 trimesh → GLB
     t1 = time.time()
     mesh = trimesh.load(stl_path, file_type="stl")
