@@ -1,4 +1,0 @@
-/* Empty stylesheet shim for @mlightcad/cad-agent-plugin.
-   The real plugin is not installed; this file exists only so Vite's
-   `__vite-optional-peer-dep:` protocol can resolve the `style.css`
-   subpath import emitted by @mlightcad/cad-viewer. */
