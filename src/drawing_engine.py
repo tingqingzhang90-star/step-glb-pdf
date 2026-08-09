@@ -67,6 +67,16 @@ def read_shape_cached(step_path):
     from OCC.Core.TopoDS import TopoDS_Shape
 
     brep_path = step_path.rsplit('.', 1)[0] + '.brep'
+    step_exists = os.path.exists(step_path)
+
+    # 如果 STEP 不存在但 BRep 缓存存在,直接读 BRep(BREP-only 模式)
+    if not step_exists and os.path.exists(brep_path):
+        shape = TopoDS_Shape()
+        builder = BRep_Builder()
+        breptools.Read(shape, brep_path, builder)
+        if not shape.IsNull():
+            return shape
+        raise RuntimeError(f"BRep 缓存读取失败: {brep_path}")
 
     # 如果 BRep 缓存存在且比 STEP 文件新,直接读取
     if os.path.exists(brep_path):

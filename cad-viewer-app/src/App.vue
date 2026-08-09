@@ -280,7 +280,7 @@ onUnmounted(() => {
 
 // ============ 方法 ============
 
-// 加载型号列表
+// 加载型号列表(接受 assembly.step 或 assembly.brep)
 async function loadModelList() {
   try {
     const res = await fetch('/api/files')
@@ -288,10 +288,9 @@ async function loadModelList() {
     if (data.ok && data.groups) {
       const all = []
       for (const g of data.groups) {
-        for (const f of g.files || []) {
-          if (f.name === 'assembly.step') {
-            all.push(g.model)
-          }
+        const names = (g.files || []).map(f => f.name)
+        if (names.includes('assembly.step') || names.includes('assembly.brep')) {
+          all.push(g.model)
         }
       }
       models.value = all

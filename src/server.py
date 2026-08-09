@@ -732,12 +732,30 @@ def api_drawing_data(model_code):
 
 # ===================== SolidWorks 风格视图面板路由 =====================
 
+def _find_model_shape_path(model_code):
+    """查找模型的形状文件路径(优先 STEP,回退 BRep 缓存)
+
+    Returns:
+        文件路径(str)或 None(都不存在)
+    """
+    model_dir = os.path.join(OUT_DIR, model_code)
+    step_path = os.path.join(model_dir, "assembly.step")
+    if os.path.isfile(step_path):
+        return step_path
+    brep_path = os.path.join(model_dir, "assembly.brep")
+    if os.path.isfile(brep_path):
+        return brep_path
+    return None
+
+
 @app.route("/api/drawing-view-palette/<model_code>")
 def api_drawing_view_palette(model_code):
     """生成 SolidWorks 风格的视图调色板数据
 
     导入模型后调用,预生成 9 个标准视图(6 基本 + 3 轴测),
     每个视图包含 SVG 缩略图和归一化的边线数据(用于拖拽到画布)。
+
+    支持 assembly.step 或 assembly.brep(缓存)文件。
 
     响应:
         {
@@ -753,13 +771,13 @@ def api_drawing_view_palette(model_code):
     """
     import drawing_engine
 
-    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
-    if not os.path.isfile(step_path):
-        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+    shape_path = _find_model_shape_path(model_code)
+    if not shape_path:
+        return jsonify({"ok": False, "error": f"未找到模型文件(assembly.step 或 assembly.brep): {model_code}"}), 404
 
     try:
         with _build_lock:
-            result = drawing_engine.generate_all_standard_views(step_path)
+            result = drawing_engine.generate_all_standard_views(shape_path)
         return jsonify({"ok": True, **result})
     except Exception as e:
         import traceback
@@ -784,13 +802,13 @@ def api_drawing_view_single(model_code, view_name):
     """
     import drawing_engine
 
-    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
-    if not os.path.isfile(step_path):
-        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+    shape_path = _find_model_shape_path(model_code)
+    if not shape_path:
+        return jsonify({"ok": False, "error": f"未找到模型文件: {model_code}"}), 404
 
     try:
         with _build_lock:
-            view = drawing_engine.generate_view_by_name(step_path, view_name)
+            view = drawing_engine.generate_view_by_name(shape_path, view_name)
         if view is None:
             return jsonify({"ok": False, "error": f"无效的视图名: {view_name}"}), 400
         return jsonify({"ok": True, "view": view})
