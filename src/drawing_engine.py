@@ -1,0 +1,454 @@
+# -*- coding: utf-8 -*-
+"""
+工程图 2D 投影引擎
+
+使用 pythonOCC HLRBRep(隐藏线消除)算法,从 3D 装配体生成 2D 工程图视图:
+  - 主视图(Front): 沿 Y 轴负方向投影,缸体水平放置
+  - 俯视图(Top): 沿 Z 轴负方向投影
+  - 侧视图(Left): 沿 X 轴负方向投影
+  - 轴测视图(Iso): 等轴测方向投影
+
+输出 JSON 格式的 2D 线框数据(线段、圆弧、圆),供前端 SVG/Canvas 渲染。
+
+依赖:
+    conda run -n pdf1 python ...
+
+调用方式:
+    from drawing_engine import generate_drawing_views
+    views = generate_drawing_views("output/250-E-H2K1-L100/assembly.step")
+"""
+import os
+import json
+import time
+import math
+
+from OCC.Core.STEPControl import STEPControl_Reader
+from OCC.Core.IFSelect import IFSelect_RetDone
+from OCC.Core.TopoDS import TopoDS_Shape, topods
+from OCC.Core.TopExp import TopExp_Explorer
+from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
+from OCC.Core.BRep import BRep_Tool
+from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Trsf, gp_Lin, gp_Pln
+from OCC.Core.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape, HLRBRep_PolyAlgo
+from OCC.Core.HLRAlgo import HLRAlgo_Projector
+from OCC.Core.Geom import Geom_Line, Geom_Plane
+from OCC.Core.GeomAPI import GeomAPI_IntCS
+from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+from OCC.Core.GeomAdaptor import GeomAdaptor_Curve
+from OCC.Core.GCPnts import GCPnts_QuasiUniformDeflection
+from OCC.Core.TopAbs import TopAbs_VERTEX
+from OCC.Core.BRep import BRep_Tool
+
+
+def read_step_to_shape(step_path):
+    """读取 STEP 文件为 TopoDS_Shape"""
+    reader = STEPControl_Reader()
+    status = reader.ReadFile(step_path)
+    if status != IFSelect_RetDone:
+        raise RuntimeError(f"无法读取 STEP 文件: {step_path}")
+    reader.TransferRoots()
+    return reader.OneShape()
+
+
+def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
+    """对 shape 执行 HLR 投影,返回 (visible_edges, hidden_edges)
+
+    使用 HLRBRep_Algo(精确隐藏线消除算法)。
+    默认不生成隐藏边(工程图通常只显示可见轮廓),大幅减少输出数据量。
+
+    Args:
+        shape: TopoDS_Shape - 3D 形状
+        view_dir: gp_Dir - 视图方向(投影方向)
+        up_dir: gp_Dir - 上方向(控制视图旋转角度)
+        show_hidden: bool - 是否生成隐藏边(虚线)
+
+    Returns:
+        (visible_segments, hidden_segments)
+        每个元素是 list of dict: {"type": "line"/"arc"/"circle", ...}
+    """
+    if up_dir is None:
+        # 默认上方向:与视图方向垂直,优先 Z 轴
+        if abs(view_dir.Z()) < 0.9:
+            up_dir = gp_Dir(0, 0, 1)
+        else:
+            up_dir = gp_Dir(0, 1, 0)
+
+    # 构造投影坐标系
+    origin = gp_Pnt(0, 0, 0)
+    ax2 = gp_Ax2(origin, view_dir, up_dir)
+
+    # 使用精确 HLR 算法
+    hlr = HLRBRep_Algo()
+    hlr.Add(shape)
+    hlr.Projector(HLRAlgo_Projector(ax2))
+    hlr.Update()
+    hlr.Hide()
+
+    # 提取可见和隐藏边
+    hlr_to_shape = HLRBRep_HLRToShape(hlr)
+
+    # 可见边(实线)
+    visible_shape = hlr_to_shape.VCompound()
+    visible_segments = _extract_2d_segments(visible_shape)
+
+    # 隐藏边(虚线) - 默认不提取(性能优化)
+    hidden_segments = []
+    if show_hidden:
+        hidden_shape = hlr_to_shape.HCompound()
+        hidden_segments = _extract_2d_segments(hidden_shape)
+
+    return visible_segments, hidden_segments
+
+
+def _extract_2d_segments(shape):
+    """将 HLR 投影后的 shape 转换为 2D 线段/圆弧数据
+
+    HLR 输出的边是 3D 的(在投影平面上),需要提取为 2D 坐标。
+    """
+    if shape is None or shape.IsNull():
+        return []
+
+    segments = []
+    explorer = TopExp_Explorer(shape, TopAbs_EDGE)
+
+    while explorer.More():
+        edge = topods.Edge(explorer.Current())
+        segments.extend(_edge_to_segments(edge))
+        explorer.Next()
+
+    return segments
+
+
+def _edge_to_segments(edge):
+    """将一条边转换为 2D 线段/圆弧数据
+
+    支持直线边和曲线边(圆弧、样条等)。
+    曲线边用离散点拟合,然后输出为多段线。
+    """
+    segments = []
+
+    try:
+        adaptor = BRepAdaptor_Curve(edge)
+        curve_type = adaptor.GetType()
+
+        if curve_type == 0:  # GeomAbs_Line
+            # 直线:取首尾点
+            start = adaptor.Value(adaptor.FirstParameter())
+            end = adaptor.Value(adaptor.LastParameter())
+            segments.append({
+                "type": "line",
+                "x1": float(start.X()), "y1": float(start.Y()),
+                "x2": float(end.X()), "y2": float(end.Y())
+            })
+        elif curve_type == 1:  # GeomAbs_Circle
+            # 完整圆:输出圆心+半径
+            circ = adaptor.Circle()
+            center = circ.Location()
+            radius = circ.Radius()
+            # 判断是否完整圆(首尾参数差接近 2π)
+            u1 = adaptor.FirstParameter()
+            u2 = adaptor.LastParameter()
+            if abs(u2 - u1 - 2 * math.pi) < 0.1:
+                segments.append({
+                    "type": "circle",
+                    "cx": float(center.X()), "cy": float(center.Y()),
+                    "r": float(radius)
+                })
+            else:
+                # 圆弧:离散为多段线
+                pts = _discretize_curve(adaptor)
+                if pts:
+                    segments.append({"type": "polyline", "points": pts})
+        else:
+            # 其他曲线(BSpline、椭圆等):离散为多段线
+            pts = _discretize_curve(adaptor)
+            if pts:
+                segments.append({"type": "polyline", "points": pts})
+    except Exception:
+        # 单条边解析失败不影响整体
+        pass
+
+    return segments
+
+
+def _discretize_curve(adaptor, deflection=0.1):
+    """将曲线离散为 2D 点列表
+
+    Args:
+        adaptor: BRepAdaptor_Curve
+        deflection: 离散精度(mm)
+
+    Returns:
+        [[x1,y1], [x2,y2], ...] 或 None
+    """
+    try:
+        u1 = adaptor.FirstParameter()
+        u2 = adaptor.LastParameter()
+        if u2 <= u1:
+            return None
+
+        sampler = GCPnts_QuasiUniformDeflection(adaptor, deflection)
+        if sampler.NbPoints() < 2:
+            # 退化为直线
+            p1 = adaptor.Value(u1)
+            p2 = adaptor.Value(u2)
+            return [[float(p1.X()), float(p1.Y())], [float(p2.X()), float(p2.Y())]]
+
+        pts = []
+        for i in range(1, sampler.NbPoints() + 1):
+            p = sampler.Value(i)
+            pts.append([float(p.X()), float(p.Y())])
+        return pts
+    except Exception:
+        return None
+
+
+def _compute_bbox(segments_list):
+    """计算所有线段的包围盒
+
+    Returns:
+        (min_x, min_y, max_x, max_y)
+    """
+    min_x = min_y = float('inf')
+    max_x = max_y = float('-inf')
+
+    for segs in segments_list:
+        for seg in segs:
+            if seg["type"] == "line":
+                for x, y in [(seg["x1"], seg["y1"]), (seg["x2"], seg["y2"])]:
+                    min_x = min(min_x, x); max_x = max(max_x, x)
+                    min_y = min(min_y, y); max_y = max(max_y, y)
+            elif seg["type"] == "circle":
+                cx, cy, r = seg["cx"], seg["cy"], seg["r"]
+                min_x = min(min_x, cx - r); max_x = max(max_x, cx + r)
+                min_y = min(min_y, cy - r); max_y = max(max_y, cy + r)
+            elif seg["type"] == "polyline":
+                for x, y in seg["points"]:
+                    min_x = min(min_x, x); max_x = max(max_x, x)
+                    min_y = min(min_y, y); max_y = max(max_y, y)
+
+    if min_x == float('inf'):
+        return 0, 0, 0, 0
+    return min_x, min_y, max_x, max_y
+
+
+def _normalize_view(segments, hidden_segments, target_width=400, target_height=300):
+    """归一化视图坐标到 [0, target_width] x [0, target_height]
+
+    保持宽高比,居中放置。
+    """
+    all_segs = segments + hidden_segments
+    if not all_segs:
+        return segments, hidden_segments, {"x": 0, "y": 0, "width": 0, "height": 0, "scale": 1}
+
+    min_x, min_y, max_x, max_y = _compute_bbox([all_segs])
+    width = max_x - min_x
+    height = max_y - min_y
+
+    if width < 0.01 or height < 0.01:
+        return segments, hidden_segments, {"x": 0, "y": 0, "width": 0, "height": 0, "scale": 1}
+
+    # 计算缩放比例(保持宽高比)
+    margin = 10
+    avail_w = target_width - 2 * margin
+    avail_h = target_height - 2 * margin
+    scale = min(avail_w / width, avail_h / height)
+
+    # 居中偏移
+    offset_x = margin + (avail_w - width * scale) / 2 - min_x * scale
+    offset_y = margin + (avail_h - height * scale) / 2 - min_y * scale
+
+    def transform_seg(seg):
+        if seg["type"] == "line":
+            return {
+                "type": "line",
+                "x1": round(seg["x1"] * scale + offset_x, 2),
+                "y1": round(seg["y1"] * scale + offset_y, 2),
+                "x2": round(seg["x2"] * scale + offset_x, 2),
+                "y2": round(seg["y2"] * scale + offset_y, 2),
+            }
+        elif seg["type"] == "circle":
+            return {
+                "type": "circle",
+                "cx": round(seg["cx"] * scale + offset_x, 2),
+                "cy": round(seg["cy"] * scale + offset_y, 2),
+                "r": round(seg["r"] * scale, 2),
+            }
+        elif seg["type"] == "polyline":
+            return {
+                "type": "polyline",
+                "points": [[round(x * scale + offset_x, 2), round(y * scale + offset_y, 2)]
+                           for x, y in seg["points"]]
+            }
+        return seg
+
+    norm_segments = [transform_seg(s) for s in segments]
+    norm_hidden = [transform_seg(s) for s in hidden_segments]
+
+    bbox = {
+        "x": 0, "y": 0,
+        "width": target_width, "height": target_height,
+        "scale": round(scale, 4),
+        "orig_width": round(width, 2), "orig_height": round(height, 2)
+    }
+
+    return norm_segments, norm_hidden, bbox
+
+
+def generate_drawing_views(step_path, views=None, target_width=400, target_height=300):
+    """从 STEP 文件生成工程图视图
+
+    Args:
+        step_path: STEP 文件路径
+        views: 要生成的视图列表,默认 ["front", "top", "left", "iso"]
+        target_width: 每个视图的目标宽度(px)
+        target_height: 每个视图的目标高度(px)
+
+    Returns:
+        {
+            "views": {
+                "front": {"visible": [...], "hidden": [...], "bbox": {...}},
+                "top": {...},
+                "left": {...},
+                "iso": {...}
+            },
+            "model_bbox": {"width": ..., "height": ..., "depth": ...},
+            "elapsed": float
+        }
+    """
+    t0 = time.time()
+
+    if views is None:
+        views = ["front", "top", "left", "iso"]
+
+    # 读取 STEP
+    shape = read_step_to_shape(step_path)
+
+    # 预三角化(PolyAlgo 要求 shape 已有三角化数据)
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    BRepMesh_IncrementalMesh(shape, 0.5, False, 0.5, True)
+
+    # 计算模型包围盒(用于确定投影方向和视图比例)
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRepBndLib import brepbndlib
+    bbox = Bnd_Box()
+    brepbndlib.Add(shape, bbox)
+    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+    model_bbox = {
+        "width": round(float(xmax - xmin), 2),
+        "height": round(float(ymax - ymin), 2),
+        "depth": round(float(zmax - zmin), 2)
+    }
+
+    # 定义投影方向
+    # 液压缸通常沿 X 轴水平放置
+    # 主视图:沿 Y 轴负方向看(看到 X-Z 平面)
+    # 俯视图:沿 Z 轴负方向看(看到 X-Y 平面)
+    # 侧视图:沿 X 轴负方向看(看到 Y-Z 平面)
+    # 轴测视图:等轴测方向
+    view_configs = {
+        "front": {
+            "dir": gp_Dir(0, -1, 0),  # 沿 -Y 方向投影
+            "up": gp_Dir(0, 0, 1),    # Z 轴向上
+            "label": "主视图"
+        },
+        "top": {
+            "dir": gp_Dir(0, 0, -1),  # 沿 -Z 方向投影
+            "up": gp_Dir(0, 1, 0),    # Y 轴向上(俯视图的"上"是模型的 Y 方向)
+            "label": "俯视图"
+        },
+        "left": {
+            "dir": gp_Dir(-1, 0, 0),  # 沿 -X 方向投影
+            "up": gp_Dir(0, 0, 1),    # Z 轴向上
+            "label": "侧视图"
+        },
+        "iso": {
+            "dir": gp_Dir(1, -1, 1),  # 等轴测方向
+            "up": gp_Dir(0, 0, 1),    # Z 轴向上
+            "label": "轴测视图"
+        }
+    }
+
+    result_views = {}
+    for view_name in views:
+        if view_name not in view_configs:
+            continue
+
+        cfg = view_configs[view_name]
+        t1 = time.time()
+        visible, hidden = _project_shape(shape, cfg["dir"], cfg["up"])
+        t2 = time.time()
+
+        # 归一化坐标
+        norm_visible, norm_hidden, view_bbox = _normalize_view(
+            visible, hidden, target_width, target_height
+        )
+
+        result_views[view_name] = {
+            "label": cfg["label"],
+            "visible": norm_visible,
+            "hidden": norm_hidden,
+            "bbox": view_bbox,
+            "seg_count": len(norm_visible),
+            "hidden_count": len(norm_hidden),
+            "project_time": round(t2 - t1, 3)
+        }
+
+    elapsed = time.time() - t0
+    return {
+        "views": result_views,
+        "model_bbox": model_bbox,
+        "elapsed": round(elapsed, 3)
+    }
+
+
+def generate_drawing_json(step_path, output_path, views=None,
+                          target_width=400, target_height=300):
+    """生成工程图视图 JSON 文件
+
+    Args:
+        step_path: STEP 文件路径
+        output_path: 输出 JSON 路径
+        views: 视图列表
+        target_width: 视图宽度
+        target_height: 视图高度
+
+    Returns:
+        (output_path, elapsed_time)
+    """
+    result = generate_drawing_views(step_path, views, target_width, target_height)
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    return output_path, result["elapsed"]
+
+
+# ---------- 测试入口 ----------
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        # 默认测试文件
+        step = r"e:\分享代码\step__glb_pdf\output\250-E-H2K1-L100-D11\assembly.step"
+    else:
+        step = sys.argv[1]
+
+    if not os.path.exists(step):
+        print(f"STEP 文件不存在: {step}")
+        sys.exit(1)
+
+    print(f"输入: {step}")
+    out = os.path.join(os.path.dirname(step), "views.json")
+    path, elapsed = generate_drawing_json(step, out)
+    print(f"输出: {path}")
+    print(f"耗时: {elapsed:.3f}s")
+
+    # 打印统计
+    import json as _json
+    with open(out, 'r', encoding='utf-8') as f:
+        data = _json.load(f)
+    print(f"模型包围盒: {data['model_bbox']}")
+    for name, view in data["views"].items():
+        print(f"  {view['label']}: {view['seg_count']} 可见边, "
+              f"{view['hidden_count']} 隐藏边, {view['project_time']}s")
