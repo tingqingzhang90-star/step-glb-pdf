@@ -446,7 +446,7 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=15.0):
             continue
 
         face_list = edge_face_map.FindFromKey(edge)
-        if face_list.Extent() < 2:
+        if face_list.Size() < 2:
             # 自由边(只有一个面),跳过
             explorer.Next()
             continue
