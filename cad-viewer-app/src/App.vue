@@ -69,23 +69,23 @@
             <!-- 可见边 -->
             <g class="visible-edges">
               <line v-for="(seg, i) in pv.edges" :key="'v'+i"
-                    v-if="seg.type === 'line'"
+                    v-if="seg && seg.type === 'line'"
                     :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2"
                     stroke="#333" stroke-width="1" />
-              <circle v-else-if="seg.type === 'circle'"
+              <circle v-else-if="seg && seg.type === 'circle'"
                       :cx="seg.cx" :cy="seg.cy" :r="seg.r"
                       stroke="#333" stroke-width="1" fill="none" />
-              <polyline v-else-if="seg.type === 'polyline'"
+              <polyline v-else-if="seg && seg.type === 'polyline'"
                         :points="polylinePoints(seg.points)"
                         stroke="#333" stroke-width="1" fill="none" />
             </g>
             <!-- 隐藏边(虚线) -->
             <g class="hidden-edges">
               <line v-for="(seg, i) in pv.hiddenEdges" :key="'h'+i"
-                    v-if="seg.type === 'line'"
+                    v-if="seg && seg.type === 'line'"
                     :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2"
                     stroke="#999" stroke-width="0.8" stroke-dasharray="3,2" />
-              <circle v-else-if="seg.type === 'circle'"
+              <circle v-else-if="seg && seg.type === 'circle'"
                       :cx="seg.cx" :cy="seg.cy" :r="seg.r"
                       stroke="#999" stroke-width="0.8" fill="none" stroke-dasharray="3,2" />
             </g>
@@ -378,8 +378,8 @@ function placeView(view, x, y) {
     name: view.name,
     label: view.label,
     group: view.group,
-    edges: JSON.parse(JSON.stringify(view.edges || [])),
-    hiddenEdges: JSON.parse(JSON.stringify(view.hidden_edges || [])),
+    edges: (view.edges || []).filter(s => s && s.type),
+    hiddenEdges: (view.hidden_edges || []).filter(s => s && s.type),
     bbox: view.bbox || { x: 0, y: 0, width: 120, height: 90 },
     x: Math.max(0, x),
     y: Math.max(0, y),
