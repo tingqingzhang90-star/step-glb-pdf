@@ -418,10 +418,10 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=15.0):
     Returns:
         list of list of [x,y,z]: 每条硬边的点序列
     """
-    from OCC.Core.TopExp import TopExp_Explorer
+    from OCC.Core.TopExp import TopExp_Explorer, topexp_MapShapesAndAncestors
     from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
     from OCC.Core.TopoDS import topods
-    from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
+    from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
     from OCC.Core.GCPnts import GCPnts_UniformAbscissa
     from OCC.Core.BRep import BRep_Tool
@@ -430,30 +430,9 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=15.0):
     from OCC.Core.gp import gp_Pnt, gp_Vec
     import math
 
-    # 建立边到面的映射(手动遍历)
-    # 用 id() 作为 key,用 IsSame() 判断边是否相同
-    edge_face_map = {}  # id(edge) -> {'edge': edge, 'faces': []}
-    face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
-    while face_explorer.More():
-        face = topods.Face(face_explorer.Current())
-        # 遍历该面的所有边
-        edge_explorer = TopExp_Explorer(face, TopAbs_EDGE)
-        while edge_explorer.More():
-            edge = topods.Edge(edge_explorer.Current())
-            edge_id = id(edge)
-            # 检查是否已有相同的边(用 IsSame 判断)
-            found = False
-            for eid, entry in edge_face_map.items():
-                if entry['edge'].IsSame(edge):
-                    # 检查这个面是否已经添加过
-                    if not any(face.IsSame(f) for f in entry['faces']):
-                        entry['faces'].append(face)
-                    found = True
-                    break
-            if not found:
-                edge_face_map[edge_id] = {'edge': edge, 'faces': [face]}
-            edge_explorer.Next()
-        face_explorer.Next()
+    # 建立边到面的映射(OCC 原生方法,高效)
+    edge_face_map = TopTools_IndexedDataMapOfShapeListOfShape()
+    topexp_MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_face_map)
 
     edges_data = []
     explorer = TopExp_Explorer(shape, TopAbs_EDGE)
@@ -461,31 +440,25 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=15.0):
     while explorer.More():
         edge = topods.Edge(explorer.Current())
 
-        # 查找该边的相邻面(从字典中查找)
-        entry = None
-        for eid, e in edge_face_map.items():
-            if e['edge'].IsSame(edge):
-                entry = e
-                break
-
-        if entry is None:
+        # 查找该边的相邻面(OCC 原生查找,O(1))
+        if not edge_face_map.Contains(edge):
             explorer.Next()
             continue
 
-        faces_list = entry['faces']
-        # 去重(同一个面可能因为遍历方式被添加多次)
-        unique_faces = []
-        for f in faces_list:
-            if not any(f.IsSame(uf) for uf in unique_faces):
-                unique_faces.append(f)
-
-        if len(unique_faces) < 2:
+        face_list = edge_face_map.FindFromKey(edge)
+        if face_list.Extent() < 2:
             # 自由边(只有一个面),跳过
             explorer.Next()
             continue
 
-        face1 = unique_faces[0]
-        face2 = unique_faces[1]
+        # 获取前两个面
+        face1 = topods.Face(face_list.First())
+        face2 = topods.Face(face_list.Last())
+
+        # 如果两个面相同,跳过
+        if face1.IsSame(face2):
+            explorer.Next()
+            continue
 
         # 检查连续性: 如果两个面在边处相切(G1或更高),则不是硬边,跳过
         try:
