@@ -194,32 +194,58 @@ _HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
 
 
 def _fix_step_header_for_solidworks(step_path):
-    """修改 STEP 文件头,模仿 SolidWorks 原生导出格式
+    """STEP 后处理:UTF-8 中文转 \\X2\\ 转义 + 文件头改为 SolidWorks 格式
 
-    对比 SolidWorks 原生导出和 pythonOCC 导出的 STEP 文件发现:
-      - 两者都使用 \\X2\\HHHH\\X0\\ 转义序列编码中文 PRODUCT 名称(STEP 标准)
-      - 但文件头不同:
-        SolidWorks: FILE_DESCRIPTION(('STEP AP214'),'1')
-                    FILE_NAME(...,'SwSTEP 2.0','SolidWorks 2024','')
-                    FILE_SCHEMA(('AUTOMOTIVE_DESIGN'))
-        pythonOCC:  FILE_DESCRIPTION(('Open CASCADE Model'),'2;1')
-                    FILE_NAME(...,'Open CASCADE STEP processor 7.9',...,'Unknown')
-                    FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'))
-      - SolidWorks 根据文件头判断 STEP 来源,对第三方导出的 STEP 可能采用
-        不同解析策略,导致 \\X2\\ 转义无法正确解析,中文 PRODUCT 名称显示为横线
+    对比 SolidWorks 原生导出和 pythonOCC 导出的 STEP 文件发现两个关键差异:
 
-    解决方案:保留 pythonOCC 原始的 \\X2\\ 转义序列(STEP 标准,SolidWorks 能解析),
-    仅修改文件头为 SolidWorks 格式,使其用正确的解析器处理中文转义。
+    1. 中文编码方式不同:
+       - SolidWorks: PRODUCT 名称用 \\X2\\HHHH\\X0\\ 转义(ISO 10303-21 标准,纯 ASCII)
+         例: PRODUCT('250\\X2\\516d89d287ba6bcd\\X0\\', ...)  ← "250六角螺母"
+       - pythonOCC 7.9: 直接以 UTF-8 字节写入中文字符(非 ASCII)
+         例: PRODUCT('250缸体', ...)  ← UTF-8 字节 E7 BC B8 E4 BD 93
+       - SolidWorks 导入时用系统 ANSI(GBK)读取,UTF-8 字节被当 GBK 误读 → 乱码/横线
+
+    2. 文件头不同:
+       - SolidWorks: 'SwSTEP 2.0'/'SolidWorks 2024'/FILE_DESCRIPTION(('STEP AP214'),'1')
+       - pythonOCC:  'Open CASCADE STEP processor 7.9'/'Unknown'
+
+    解决方案:
+      1. 读取 UTF-8 文件,将所有非 ASCII 字符转为 \\X2\\HHHH\\X0\\ 转义(与 SolidWorks 一致)
+      2. 修改文件头 FILE_DESCRIPTION/FILE_NAME/FILE_SCHEMA 为 SolidWorks 格式
+      3. 以 latin-1(纯 ASCII) 写回,确保 SolidWorks 能正确解析中文转义
 
     Args:
         step_path: STEP 文件路径(将被原地修改)
     """
     try:
-        with open(step_path, 'r', encoding='latin-1') as f:
+        # pythonOCC 7.9 以 UTF-8 编码写入中文字符
+        with open(step_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
         original = content
 
+        # ① 将非 ASCII 字符转换为 \X2\HHHH\X0\ 转义序列(STEP 标准,与 SolidWorks 一致)
+        # 连续的非 ASCII 字符合并到一个转义块中(如 SolidWorks: \X2\516d89d287ba6bcd\X0\)
+        def escape_non_ascii(text):
+            result = []
+            i = 0
+            n = len(text)
+            while i < n:
+                cp = ord(text[i])
+                if cp > 127:
+                    hex_str = ''
+                    while i < n and ord(text[i]) > 127:
+                        hex_str += format(ord(text[i]), '04x')
+                        i += 1
+                    result.append('\\X2\\' + hex_str + '\\X0\\')
+                else:
+                    result.append(text[i])
+                    i += 1
+            return ''.join(result)
+
+        content = escape_non_ascii(content)
+
+        # ② 修改文件头为 SolidWorks 格式
         # 提取原始时间戳(保留导出时间)
         timestamp = ""
         ts_match = re.search(r"'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'", content)
@@ -232,21 +258,21 @@ def _fix_step_header_for_solidworks(step_path):
             f"'SwSTEP 2.0', 'SolidWorks 2024', '' );"
         )
 
-        # 1. 替换 FILE_DESCRIPTION(单行)
+        # 替换 FILE_DESCRIPTION(单行)
         content = re.sub(
             r"FILE_DESCRIPTION\s*\([^\n]*\);",
             "FILE_DESCRIPTION ( 'STEP AP214' ), '1' );",
             content, count=1
         )
 
-        # 2. 替换 FILE_NAME(跨行,匹配到 FILE_SCHEMA 之前)
+        # 替换 FILE_NAME(跨行,匹配到 FILE_SCHEMA 之前)
         content = re.sub(
             r"FILE_NAME\s*\(.*?(?=FILE_SCHEMA)",
             new_file_name + "\n",
             content, count=1, flags=re.DOTALL
         )
 
-        # 3. 替换 FILE_SCHEMA(单行,去掉 { 1 0 10303 214 ... } 扩展参数)
+        # 替换 FILE_SCHEMA(单行,去掉 { 1 0 10303 214 ... } 扩展参数)
         content = re.sub(
             r"FILE_SCHEMA\s*\([^\n]*\);",
             "FILE_SCHEMA ( ( 'AUTOMOTIVE_DESIGN' ) );",
@@ -254,11 +280,12 @@ def _fix_step_header_for_solidworks(step_path):
         )
 
         if content != original:
+            # 以 latin-1 写回(此时内容已全部为 ASCII,latin-1 与 ASCII 兼容)
             with open(step_path, 'w', encoding='latin-1') as f:
                 f.write(content)
-            log(f"  ✓ STEP 文件头已修改为 SolidWorks 格式(保留 \\X2\\ 转义)")
+            log(f"  ✓ STEP 已转换为 SolidWorks 格式(\\X2\\ 转义 + 文件头)")
     except Exception as e:
-        log(f"  ⚠ STEP 文件头修改失败(不影响功能): {e}")
+        log(f"  ⚠ STEP 后处理失败(不影响功能): {e}")
 
 
 def _to_ascii_name(name):
