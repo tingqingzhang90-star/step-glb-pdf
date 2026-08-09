@@ -570,6 +570,69 @@ def api_drawing_pdf():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/generate-drawing/<model_code>", methods=["POST"])
+def api_generate_drawing(model_code):
+    """为指定型号生成工程图 PDF
+
+    请求体: {
+        "stroke": 100,
+        "bore_diameter": "250",
+        "motor_power": "0.75",
+        ...
+    }
+    响应: 生成的 PDF 文件下载
+    """
+    import drawing_generator
+    
+    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
+    if not os.path.isfile(step_path):
+        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+    
+    try:
+        data = request.get_json() or {}
+        
+        # 构建参数
+        params = {
+            "model_code": model_code,
+            "stroke": int(data.get("stroke", 100)),
+            "bore_diameter": data.get("bore_diameter", "250"),
+            "motor_power": data.get("motor_power", ""),
+            "rated_speed": data.get("rated_speed", ""),
+            "rated_torque": data.get("rated_torque", ""),
+            "max_speed": data.get("max_speed", ""),
+            "screw_model": data.get("screw_model", ""),
+            "screw_lead": data.get("screw_lead", ""),
+            "reduction_ratio": data.get("reduction_ratio", ""),
+            "positioning_accuracy": data.get("positioning_accuracy", "±0.02"),
+        }
+        
+        # 输出路径
+        output_pdf = os.path.join(OUT_DIR, model_code, "drawing.pdf")
+        
+        # 生成工程图
+        with _build_lock:
+            result = drawing_generator.generate_drawing_pdf(step_path, output_pdf, params)
+        
+        if not result["success"]:
+            return jsonify({"ok": False, "error": result.get("error", "生成失败")}), 500
+        
+        # 返回 PDF 文件
+        return send_file(
+            output_pdf,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"工程图_{model_code}.pdf"
+        )
+    
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     print("=" * 56)
