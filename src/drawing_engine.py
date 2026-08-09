@@ -156,10 +156,11 @@ def _extract_2d_segments(shape):
 
 
 def _edge_to_segments(edge):
-    """将一条边转换为 2D 线段/圆弧数据
+    """将一条边转换为 2D 线段/圆弧数据(含元数据)
 
-    支持直线边和曲线边(圆弧、样条等)。
-    曲线边用离散点拟合,然后输出为多段线。
+    元数据 meta 用于模板边线匹配:
+      - line: orientation(horizontal/vertical/diagonal), length, midpoint
+      - circle: radius, center
     """
     segments = []
 
@@ -168,40 +169,55 @@ def _edge_to_segments(edge):
         curve_type = adaptor.GetType()
 
         if curve_type == 0:  # GeomAbs_Line
-            # 直线:取首尾点
             start = adaptor.Value(adaptor.FirstParameter())
             end = adaptor.Value(adaptor.LastParameter())
+            x1, y1 = float(start.X()), float(start.Y())
+            x2, y2 = float(end.X()), float(end.Y())
+            dx, dy = x2 - x1, y2 - y1
+            length = math.hypot(dx, dy)
+            if length < 0.001:
+                return segments
+            # 方向判断
+            if abs(dy) < 0.1:
+                orientation = "horizontal"
+            elif abs(dx) < 0.1:
+                orientation = "vertical"
+            else:
+                orientation = "diagonal"
             segments.append({
                 "type": "line",
-                "x1": float(start.X()), "y1": float(start.Y()),
-                "x2": float(end.X()), "y2": float(end.Y())
+                "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                "meta": {
+                    "orientation": orientation,
+                    "length": round(length, 2),
+                    "midpoint": [round((x1 + x2) / 2, 2), round((y1 + y2) / 2, 2)]
+                }
             })
         elif curve_type == 1:  # GeomAbs_Circle
-            # 完整圆:输出圆心+半径
             circ = adaptor.Circle()
             center = circ.Location()
             radius = circ.Radius()
-            # 判断是否完整圆(首尾参数差接近 2π)
             u1 = adaptor.FirstParameter()
             u2 = adaptor.LastParameter()
             if abs(u2 - u1 - 2 * math.pi) < 0.1:
                 segments.append({
                     "type": "circle",
                     "cx": float(center.X()), "cy": float(center.Y()),
-                    "r": float(radius)
+                    "r": float(radius),
+                    "meta": {
+                        "radius": round(float(radius), 2),
+                        "center": [round(float(center.X()), 2), round(float(center.Y()), 2)]
+                    }
                 })
             else:
-                # 圆弧:离散为多段线
                 pts = _discretize_curve(adaptor)
                 if pts:
                     segments.append({"type": "polyline", "points": pts})
         else:
-            # 其他曲线(BSpline、椭圆等):离散为多段线
             pts = _discretize_curve(adaptor)
             if pts:
                 segments.append({"type": "polyline", "points": pts})
     except Exception:
-        # 单条边解析失败不影响整体
         pass
 
     return segments
@@ -545,6 +561,148 @@ def generate_drawing_views_fast(step_path, views=None, target_width=400, target_
             "mesh": round(t_mesh, 3),
             "total": round(elapsed, 3)
         }
+    }
+
+
+def _assign_bbox_roles(segments):
+    """为边线分配包围盒角色(bbox_role)
+
+    找出包围盒四条边界上的边线,标记为:
+      bbox_x_min / bbox_x_max / bbox_y_min / bbox_y_max
+
+    用于模板边线匹配(如"最左侧的竖直边"= bbox_x_min)。
+    """
+    if not segments:
+        return segments
+
+    min_x = min_y = float('inf')
+    max_x = max_y = float('-inf')
+
+    for seg in segments:
+        if seg["type"] == "line":
+            min_x = min(min_x, seg["x1"], seg["x2"])
+            max_x = max(max_x, seg["x1"], seg["x2"])
+            min_y = min(min_y, seg["y1"], seg["y2"])
+            max_y = max(max_y, seg["y1"], seg["y2"])
+        elif seg["type"] == "circle":
+            min_x = min(min_x, seg["cx"] - seg["r"])
+            max_x = max(max_x, seg["cx"] + seg["r"])
+            min_y = min(min_y, seg["cy"] - seg["r"])
+            max_y = max(max_y, seg["cy"] + seg["r"])
+
+    if min_x == float('inf'):
+        return segments
+
+    tol = 0.5  # 0.5mm 容差
+    for seg in segments:
+        if "meta" not in seg:
+            seg["meta"] = {}
+        roles = []
+        if seg["type"] == "line":
+            if seg["meta"].get("orientation") == "vertical":
+                if abs(min(seg["x1"], seg["x2"]) - min_x) < tol:
+                    roles.append("bbox_x_min")
+                if abs(max(seg["x1"], seg["x2"]) - max_x) < tol:
+                    roles.append("bbox_x_max")
+            elif seg["meta"].get("orientation") == "horizontal":
+                if abs(min(seg["y1"], seg["y2"]) - min_y) < tol:
+                    roles.append("bbox_y_min")
+                if abs(max(seg["y1"], seg["y2"]) - max_y) < tol:
+                    roles.append("bbox_y_max")
+        if roles:
+            seg["meta"]["bbox_roles"] = roles
+
+    return segments
+
+
+def generate_drawing_views_raw(step_path, views=None):
+    """生成工程图视图(模型坐标空间,含元数据,用于 DXF 导出)
+
+    与 generate_drawing_views_fast 的区别:
+      - 不做归一化,保留模型实际坐标(mm)
+      - 边线含完整元数据(方向/长度/中点/包围盒角色)
+      - 圆保留圆心+半径(不离散)
+      - 返回每个视图的包围盒(用于布局)
+
+    Args:
+        step_path: STEP 文件路径
+        views: 视图列表,默认 ["front", "top"]
+
+    Returns:
+        {
+            "views": {
+                "front": {"label": ..., "visible": [...], "hidden": [...],
+                          "bbox": {"min_x", "min_y", "max_x", "max_y", "width", "height"}},
+                ...
+            },
+            "model_bbox": {"width", "height", "depth"},
+            "elapsed": float
+        }
+    """
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRepBndLib import brepbndlib
+
+    t0 = time.time()
+
+    if views is None:
+        views = ["front", "top"]
+
+    shape = read_shape_cached(step_path)
+    t_read = time.time() - t0
+
+    BRepMesh_IncrementalMesh(shape, 2.0, False, 2.0, True)
+    t_mesh = time.time() - t0 - t_read
+
+    bbox = Bnd_Box()
+    brepbndlib.Add(shape, bbox)
+    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+    model_bbox = {
+        "width": round(float(xmax - xmin), 2),
+        "height": round(float(ymax - ymin), 2),
+        "depth": round(float(zmax - zmin), 2)
+    }
+
+    view_configs = {
+        "front": {"dir": gp_Dir(0, -1, 0), "up": gp_Dir(0, 0, 1), "label": "主视图"},
+        "top":   {"dir": gp_Dir(0, 0, -1), "up": gp_Dir(0, 1, 0), "label": "俯视图"},
+        "left":  {"dir": gp_Dir(-1, 0, 0), "up": gp_Dir(0, 0, 1), "label": "侧视图"},
+        "iso":   {"dir": gp_Dir(1, -1, 1), "up": gp_Dir(0, 0, 1), "label": "轴测视图"},
+    }
+
+    result_views = {}
+    for view_name in views:
+        if view_name not in view_configs:
+            continue
+        cfg = view_configs[view_name]
+        visible, hidden = _project_shape(shape, cfg["dir"], cfg["up"])
+
+        # 分配包围盒角色
+        visible = _assign_bbox_roles(visible)
+        hidden = _assign_bbox_roles(hidden)
+
+        # 计算视图包围盒(模型坐标)
+        min_x, min_y, max_x, max_y = _compute_bbox([visible, hidden])
+        view_bbox = {
+            "min_x": round(min_x, 2), "min_y": round(min_y, 2),
+            "max_x": round(max_x, 2), "max_y": round(max_y, 2),
+            "width": round(max_x - min_x, 2),
+            "height": round(max_y - min_y, 2)
+        }
+
+        result_views[view_name] = {
+            "label": cfg["label"],
+            "visible": visible,
+            "hidden": hidden,
+            "bbox": view_bbox,
+            "seg_count": len(visible)
+        }
+
+    elapsed = time.time() - t0
+    return {
+        "views": result_views,
+        "model_bbox": model_bbox,
+        "elapsed": round(elapsed, 3)
     }
 
 

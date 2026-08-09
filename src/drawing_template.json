@@ -1,0 +1,59 @@
+{
+  "name": "液压缸工程图模板",
+  "sheet": {"size": "A3", "width": 420, "height": 297},
+  "views": [
+    {"id": "front", "type": "front", "x": 80, "y": 200, "scale": "auto", "target_width": 180, "target_height": 120},
+    {"id": "top",   "type": "top",   "x": 80, "y": 50,  "scale": "auto", "target_width": 180, "target_height": 100}
+  ],
+  "dimensions": [
+    {
+      "id": "dim_total_length",
+      "type": "linear",
+      "view": "front",
+      "orientation": "horizontal",
+      "edge1_ref": {"method": "bbox_x_min"},
+      "edge2_ref": {"method": "bbox_x_max"},
+      "offset": -25,
+      "label": "总长"
+    },
+    {
+      "id": "dim_total_height",
+      "type": "linear",
+      "view": "front",
+      "orientation": "vertical",
+      "edge1_ref": {"method": "bbox_y_min"},
+      "edge2_ref": {"method": "bbox_y_max"},
+      "offset": 25,
+      "label": "总高"
+    },
+    {
+      "id": "dim_bore",
+      "type": "hole",
+      "view": "front",
+      "circle_ref": {"method": "largest_circle"},
+      "leader": {"dx": 30, "dy": -20}
+    },
+    {
+      "id": "dim_top_length",
+      "type": "linear",
+      "view": "top",
+      "orientation": "horizontal",
+      "edge1_ref": {"method": "bbox_x_min"},
+      "edge2_ref": {"method": "bbox_x_max"},
+      "offset": -20,
+      "label": "总长"
+    }
+  ],
+  "title_block": {
+    "fields": [
+      {"name": "图样名称", "value": "{{series}}液压缸", "x": 290, "y": 20},
+      {"name": "型号", "value": "{{model_code}}", "x": 290, "y": 35},
+      {"name": "比例", "value": "1:{{scale}}", "x": 370, "y": 20},
+      {"name": "日期", "value": "{{date}}", "x": 370, "y": 35}
+    ]
+  },
+  "bom_table": {
+    "position": {"x": 290, "y": 150},
+    "columns": ["序号", "名称", "数量", "备注"]
+  }
+}

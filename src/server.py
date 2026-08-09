@@ -633,6 +633,103 @@ def api_generate_drawing(model_code):
         }), 500
 
 
+# ===================== DXF 工程图路由 =====================
+
+@app.route("/api/drawing-dxf/<model_code>")
+def api_drawing_dxf(model_code):
+    """生成指定型号的 DXF 工程图文件
+
+    流程: STEP → HLR投影 → 模板匹配 → 标注计算 → DXF导出
+    返回 DXF 文件下载。
+    """
+    import dxf_exporter
+    import drawing_template
+    from datetime import datetime
+
+    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
+    if not os.path.isfile(step_path):
+        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+
+    try:
+        # 解析型号参数
+        parts = model_code.split("-")
+        series = parts[0] if parts else ""
+
+        params = {
+            "model_code": model_code,
+            "series": series,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "scale": "2"
+        }
+
+        output_dxf = os.path.join(OUT_DIR, model_code, "drawing.dxf")
+
+        with _build_lock:
+            dxf_path, elapsed, unmatched = dxf_exporter.generate_dxf_from_step(
+                step_path, output_dxf, params=params
+            )
+
+        return send_file(
+            dxf_path,
+            as_attachment=True,
+            download_name=f"工程图_{model_code}.dxf"
+        )
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route("/api/drawing-data/<model_code>")
+def api_drawing_data(model_code):
+    """生成指定型号的工程图数据(JSON,含视图+标注+标题栏)
+
+    供前端 cad-viewer 渲染或调试用。
+    """
+    import drawing_engine
+    import drawing_template
+    from datetime import datetime
+
+    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
+    if not os.path.isfile(step_path):
+        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+
+    try:
+        parts = model_code.split("-")
+        series = parts[0] if parts else ""
+        params = {
+            "model_code": model_code,
+            "series": series,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "scale": "2"
+        }
+
+        with _build_lock:
+            views_data = drawing_engine.generate_drawing_views_raw(step_path)
+            template = drawing_template.load_default_template()
+            drawing_data = drawing_template.apply_template(views_data, template, params)
+
+        return jsonify({
+            "ok": True,
+            "drawing": drawing_data,
+            "elapsed": views_data["elapsed"],
+            "model_bbox": views_data["model_bbox"],
+            "unmatched": drawing_data.get("unmatched", [])
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     print("=" * 56)
