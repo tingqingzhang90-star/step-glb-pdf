@@ -1166,8 +1166,8 @@ def build_assembly(model_code, motor=None, series=None):
         _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_path)
         cyl_out = cyl_path
 
-    # Step 5: GLB (用 OCC 原生 RWGltf_CafWriter,跳过 STL→trimesh 中转)
-    glb_path, t_glb = step5_export_glb_xcaf(xcaf_doc, glb_path)
+    # Step 5: GLB
+    glb_path, t_glb = step5_export_glb(compound, glb_path)
 
     total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
     result = {
