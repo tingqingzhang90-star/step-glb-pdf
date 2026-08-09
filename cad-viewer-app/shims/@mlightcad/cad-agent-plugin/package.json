@@ -1,0 +1,27 @@
+{
+  "name": "@mlightcad/cad-agent-plugin",
+  "version": "0.0.0-shim",
+  "description": "Empty shim package. The real @mlightcad/cad-agent-plugin is an optional peer dep of @mlightcad/cad-viewer that is not installed in this project. This shim exists only so Vite's __vite-optional-peer-dep protocol can resolve the '.css' subpath import that Vite 8.2.1 fails to convert into a throw-on-call CJS stub (unlike /register subpaths).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "module": "./index.js",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js"
+    },
+    "./style.css": "./style.css",
+    "./register": {
+      "types": "./register.d.ts",
+      "import": "./register.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "register.js",
+    "register.d.ts",
+    "style.css"
+  ]
+}
