@@ -869,7 +869,7 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
     log(f"    耗时分解: XCAF构建{(t_transfer-t0)*1000:.0f}ms "
         f"Transfer+Write{(t_write-t_transfer)*1000:.0f}ms "
         f"后处理{(t_post-t_write)*1000:.0f}ms")
-    return out_path, total
+    return out_path, total, doc
 
 
 def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_path):
@@ -977,6 +977,67 @@ def step5_export_glb(compound, out_path):
         pass
 
     return glb_path, t_stl + t_glb + t_edges
+
+
+def step5_export_glb_xcaf(doc, out_path, linear_deflection=0.2, angular_deflection=1.0):
+    """步骤 5(新): 用 OCC 原生 RWGltf_CafWriter 直接从 XCAF 文档导出 GLB
+
+    跳过 STL→trimesh 中转链路,全 C++ 实现,无中间文件 I/O。
+    三角化参数与原 step5_export_glb 保持一致,不影响精度。
+
+    对比原方案:
+      原: pythonOCC三角化 → 写STL文件 → trimesh读STL → 写GLB (5.87s)
+      新: 预三角化 → RWGltf_CafWriter.Perform → 写GLB     (预计 2-3s)
+
+    Args:
+        doc: XCAF 文档(来自 step3_export_assembly_step_xcaf 的返回值)
+        out_path: GLB 输出路径
+        linear_deflection: 线性偏移(默认 0.2mm,与原方案一致)
+        angular_deflection: 角度偏移(默认 1.0 弧度,与原方案一致)
+    Returns:
+        (out_path, total_time)
+    """
+    from OCC.Core.RWGltf import RWGltf_CafWriter
+    from OCC.Core.TColStd import TColStd_IndexedDataMapOfStringString
+    from OCC.Core.XCAFDoc import XCAFDoc_DocumentTool
+    from OCC.Core.TDF import TDF_LabelSequence
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    from OCC.Core.TopoDS import TopoDS_Shape
+
+    log("\n=== Step 5 (XCAF): 装配体 GLB 导出 ===")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    # 1. 预三角化 XCAF 文档中所有零件 shape(使用与原方案相同的参数)
+    t0 = time.time()
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool(doc.Main())
+    labels = TDF_LabelSequence()
+    shape_tool.GetShapes(labels)
+    mesh_count = 0
+    for i in range(1, labels.Length() + 1):
+        label = labels.Value(i)
+        shape = TopoDS_Shape()
+        if shape_tool.GetShape(label, shape) and not shape.IsNull():
+            BRepMesh_IncrementalMesh(
+                shape, linear_deflection, False, angular_deflection, True
+            )
+            mesh_count += 1
+    t_mesh = time.time() - t0
+    log(f"  ✓ 预三角化 {mesh_count} 个 shape ({t_mesh:.2f}s)")
+
+    # 2. 用 RWGltf_CafWriter 导出 GLB(全 C++,无中间文件)
+    t1 = time.time()
+    writer = RWGltf_CafWriter(out_path, True)  # True = binary GLB
+    writer.SetParallel(True)  # 启用并行写入
+    attributes = TColStd_IndexedDataMapOfStringString()
+    writer.Perform(doc, attributes)
+    t_glb = time.time() - t1
+
+    glb_size_mb = os.path.getsize(out_path) / 1024 / 1024
+    total = t_mesh + t_glb
+    log(f"  ✓ GLB 导出: {out_path} ({glb_size_mb:.2f} MB, "
+        f"三角化 {t_mesh:.2f}s + 写入 {t_glb:.2f}s = {total:.2f}s)")
+
+    return out_path, total
 
 
 def build_assembly(model_code, motor=None, series=None):
@@ -1092,7 +1153,7 @@ def build_assembly(model_code, motor=None, series=None):
     #   SolidWorks 导入时所有零件显示为 "Open CASCADE STEP translator..."
     #   新版 step3_export_assembly_step_xcaf 使用 XCAF/XDE 文档结构,
     #   生成 PRODUCT + NEXT_ASSEMBLY_USAGE_OCCURRENCE 实体,与 SW 原生导出一致
-    asm_step, t_step = step3_export_assembly_step_xcaf(
+    asm_step, t_step, xcaf_doc = step3_export_assembly_step_xcaf(
         shapes, parts_data, asm_path, asm_name=model_code)
 
     # Step 4: 缸体验证
@@ -1104,8 +1165,8 @@ def build_assembly(model_code, motor=None, series=None):
         _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_path)
         cyl_out = cyl_path
 
-    # Step 5: GLB
-    glb_path, t_glb = step5_export_glb(compound, glb_path)
+    # Step 5: GLB (用 OCC 原生 RWGltf_CafWriter,跳过 STL→trimesh 中转)
+    glb_path, t_glb = step5_export_glb_xcaf(xcaf_doc, glb_path)
 
     total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
     result = {
