@@ -706,6 +706,250 @@ def generate_drawing_views_raw(step_path, views=None):
     }
 
 
+# ===================== SolidWorks 风格视图面板 =====================
+
+# 9 个标准视图配置(对应 SolidWorks 视图调色板)
+# dir: 投影方向(从该方向看模型)
+# up:  视图上方向(控制视图旋转)
+STANDARD_VIEW_CONFIGS = {
+    # 6 个基本视图
+    "front":    {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "前视",  "group": "standard"},
+    "back":     {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "后视",  "group": "standard"},
+    "left":     {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 0, 1),  "label": "左视",  "group": "standard"},
+    "right":    {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 0, 1),  "label": "右视",  "group": "standard"},
+    "top":      {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "上视",  "group": "standard"},
+    "bottom":   {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, -1, 0), "label": "下视",  "group": "standard"},
+    # 3 个轴测视图
+    "isometric":      {"dir": gp_Dir(1, -1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
+    "dimetric_left":  {"dir": gp_Dir(-1, -1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
+    "dimetric_right": {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
+}
+
+
+def _segments_to_svg(segments, hidden_segments=None, width=120, height=90,
+                     stroke_color="#333333", hidden_color="#999999",
+                     stroke_width=0.8, bg_color="#ffffff"):
+    """将 2D 线段数据转换为 SVG 字符串(用于视图缩略图)
+
+    自动归一化到指定宽高,保持宽高比居中。
+
+    Args:
+        segments: 可见边线段列表
+        hidden_segments: 隐藏边线段列表(可选,虚线渲染)
+        width/height: SVG 画布尺寸
+        stroke_color: 可见边颜色
+        hidden_color: 隐藏边颜色
+        stroke_width: 线宽
+        bg_color: 背景色
+
+    Returns:
+        SVG 字符串
+    """
+    hidden_segments = hidden_segments or []
+    all_segs = segments + hidden_segments
+    if not all_segs:
+        return f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">' \
+               f'<rect width="{width}" height="{height}" fill="{bg_color}"/>' \
+               f'<text x="{width//2}" y="{height//2}" text-anchor="middle" fill="#ccc" font-size="10">空</text>' \
+               f'</svg>'
+
+    # 归一化
+    norm_visible, norm_hidden, _ = _normalize_view(
+        segments, hidden_segments, width, height
+    )
+
+    parts = [f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" '
+             f'viewBox="0 0 {width} {height}">']
+    parts.append(f'<rect width="{width}" height="{height}" fill="{bg_color}"/>')
+
+    # 隐藏边(虚线)
+    for seg in norm_hidden:
+        if seg["type"] == "line":
+            parts.append(f'<line x1="{seg["x1"]}" y1="{seg["y1"]}" x2="{seg["x2"]}" y2="{seg["y2"]}" '
+                        f'stroke="{hidden_color}" stroke-width="{stroke_width}" '
+                        f'stroke-dasharray="2,2"/>')
+        elif seg["type"] == "circle":
+            parts.append(f'<circle cx="{seg["cx"]}" cy="{seg["cy"]}" r="{seg["r"]}" '
+                        f'stroke="{hidden_color}" stroke-width="{stroke_width}" fill="none" '
+                        f'stroke-dasharray="2,2"/>')
+        elif seg["type"] == "polyline":
+            pts = " ".join(f"{x},{y}" for x, y in seg["points"])
+            parts.append(f'<polyline points="{pts}" stroke="{hidden_color}" '
+                        f'stroke-width="{stroke_width}" fill="none" stroke-dasharray="2,2"/>')
+
+    # 可见边(实线)
+    for seg in norm_visible:
+        if seg["type"] == "line":
+            parts.append(f'<line x1="{seg["x1"]}" y1="{seg["y1"]}" x2="{seg["x2"]}" y2="{seg["y2"]}" '
+                        f'stroke="{stroke_color}" stroke-width="{stroke_width}"/>')
+        elif seg["type"] == "circle":
+            parts.append(f'<circle cx="{seg["cx"]}" cy="{seg["cy"]}" r="{seg["r"]}" '
+                        f'stroke="{stroke_color}" stroke-width="{stroke_width}" fill="none"/>')
+        elif seg["type"] == "polyline":
+            pts = " ".join(f"{x},{y}" for x, y in seg["points"])
+            parts.append(f'<polyline points="{pts}" stroke="{stroke_color}" '
+                        f'stroke-width="{stroke_width}" fill="none"/>')
+
+    parts.append('</svg>')
+    return "".join(parts)
+
+
+def generate_all_standard_views(step_path, include_hidden=False,
+                                thumb_width=120, thumb_height=90):
+    """生成所有 9 个标准视图(含 SVG 缩略图)
+
+    用于 SolidWorks 风格视图面板:导入模型后预生成所有可用视图,
+    用户从面板拖拽视图到图纸画布。
+
+    性能优化:
+      - 使用 BRep 缓存读取(比 STEP 快 14 倍)
+      - 使用 PolyAlgo 兼容的三角化参数(2.0mm)
+      - 9 个视图复用同一 shape,仅投影方向不同
+
+    Args:
+        step_path: STEP 文件路径
+        include_hidden: 是否生成隐藏边(虚线),默认 False(更快)
+        thumb_width: 缩略图宽度(px)
+        thumb_height: 缩略图高度(px)
+
+    Returns:
+        {
+            "views": {
+                "front": {
+                    "label": "前视",
+                    "group": "standard",
+                    "thumbnail": "<svg>...</svg>",      # 缩略图 SVG
+                    "edges": [...],                      # 归一化后的边线(用于放置到画布)
+                    "hidden_edges": [...],
+                    "bbox": {"x", "y", "width", "height", "scale", "orig_width", "orig_height"},
+                    "seg_count": int,
+                    "project_time": float
+                },
+                ...
+            },
+            "model_bbox": {"width", "height", "depth"},
+            "elapsed": float,
+            "timing": {"read": float, "mesh": float, "total": float}
+        }
+    """
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRepBndLib import brepbndlib
+
+    t0 = time.time()
+
+    # 读取 shape(使用 BRep 缓存)
+    shape = read_shape_cached(step_path)
+    t_read = time.time() - t0
+
+    # 预三角化
+    t1 = time.time()
+    BRepMesh_IncrementalMesh(shape, 2.0, False, 2.0, True)
+    t_mesh = time.time() - t1
+
+    # 模型包围盒
+    bbox = Bnd_Box()
+    brepbndlib.Add(shape, bbox)
+    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+    model_bbox = {
+        "width": round(float(xmax - xmin), 2),
+        "height": round(float(ymax - ymin), 2),
+        "depth": round(float(zmax - zmin), 2)
+    }
+
+    result_views = {}
+    for view_name, cfg in STANDARD_VIEW_CONFIGS.items():
+        t2 = time.time()
+        visible, hidden = _project_shape(
+            shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
+        )
+        t_proj = time.time() - t2
+
+        # 归一化(用于缩略图和画布放置)
+        norm_visible, norm_hidden, view_bbox = _normalize_view(
+            visible, hidden, thumb_width, thumb_height
+        )
+
+        # 生成 SVG 缩略图
+        thumbnail = _segments_to_svg(
+            norm_visible, norm_hidden, thumb_width, thumb_height
+        )
+
+        result_views[view_name] = {
+            "label": cfg["label"],
+            "group": cfg["group"],
+            "thumbnail": thumbnail,
+            "edges": norm_visible,
+            "hidden_edges": norm_hidden,
+            "bbox": view_bbox,
+            "seg_count": len(norm_visible),
+            "hidden_count": len(norm_hidden),
+            "project_time": round(t_proj, 3)
+        }
+
+    elapsed = time.time() - t0
+    return {
+        "views": result_views,
+        "model_bbox": model_bbox,
+        "elapsed": round(elapsed, 3),
+        "timing": {
+            "read": round(t_read, 3),
+            "mesh": round(t_mesh, 3),
+            "total": round(elapsed, 3)
+        }
+    }
+
+
+def generate_view_by_name(step_path, view_name, target_width=400, target_height=300,
+                          include_hidden=False):
+    """按视图名生成单个视图的投影数据(用于按需生成)
+
+    Args:
+        step_path: STEP 文件路径
+        view_name: 视图名(front/back/left/right/top/bottom/isometric/dimetric_left/dimetric_right)
+        target_width: 视图宽度
+        target_height: 视图高度
+        include_hidden: 是否生成隐藏边
+
+    Returns:
+        {
+            "view_name": ...,
+            "label": ...,
+            "visible": [...],
+            "hidden": [...],
+            "bbox": {...},
+            "seg_count": int
+        }
+        或 None(视图名无效)
+    """
+    if view_name not in STANDARD_VIEW_CONFIGS:
+        return None
+
+    cfg = STANDARD_VIEW_CONFIGS[view_name]
+    shape = read_shape_cached(step_path)
+
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    BRepMesh_IncrementalMesh(shape, 2.0, False, 2.0, True)
+
+    visible, hidden = _project_shape(
+        shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
+    )
+
+    norm_visible, norm_hidden, view_bbox = _normalize_view(
+        visible, hidden, target_width, target_height
+    )
+
+    return {
+        "view_name": view_name,
+        "label": cfg["label"],
+        "visible": norm_visible,
+        "hidden": norm_hidden,
+        "bbox": view_bbox,
+        "seg_count": len(norm_visible),
+        "hidden_count": len(norm_hidden)
+    }
+
+
 # ---------- 测试入口 ----------
 if __name__ == "__main__":
     import sys

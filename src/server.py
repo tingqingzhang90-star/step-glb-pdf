@@ -730,6 +730,74 @@ def api_drawing_data(model_code):
         }), 500
 
 
+# ===================== SolidWorks 风格视图面板路由 =====================
+
+@app.route("/api/drawing-view-palette/<model_code>")
+def api_drawing_view_palette(model_code):
+    """生成 SolidWorks 风格的视图调色板数据
+
+    导入模型后调用,预生成 9 个标准视图(6 基本 + 3 轴测),
+    每个视图包含 SVG 缩略图和归一化的边线数据(用于拖拽到画布)。
+
+    响应:
+        {
+            "ok": true,
+            "views": {
+                "front": {"label", "group", "thumbnail", "edges", "hidden_edges", "bbox", ...},
+                "back": {...},
+                ...
+            },
+            "model_bbox": {"width", "height", "depth"},
+            "elapsed": float
+        }
+    """
+    import drawing_engine
+
+    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
+    if not os.path.isfile(step_path):
+        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+
+    try:
+        with _build_lock:
+            result = drawing_engine.generate_all_standard_views(step_path)
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }), 500
+
+
+@app.route("/api/drawing-view-single/<model_code>/<view_name>")
+def api_drawing_view_single(model_code, view_name):
+    """按需生成单个视图的投影数据(高分辨率版)
+
+    用于用户拖拽视图到画布后,请求更高分辨率的边线数据。
+
+    响应:
+        {
+            "ok": true,
+            "view": {"view_name", "label", "visible", "hidden", "bbox", "seg_count"}
+        }
+    """
+    import drawing_engine
+
+    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
+    if not os.path.isfile(step_path):
+        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+
+    try:
+        with _build_lock:
+            view = drawing_engine.generate_view_by_name(step_path, view_name)
+        if view is None:
+            return jsonify({"ok": False, "error": f"无效的视图名: {view_name}"}), 400
+        return jsonify({"ok": True, "view": view})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     print("=" * 56)
