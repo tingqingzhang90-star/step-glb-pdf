@@ -1003,6 +1003,7 @@ def step5_export_glb_xcaf(doc, out_path, linear_deflection=0.2, angular_deflecti
     from OCC.Core.TDF import TDF_LabelSequence
     from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
     from OCC.Core.TopoDS import TopoDS_Shape
+    from OCC.Core.Message import Message_ProgressRange
 
     log("\n=== Step 5 (XCAF): 装配体 GLB 导出 ===")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -1029,7 +1030,7 @@ def step5_export_glb_xcaf(doc, out_path, linear_deflection=0.2, angular_deflecti
     writer = RWGltf_CafWriter(out_path, True)  # True = binary GLB
     writer.SetParallel(True)  # 启用并行写入
     attributes = TColStd_IndexedDataMapOfStringString()
-    writer.Perform(doc, attributes)
+    writer.Perform(doc, attributes, Message_ProgressRange())
     t_glb = time.time() - t1
 
     glb_size_mb = os.path.getsize(out_path) / 1024 / 1024
