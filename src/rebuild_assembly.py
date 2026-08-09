@@ -194,37 +194,50 @@ _HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
 
 
 def _decode_step_unicode_escapes(step_path):
-    """STEP 文件后处理:将 \\X2\\XXXX\\X0\\ Unicode 转义序列替换为实际 UTF-8 字符
+    """STEP 文件后处理:将 \\X2\\...\\X0\\ Unicode 转义序列替换为实际字符,以 GBK 编码写入
 
     pythonOCC 的 XCAF STEP 导出器会将非 ASCII 字符编码为 ISO 10303-21 标准的
-    \\X2\\HHHH\\X0\\ 转义序列(HHHH 为 4 位十六进制 Unicode 码点)。
-    SolidWorks 对这种转义序列支持不佳,会显示为横线/下划线。
+    \\X2\\HHHH...\\X0\\ 转义序列(每 4 位十六进制 = 1 个 UTF-16 码点,连续多字符
+    会合并到一个转义块中)。
 
-    解决方案:读取 STEP 文件,将所有 \\X2\\XXXX\\X0\\ 替换为对应的 UTF-8 字符,
-    然后以 UTF-8 编码重新写入文件。SolidWorks 可正确识别 UTF-8 编码的 STEP 文件。
+    SolidWorks 在中文 Windows 上默认用 GBK(系统 ANSI 代码页)读取 STEP 文件:
+      - \\X2\\...\\X0\\ 转义序列无法解析 → 显示为横线
+      - UTF-8 多字节中文被当 GBK 误读 → 乱码/横线
+    因此需将转义序列解码后以 GBK 编码写入,使 SolidWorks 能正确显示中文。
 
     Args:
         step_path: STEP 文件路径(将被原地修改)
     """
     try:
         # STEP 文件默认使用 ISO-8859-1(Latin-1) 编码
-        # 转义序列 \\X2\\XXXX\\X0\\ 在文件中以 ASCII/Latin-1 字节存储
+        # 转义序列 \\X2\\...\\X0\\ 在文件中以 ASCII/Latin-1 字节存储
         with open(step_path, 'r', encoding='latin-1') as f:
             content = f.read()
 
         def replace_escape(match):
             hex_str = match.group(1)
-            code_point = int(hex_str, 16)
-            return chr(code_point)
+            # 每 4 位十六进制 = 1 个 UTF-16 码点(支持连续多字符转义块)
+            chars = []
+            for i in range(0, len(hex_str), 4):
+                code_point = int(hex_str[i:i + 4], 16)
+                chars.append(chr(code_point))
+            return ''.join(chars)
 
-        # 替换所有 \\X2\\XXXX\\X0\\ 转义序列
-        new_content = re.sub(r'\\X2\\([0-9A-Fa-f]{4})\\X0\\', replace_escape, content)
+        # 替换所有 \\X2\\...\\X0\\ 转义序列(十六进制长度为 4 的倍数)
+        new_content = re.sub(r'\\X2\\([0-9A-Fa-f]+)\\X0\\', replace_escape, content)
 
         # 仅当内容发生变化时才写回
         if new_content != content:
-            with open(step_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-            log(f"  ✓ STEP Unicode 转义已解码为 UTF-8")
+            # 优先用 GBK 编码写入(中文 Windows 上 SolidWorks 默认用 GBK 读取)
+            try:
+                with open(step_path, 'w', encoding='gbk') as f:
+                    f.write(new_content)
+                log(f"  ✓ STEP Unicode 转义已解码并以 GBK 编码写入")
+            except UnicodeEncodeError:
+                # GBK 无法编码所有字符时回退到 UTF-8
+                with open(step_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+                log(f"  ✓ STEP Unicode 转义已解码并以 UTF-8 编码写入(GBK 不可用)")
     except Exception as e:
         log(f"  ⚠ STEP Unicode 解码失败(不影响功能): {e}")
 
