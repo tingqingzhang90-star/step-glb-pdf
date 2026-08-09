@@ -391,7 +391,8 @@ function renderDimension(d) {
   bg.setAttribute("x", cx - d.text.length * 4); bg.setAttribute("y", cy - 8);
   bg.setAttribute("width", d.text.length * 8); bg.setAttribute("height", 16);
   bg.setAttribute("fill", "#fff"); bg.setAttribute("stroke", "none");
-  g.insertBefore(bg, text);
+  g.appendChild(bg);
+  g.appendChild(text);
 
   // 拖拽手柄(中间)
   const handle = document.createElementNS(SVG_NS, "rect");
