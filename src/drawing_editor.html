@@ -21,6 +21,10 @@ body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f0f0f0;over
 .view-group:hover .view-border{stroke:#007acc;stroke-width:1.5;}
 .view-border{fill:none;stroke:#ccc;stroke-width:1;stroke-dasharray:4,3;pointer-events:all;}
 .view-label{font-size:11px;fill:#666;font-weight:600;pointer-events:none;user-select:none;}
+.seg-edge{cursor:crosshair;transition:stroke 0.1s,stroke-width 0.1s;}
+.seg-edge:hover{stroke:#007acc !important;stroke-width:2 !important;}
+.seg-edge.dim-mode{cursor:crosshair;}
+.seg-edge.dim-mode:hover{stroke:#c00 !important;stroke-width:2.5 !important;}
 .dim-line{stroke:#c00;stroke-width:0.8;fill:none;}
 .dim-ext-line{stroke:#c00;stroke-width:0.5;fill:none;}
 .dim-text{font-size:11px;fill:#c00;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;}
@@ -49,6 +53,7 @@ body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f0f0f0;over
   <div class="sep"></div>
   <button id="btnAddDim" title="添加水平/垂直尺寸标注">尺寸标注</button>
   <button id="btnAddDimAligned" title="添加对齐尺寸标注">对齐标注</button>
+  <button id="btnSmartDim" title="点击边线自动标注(推荐)">智能标注</button>
   <button id="btnAddText" title="添加文字注释">文字</button>
   <button id="btnAddTable" title="添加技术参数表">参数表</button>
   <button id="btnAddTitle" title="添加/编辑标题栏">标题栏</button>
@@ -297,12 +302,12 @@ function renderView(v) {
 
   // 可见边
   for (const seg of v.visible) {
-    g.appendChild(createSegElement(seg, false));
+    g.appendChild(createSegElement(seg, false, v));
   }
   // 隐藏边(虚线)
   if (v.showHidden) {
     for (const seg of v.hidden) {
-      g.appendChild(createSegElement(seg, true));
+      g.appendChild(createSegElement(seg, true, v));
     }
   }
 
@@ -311,7 +316,7 @@ function renderView(v) {
   svg.appendChild(g);
 }
 
-function createSegElement(seg, isHidden) {
+function createSegElement(seg, isHidden, viewObj) {
   let el;
   const stroke = isHidden ? "#888" : "#000";
   const sw = isHidden ? 0.5 : 0.8;
@@ -333,6 +338,17 @@ function createSegElement(seg, isHidden) {
     el.setAttribute("stroke-width", sw);
     el.setAttribute("fill", "none");
     if (isHidden) el.setAttribute("stroke-dasharray", dash);
+    // 鼠标悬停高亮 + 点击智能标注
+    el.classList.add("seg-edge");
+    el.dataset.segType = seg.type;
+    el.dataset.viewName = viewObj ? viewObj.name : "";
+    el.dataset.scale = viewObj ? viewObj.scale : 1;
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (mode === "smart-dim") {
+        smartDimension(seg, viewObj, el);
+      }
+    });
   }
   return el;
 }
@@ -342,6 +358,34 @@ function renderDimension(d) {
   g.dataset.dimId = d.id;
   const isH = d.type === "horizontal";
   const isV = d.type === "vertical";
+  const isA = d.type === "aligned";
+  const isD = d.type === "diameter";
+
+  if (isD) {
+    // 直径标注: 圆心引出线 + 箭头 + Ø文字
+    const line = document.createElementNS(SVG_NS, "line");
+    line.classList.add("dim-line");
+    line.setAttribute("x1", d.cx); line.setAttribute("y1", d.cy);
+    line.setAttribute("x2", d.cx + d.r + 15); line.setAttribute("y2", d.cy);
+    g.appendChild(line);
+    g.appendChild(makeArrow(d.cx, d.cy, d.cx + d.r + 15, d.cy));
+    const text = document.createElementNS(SVG_NS, "text");
+    text.classList.add("dim-text");
+    text.setAttribute("x", d.cx + d.r + 20); text.setAttribute("y", d.cy);
+    text.style.textAnchor = "start";
+    text.textContent = d.text;
+    g.appendChild(text);
+    // 右键删除
+    g.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showContextMenu(e, [{label:"删除标注", action:()=>{
+        drawingState.dimensions = drawingState.dimensions.filter(x=>x.id!==d.id);
+        render();
+      }}]);
+    });
+    svg.appendChild(g);
+    return;
+  }
 
   // 尺寸线
   const line = document.createElementNS(SVG_NS, "line");
@@ -372,6 +416,22 @@ function renderDimension(d) {
     ext2.classList.add("dim-ext-line");
     ext2.setAttribute("x1", d.x2 - 20); ext2.setAttribute("y1", d.y2);
     ext2.setAttribute("x2", d.x2 + 5); ext2.setAttribute("y2", d.y2);
+    g.appendChild(ext2);
+  } else if (isA) {
+    // 对齐标注: 从端点引出延伸线(垂直于标注线方向)
+    const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+    const len = Math.sqrt(dx*dx + dy*dy) || 1;
+    const nx = -dy / len, ny = dx / len;  // 法向量
+    const off = 15;
+    const ext1 = document.createElementNS(SVG_NS, "line");
+    ext1.classList.add("dim-ext-line");
+    ext1.setAttribute("x1", d.x1 + nx * off); ext1.setAttribute("y1", d.y1 + ny * off);
+    ext1.setAttribute("x2", d.x1 - nx * 5); ext1.setAttribute("y2", d.y1 - ny * 5);
+    g.appendChild(ext1);
+    const ext2 = document.createElementNS(SVG_NS, "line");
+    ext2.classList.add("dim-ext-line");
+    ext2.setAttribute("x1", d.x2 + nx * off); ext2.setAttribute("y1", d.y2 + ny * off);
+    ext2.setAttribute("x2", d.x2 - nx * 5); ext2.setAttribute("y2", d.y2 - ny * 5);
     g.appendChild(ext2);
   }
 
@@ -672,6 +732,10 @@ document.getElementById("btnAddDimAligned").addEventListener("click", () => {
   mode = mode === "aligned" ? "select" : "aligned";
   updateToolbar();
 });
+document.getElementById("btnSmartDim").addEventListener("click", () => {
+  mode = mode === "smart-dim" ? "select" : "smart-dim";
+  updateToolbar();
+});
 
 svg.addEventListener("click", (e) => {
   if (mode !== "dimension" && mode !== "aligned") return;
@@ -797,11 +861,92 @@ document.addEventListener("click", () => {
 function updateToolbar() {
   document.getElementById("btnAddDim").classList.toggle("active", mode === "dimension");
   document.getElementById("btnAddDimAligned").classList.toggle("active", mode === "aligned");
+  document.getElementById("btnSmartDim").classList.toggle("active", mode === "smart-dim");
+  // 标注模式下边线添加 dim-mode 样式
+  document.querySelectorAll(".seg-edge").forEach(el => {
+    el.classList.toggle("dim-mode", mode === "smart-dim");
+  });
   if (mode === "dimension" || mode === "aligned") {
     setInfo("标注模式: 点击两个点创建标注");
+  } else if (mode === "smart-dim") {
+    setInfo("智能标注: 鼠标悬停边线高亮,点击边线自动标注");
   } else {
     setInfo("就绪");
   }
+}
+
+// ===================== 智能标注(点击边线自动标注) =====================
+function smartDimension(seg, viewObj, el) {
+  if (!viewObj) return;
+  const scale = viewObj.scale || 1;
+  const vx = viewObj.x, vy = viewObj.y;
+
+  if (seg.type === "line") {
+    // 直线: 自动判断水平/垂直/对齐
+    const dx = Math.abs(seg.x2 - seg.x1);
+    const dy = Math.abs(seg.y2 - seg.y1);
+    // 实际长度(模型坐标)
+    const realLen = Math.sqrt(dx*dx + dy*dy) / scale;
+
+    if (dx > dy * 3) {
+      // 水平标注
+      const y = Math.max(seg.y1, seg.y2) + 25;
+      drawingState.dimensions.push({
+        id: uid(), type: "horizontal",
+        x1: vx + seg.x1, y1: vy + y,
+        x2: vx + seg.x2, y2: vy + y,
+        text: Math.round(realLen * 100) / 100 + "",
+        offset: 0
+      });
+    } else if (dy > dx * 3) {
+      // 垂直标注
+      const x = Math.max(seg.x1, seg.x2) + 25;
+      drawingState.dimensions.push({
+        id: uid(), type: "vertical",
+        x1: vx + x, y1: vy + seg.y1,
+        x2: vx + x, y2: vy + seg.y2,
+        text: Math.round(realLen * 100) / 100 + "",
+        offset: 0
+      });
+    } else {
+      // 对齐标注
+      drawingState.dimensions.push({
+        id: uid(), type: "aligned",
+        x1: vx + seg.x1, y1: vy + seg.y1,
+        x2: vx + seg.x2, y2: vy + seg.y2,
+        text: Math.round(realLen * 100) / 100 + "",
+        offset: 0
+      });
+    }
+  } else if (seg.type === "circle") {
+    // 圆: 标注直径
+    const realD = seg.r * 2 / scale;
+    drawingState.dimensions.push({
+      id: uid(), type: "diameter",
+      x1: vx + seg.cx, y1: vy + seg.cy,
+      x2: vx + seg.cx + seg.r, y2: vy + seg.cy,
+      cx: vx + seg.cx, cy: vy + seg.cy, r: seg.r,
+      text: "Ø" + (Math.round(realD * 100) / 100),
+      offset: 0
+    });
+  } else if (seg.type === "polyline") {
+    // 多段线: 标注两端点距离
+    const pts = seg.points;
+    if (pts.length >= 2) {
+      const p1 = pts[0], p2 = pts[pts.length - 1];
+      const dx = p2[0] - p1[0], dy = p2[1] - p1[1];
+      const realLen = Math.sqrt(dx*dx + dy*dy) / scale;
+      drawingState.dimensions.push({
+        id: uid(), type: "aligned",
+        x1: vx + p1[0], y1: vy + p1[1],
+        x2: vx + p2[0], y2: vy + p2[1],
+        text: Math.round(realLen * 100) / 100 + "",
+        offset: 0
+      });
+    }
+  }
+  render();
+  setInfo("标注已添加");
 }
 
 // ===================== 初始化 =====================

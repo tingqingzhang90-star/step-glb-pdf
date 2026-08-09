@@ -248,7 +248,7 @@ def _fix_step_header_for_solidworks(step_path):
 
         content = re.sub(
             r"FILE_DESCRIPTION\s*\([^\n]*\);",
-            "FILE_DESCRIPTION ( 'STEP AP214' ), '1' );",
+            "FILE_DESCRIPTION ( ( 'STEP AP214' ), '1' );",
             content, count=1
         )
         content = re.sub(

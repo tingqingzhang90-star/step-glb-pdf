@@ -524,7 +524,7 @@ def api_drawing_views(model_code):
 
     try:
         with _build_lock:
-            result = drawing_engine.generate_drawing_views(step_path)
+            result = drawing_engine.generate_drawing_views_fast(step_path)
         return jsonify({"ok": True, "result": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
