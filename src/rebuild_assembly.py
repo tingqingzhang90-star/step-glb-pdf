@@ -379,8 +379,14 @@ def write_step(shape, path):
     writer.Write(path)
 
 
-def write_stl(shape, path, linear_deflection=0.5, angular_deflection=0.5):
-    """三角化 TopoDS_Shape 并导出 STL"""
+def write_stl(shape, path, linear_deflection=0.2, angular_deflection=0.1):
+    """三角化 TopoDS_Shape 并导出 STL
+
+    angular_deflection 控制曲面三角化精度:
+        值越小 → 曲面上三角片越密 → 相邻三角片法线夹角越小
+        设为 0.1 弧度(≈5.7°), 确保曲面法线夹角 < edgeThreshold(20°)
+        这样 o3dv 边线渲染只画真正的硬边(面与面交界), 不画曲面网格线
+    """
     from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
     from OCC.Core.StlAPI import StlAPI_Writer
     # 三角化
@@ -390,6 +396,123 @@ def write_stl(shape, path, linear_deflection=0.5, angular_deflection=0.5):
     writer = StlAPI_Writer()
     writer.SetASCIIMode(False)
     writer.Write(shape, path)
+
+
+def extract_hard_edges(shape, discretization=0.5, angle_threshold=5.0):
+    """从 STEP B-rep 提取硬边(面与面真实交界,非相切边)
+
+    SolidWorks 只在面与面交界处画轮廓线,曲面上不画三角网格线。
+    o3dv 的 EdgeSettings 基于三角面片法线夹角,无法区分两者。
+    本函数从 B-rep 拓扑提取真实硬边,离散化为点序列,供前端 Three.js LineSegments 渲染。
+
+    硬边判定逻辑(模拟 SolidWorks 显示规则):
+    1. 如果两个面在边处相切(G1或更高连续性) → 不画线
+    2. 如果两个面在边处的法向量夹角 < angle_threshold → 不画线(角度阈值过滤)
+    3. 否则 → 画线(硬边)
+
+    Args:
+        shape: TopoDS_Shape (装配体)
+        discretization: 离散化间距(mm),默认 0.5mm
+        angle_threshold: 角度阈值(度),默认 5.0°,小于此角度的边不显示
+
+    Returns:
+        list of list of [x,y,z]: 每条硬边的点序列
+    """
+    from OCC.Core.TopExp import TopExp_Explorer
+    from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCC.Core.TopoDS import topods
+    from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+    from OCC.Core.GCPnts import GCPnts_UniformAbscissa
+    from OCC.Core.BRep import BRep_Tool
+    from OCC.Core.GeomAbs import GeomAbs_G1
+    import math
+
+    edges_data = []
+    explorer = TopExp_Explorer(shape, TopAbs_EDGE)
+
+    while explorer.More():
+        edge = topods.Edge(explorer.Current())
+
+        # 查找该边的相邻面(使用 TopExp_Explorer)
+        faces = []
+        face_explorer = TopExp_Explorer(edge, TopAbs_FACE)
+        while face_explorer.More():
+            faces.append(topods.Face(face_explorer.Current()))
+            face_explorer.Next()
+
+        # 如果只有一个面(自由边)或没有面,跳过
+        if len(faces) < 2:
+            explorer.Next()
+            continue
+
+        face1 = faces[0]
+        face2 = faces[1]
+
+        # 如果两个面相同,跳过
+        if face1.IsSame(face2):
+            explorer.Next()
+            continue
+
+        # 检查连续性: 如果两个面在边处相切(G1或更高),则不是硬边,跳过
+        continuity = BRep_Tool.Continuity(edge, face1, face2)
+        if continuity >= GeomAbs_G1:
+            # 相切边(如圆柱面与圆角过渡面之间),不画线
+            explorer.Next()
+            continue
+
+        # 计算两个面在边中点处的法向量夹角
+        try:
+            curve = BRepAdaptor_Curve(edge)
+            u_mid = (curve.FirstParameter() + curve.LastParameter()) / 2.0
+            p_mid = curve.Value(u_mid)
+
+            # 获取 face1 在 p_mid 处的法向量
+            surf1 = BRepAdaptor_Surface(face1)
+            u1, v1 = surf1.Value(p_mid.X(), p_mid.Y(), p_mid.Z())
+            norm1 = surf1.Normal(u1, v1)
+
+            # 获取 face2 在 p_mid 处的法向量
+            surf2 = BRepAdaptor_Surface(face2)
+            u2, v2 = surf2.Value(p_mid.X(), p_mid.Y(), p_mid.Z())
+            norm2 = surf2.Normal(u2, v2)
+
+            # 计算法向量夹角(弧度)
+            dot = norm1.X() * norm2.X() + norm1.Y() * norm2.Y() + norm1.Z() * norm2.Z()
+            dot = max(-1.0, min(1.0, dot))  # 限制在 [-1, 1] 范围
+            angle_rad = math.acos(abs(dot))  # 取绝对值,因为法向量方向可能相反
+            angle_deg = math.degrees(angle_rad)
+
+            # 如果夹角小于阈值,不画线(模拟 SolidWorks 的角度过滤)
+            if angle_deg < angle_threshold:
+                explorer.Next()
+                continue
+        except Exception as e:
+            # 如果法向量计算失败,保守处理:画线
+            pass
+
+        # 硬边: 离散化为点序列
+        curve = BRepAdaptor_Curve(edge)
+        discretizer = GCPnts_UniformAbscissa(curve, discretization)
+        n = discretizer.NbPoints()
+
+        if n >= 2:
+            pts = []
+            for j in range(1, n + 1):
+                u = discretizer.Parameter(j)
+                p = curve.Value(u)
+                pts.append([p.X(), p.Y(), p.Z()])
+            edges_data.append(pts)
+
+        explorer.Next()
+
+    return edges_data
+
+
+def save_edges_json(edges_data, out_path):
+    """保存硬边数据为 JSON 文件"""
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump({"edges": edges_data}, f, ensure_ascii=False)
+    log(f"  ✓ 硬边数据: {out_path} ({len(edges_data)} 条边)")
 
 
 def step1_read_all_parts(parts_data):
@@ -553,7 +676,7 @@ def step5_export_glb(compound, out_path):
 
     # 5.1 三角化 + STL 导出
     t0 = time.time()
-    write_stl(compound, stl_path, linear_deflection=0.5, angular_deflection=0.5)
+    write_stl(compound, stl_path, linear_deflection=0.2, angular_deflection=0.1)
     t_stl = time.time() - t0
     stl_size_mb = os.path.getsize(stl_path) / 1024 / 1024
     log(f"  ✓ STL 中转: {stl_path} ({stl_size_mb:.2f} MB, {t_stl:.2f}s)")
@@ -568,13 +691,21 @@ def step5_export_glb(compound, out_path):
     glb_size_mb = os.path.getsize(glb_path) / 1024 / 1024
     log(f"  ✓ GLB 导出: {glb_path} ({glb_size_mb:.2f} MB, {t_glb:.2f}s)")
 
+    # 5.3 提取 B-rep 硬边 → edges.json (供前端 Three.js LineSegments 渲染)
+    t2 = time.time()
+    edges_data = extract_hard_edges(compound, discretization=0.5)
+    edges_path = os.path.join(os.path.dirname(glb_path), "edges.json")
+    save_edges_json(edges_data, edges_path)
+    t_edges = time.time() - t2
+    log(f"  ✓ 硬边提取: {t_edges:.2f}s")
+
     # 清理 STL
     try:
         os.remove(stl_path)
     except Exception:
         pass
 
-    return glb_path, t_stl + t_glb
+    return glb_path, t_stl + t_glb + t_edges
 
 
 def build_assembly(model_code, motor=None, series=None):
