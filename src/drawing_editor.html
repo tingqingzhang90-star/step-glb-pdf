@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工程图编辑器</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f0f0f0;overflow:hidden;height:100vh;}
+.toolbar{position:fixed;top:0;left:0;right:0;height:44px;background:#2b2b2b;color:#fff;display:flex;align-items:center;padding:0 12px;gap:8px;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.3);}
+.toolbar button{background:#3c3c3c;color:#fff;border:1px solid #555;padding:5px 12px;border-radius:3px;cursor:pointer;font-size:13px;transition:background .15s;}
+.toolbar button:hover{background:#505050;}
+.toolbar button.active{background:#007acc;border-color:#007acc;}
+.toolbar select{background:#3c3c3c;color:#fff;border:1px solid #555;padding:4px 8px;border-radius:3px;font-size:13px;}
+.toolbar label{font-size:13px;color:#aaa;}
+.toolbar .sep{width:1px;height:24px;background:#555;margin:0 4px;}
+.toolbar .info{margin-left:auto;font-size:12px;color:#aaa;}
+.canvas-container{position:fixed;top:44px;left:0;right:0;bottom:0;overflow:auto;background:#e8e8e8;}
+#drawingSvg{background:#fff;display:block;}
+.view-group{cursor:move;}
+.view-group:hover .view-border{stroke:#007acc;stroke-width:1.5;}
+.view-border{fill:none;stroke:#ccc;stroke-width:1;stroke-dasharray:4,3;pointer-events:all;}
+.view-label{font-size:11px;fill:#666;font-weight:600;pointer-events:none;user-select:none;}
+.dim-line{stroke:#c00;stroke-width:0.8;fill:none;}
+.dim-ext-line{stroke:#c00;stroke-width:0.5;fill:none;}
+.dim-text{font-size:11px;fill:#c00;text-anchor:middle;dominant-baseline:middle;pointer-events:none;user-select:none;}
+.dim-arrow{fill:#c00;stroke:none;}
+.dim-handle{fill:#fff;stroke:#c00;stroke-width:1;cursor:pointer;}
+.dim-handle:hover{fill:#ff0;}
+.title-block{fill:#fff;stroke:#000;stroke-width:1;}
+.title-text{font-size:10px;fill:#000;user-select:none;}
+.title-label{font-size:9px;fill:#666;user-select:none;}
+.table-cell{fill:#fff;stroke:#000;stroke-width:0.5;}
+.table-text{font-size:10px;fill:#000;user-select:none;text-anchor:middle;dominant-baseline:middle;}
+.table-header{font-size:10px;fill:#000;font-weight:600;user-select:none;text-anchor:middle;dominant-baseline:middle;}
+.ctx-menu{position:fixed;background:#fff;border:1px solid #ccc;box-shadow:2px 2px 8px rgba(0,0,0,0.2);border-radius:3px;padding:4px 0;z-index:200;display:none;}
+.ctx-menu div{padding:6px 20px;cursor:pointer;font-size:13px;}
+.ctx-menu div:hover{background:#e8e8e8;}
+.ctx-menu .sep{height:1px;background:#ddd;margin:2px 0;}
+.status-overlay{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.7);color:#fff;padding:20px 40px;border-radius:8px;font-size:14px;z-index:300;display:none;}
+</style>
+</head>
+<body>
+
+<div class="toolbar">
+  <label>型号:</label>
+  <select id="modelSelect" style="min-width:180px;"></select>
+  <button id="btnLoad" title="加载工程图视图">加载视图</button>
+  <div class="sep"></div>
+  <button id="btnAddDim" title="添加水平/垂直尺寸标注">尺寸标注</button>
+  <button id="btnAddDimAligned" title="添加对齐尺寸标注">对齐标注</button>
+  <button id="btnAddText" title="添加文字注释">文字</button>
+  <button id="btnAddTable" title="添加技术参数表">参数表</button>
+  <button id="btnAddTitle" title="添加/编辑标题栏">标题栏</button>
+  <div class="sep"></div>
+  <button id="btnToggleHidden" title="切换隐藏线显示">隐藏线</button>
+  <button id="btnExportPdf" title="导出为 PDF">导出PDF</button>
+  <button id="btnExportJson" title="保存工程图数据">保存</button>
+  <button id="btnImportJson" title="加载工程图数据">读取</button>
+  <div class="info" id="infoText">就绪</div>
+</div>
+
+<div class="canvas-container">
+  <svg id="drawingSvg" width="2000" height="1414" viewBox="0 0 2000 1414">
+    <!-- 图框 -->
+    <rect x="10" y="10" width="1980" height="1394" fill="none" stroke="#000" stroke-width="2"/>
+    <rect x="20" y="20" width="1960" height="1374" fill="none" stroke="#000" stroke-width="0.8"/>
+  </svg>
+</div>
+
+<div class="ctx-menu" id="ctxMenu"></div>
+<div class="status-overlay" id="statusOverlay">处理中...</div>
+
+<script>
+// ===================== 全局状态 =====================
+const SVG_NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("drawingSvg");
+let viewsData = {};      // 后端返回的视图数据
+let drawingState = {     // 工程图状态
+  views: [],             // [{name, x, y, w, h, visible, hidden, scale, label}]
+  dimensions: [],        // [{id, type, x1,y1,x2,y2, text, offset}]
+  texts: [],             // [{id, x, y, text, fontSize}]
+  tables: [],            // [{id, x, y, rows, cols, data}]
+  titleBlock: null,      // {x, y, w, h, fields}
+};
+let mode = "select";     // select | dimension | text
+let dimStartPoint = null;
+let dragState = null;
+let nextId = 1;
+
+// ===================== 工具函数 =====================
+function uid() { return "id" + (nextId++); }
+function showStatus(msg) {
+  const el = document.getElementById("statusOverlay");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+function hideStatus() { document.getElementById("statusOverlay").style.display = "none"; }
+function setInfo(msg) { document.getElementById("infoText").textContent = msg; }
+
+function svgPoint(evt) {
+  const pt = svg.createSVGPoint();
+  pt.x = evt.clientX; pt.y = evt.clientY;
+  return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+// ===================== 模型选择 =====================
+async function loadModelList() {
+  try {
+    const resp = await fetch("/api/files");
+    const data = await resp.json();
+    const sel = document.getElementById("modelSelect");
+    sel.innerHTML = "";
+    for (const g of data.groups) {
+      const opt = document.createElement("option");
+      opt.value = g.model;
+      opt.textContent = g.model;
+      sel.appendChild(opt);
+    }
+  } catch(e) { setInfo("加载型号列表失败: " + e.message); }
+}
+
+async function loadViews() {
+  const model = document.getElementById("modelSelect").value;
+  if (!model) return;
+  showStatus("正在生成工程图视图...");
+  setInfo("生成视图: " + model);
+  try {
+    const resp = await fetch(`/api/drawing-views/${model}`);
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || "生成失败");
+    viewsData = data.result;
+    // 初始化视图布局
+    drawingState.views = [];
+    const positions = [
+      {name:"front", x:60, y:60},
+      {name:"top", x:60, y:420},
+      {name:"left", x:560, y:60},
+      {name:"iso", x:560, y:420},
+    ];
+    for (const pos of positions) {
+      const v = viewsData.views[pos.name];
+      if (!v) continue;
+      drawingState.views.push({
+        name: pos.name,
+        label: v.label,
+        x: pos.x, y: pos.y,
+        w: v.bbox.width, h: v.bbox.height,
+        visible: v.visible, hidden: v.hidden,
+        scale: v.bbox.scale,
+        showHidden: false,
+      });
+    }
+    // 自动添加默认标注(总长、行程等)
+    autoAddDimensions(model);
+    // 自动添加标题栏
+    autoAddTitleBlock(model);
+    // 自动添加参数表
+    autoAddTable(model);
+    render();
+    hideStatus();
+    setInfo(`视图已加载 (${viewsData.elapsed}s)`);
+  } catch(e) {
+    hideStatus();
+    setInfo("错误: " + e.message);
+    alert("生成视图失败: " + e.message);
+  }
+}
+
+// ===================== 自动标注 =====================
+function autoAddDimensions(model) {
+  // 解析型号: 250-E-H2K1-L100-D11
+  const parts = model.split("-");
+  const series = parts[0] || "250";
+  const stroke = parts.find(p=>p.startsWith("L")) || "L100";
+  const strokeNum = parseInt(stroke.replace("L","")) || 100;
+  const dPart = parts.find(p=>p.startsWith("D"));
+  const dNum = dPart ? dPart.replace("D","") : "11";
+
+  // 主视图标注总长(水平)
+  const front = drawingState.views.find(v=>v.name==="front");
+  if (front) {
+    const y = front.y + front.h + 35;
+    drawingState.dimensions.push({
+      id: uid(), type: "horizontal",
+      x1: front.x + 10, y1: y,
+      x2: front.x + front.w - 10, y2: y,
+      text: `总长 ${Math.round(front.w / front.scale * 100) / 100}`,
+      offset: 0
+    });
+    // 行程标注(上方)
+    const yTop = front.y - 20;
+    drawingState.dimensions.push({
+      id: uid(), type: "horizontal",
+      x1: front.x + 50, y1: yTop,
+      x2: front.x + 50 + strokeNum * front.scale, y2: yTop,
+      text: `行程 ${strokeNum}`,
+      offset: 0
+    });
+  }
+  // 侧视图标注缸径(垂直)
+  const left = drawingState.views.find(v=>v.name==="left");
+  if (left) {
+    const x = left.x + left.w + 30;
+    drawingState.dimensions.push({
+      id: uid(), type: "vertical",
+      x1: x, y1: left.y + 20,
+      x2: x, y2: left.y + left.h - 20,
+      text: `Ø${series}`,
+      offset: 0
+    });
+  }
+}
+
+function autoAddTitleBlock(model) {
+  const parts = model.split("-");
+  const series = parts[0] || "250";
+  drawingState.titleBlock = {
+    x: 1400, y: 1250, w: 560, h: 130,
+    fields: {
+      "图号": model,
+      "型号": series + "系列",
+      "名称": "液压缸装配体",
+      "日期": new Date().toLocaleDateString("zh-CN"),
+      "设计": "",
+      "审核": "",
+      "比例": "1:2",
+      "版本": "V1.0",
+    }
+  };
+}
+
+function autoAddTable(model) {
+  const parts = model.split("-");
+  const series = parts[0] || "250";
+  const stroke = parts.find(p=>p.startsWith("L")) || "L100";
+  const strokeNum = parseInt(stroke.replace("L","")) || 100;
+  const dPart = parts.find(p=>p.startsWith("D"));
+  const dNum = dPart ? dPart.replace("D","") : "-";
+
+  drawingState.tables.push({
+    id: uid(),
+    x: 1400, y: 80,
+    title: "技术参数表",
+    headers: ["参数", "值", "单位"],
+    rows: [
+      ["系列", series, "-"],
+      ["行程", strokeNum, "mm"],
+      ["电机编号", dNum, "-"],
+      ["缸径", series, "mm"],
+      ["工作压力", "16", "MPa"],
+      ["介质", "液压油", "-"],
+    ]
+  });
+}
+
+// ===================== 渲染 =====================
+function render() {
+  // 保留图框,清除其他内容
+  const frames = svg.querySelectorAll("rect");
+  const children = Array.from(svg.children);
+  for (const child of children) {
+    if (child.tagName === "rect" && child.getAttribute("fill") === "none") continue;
+    svg.removeChild(child);
+  }
+  // 渲染视图
+  for (const v of drawingState.views) renderView(v);
+  // 渲染标注
+  for (const d of drawingState.dimensions) renderDimension(d);
+  // 渲染文字
+  for (const t of drawingState.texts) renderText(t);
+  // 渲染表格
+  for (const t of drawingState.tables) renderTable(t);
+  // 渲染标题栏
+  if (drawingState.titleBlock) renderTitleBlock(drawingState.titleBlock);
+}
+
+function renderView(v) {
+  const g = document.createElementNS(SVG_NS, "g");
+  g.classList.add("view-group");
+  g.setAttribute("transform", `translate(${v.x},${v.y})`);
+  g.dataset.viewName = v.name;
+
+  // 边框
+  const border = document.createElementNS(SVG_NS, "rect");
+  border.classList.add("view-border");
+  border.setAttribute("x", 0); border.setAttribute("y", 0);
+  border.setAttribute("width", v.w); border.setAttribute("height", v.h);
+  g.appendChild(border);
+
+  // 视图标签
+  const label = document.createElementNS(SVG_NS, "text");
+  label.classList.add("view-label");
+  label.setAttribute("x", 5); label.setAttribute("y", v.h + 14);
+  label.textContent = v.label;
+  g.appendChild(label);
+
+  // 可见边
+  for (const seg of v.visible) {
+    g.appendChild(createSegElement(seg, false));
+  }
+  // 隐藏边(虚线)
+  if (v.showHidden) {
+    for (const seg of v.hidden) {
+      g.appendChild(createSegElement(seg, true));
+    }
+  }
+
+  // 拖拽事件
+  g.addEventListener("mousedown", (e) => startDragView(e, v));
+  svg.appendChild(g);
+}
+
+function createSegElement(seg, isHidden) {
+  let el;
+  const stroke = isHidden ? "#888" : "#000";
+  const sw = isHidden ? 0.5 : 0.8;
+  const dash = isHidden ? "3,2" : "none";
+  if (seg.type === "line") {
+    el = document.createElementNS(SVG_NS, "line");
+    el.setAttribute("x1", seg.x1); el.setAttribute("y1", seg.y1);
+    el.setAttribute("x2", seg.x2); el.setAttribute("y2", seg.y2);
+  } else if (seg.type === "circle") {
+    el = document.createElementNS(SVG_NS, "circle");
+    el.setAttribute("cx", seg.cx); el.setAttribute("cy", seg.cy);
+    el.setAttribute("r", seg.r);
+  } else if (seg.type === "polyline") {
+    el = document.createElementNS(SVG_NS, "polyline");
+    el.setAttribute("points", seg.points.map(p=>p.join(",")).join(" "));
+  }
+  if (el) {
+    el.setAttribute("stroke", stroke);
+    el.setAttribute("stroke-width", sw);
+    el.setAttribute("fill", "none");
+    if (isHidden) el.setAttribute("stroke-dasharray", dash);
+  }
+  return el;
+}
+
+function renderDimension(d) {
+  const g = document.createElementNS(SVG_NS, "g");
+  g.dataset.dimId = d.id;
+  const isH = d.type === "horizontal";
+  const isV = d.type === "vertical";
+
+  // 尺寸线
+  const line = document.createElementNS(SVG_NS, "line");
+  line.classList.add("dim-line");
+  line.setAttribute("x1", d.x1); line.setAttribute("y1", d.y1);
+  line.setAttribute("x2", d.x2); line.setAttribute("y2", d.y2);
+  g.appendChild(line);
+
+  // 延伸线
+  if (isH) {
+    const ext1 = document.createElementNS(SVG_NS, "line");
+    ext1.classList.add("dim-ext-line");
+    ext1.setAttribute("x1", d.x1); ext1.setAttribute("y1", d.y1 - 20);
+    ext1.setAttribute("x2", d.x1); ext1.setAttribute("y2", d.y1 + 5);
+    g.appendChild(ext1);
+    const ext2 = document.createElementNS(SVG_NS, "line");
+    ext2.classList.add("dim-ext-line");
+    ext2.setAttribute("x1", d.x2); ext2.setAttribute("y1", d.y2 - 20);
+    ext2.setAttribute("x2", d.x2); ext2.setAttribute("y2", d.y2 + 5);
+    g.appendChild(ext2);
+  } else if (isV) {
+    const ext1 = document.createElementNS(SVG_NS, "line");
+    ext1.classList.add("dim-ext-line");
+    ext1.setAttribute("x1", d.x1 - 20); ext1.setAttribute("y1", d.y1);
+    ext1.setAttribute("x2", d.x1 + 5); ext1.setAttribute("y2", d.y1);
+    g.appendChild(ext1);
+    const ext2 = document.createElementNS(SVG_NS, "line");
+    ext2.classList.add("dim-ext-line");
+    ext2.setAttribute("x1", d.x2 - 20); ext2.setAttribute("y1", d.y2);
+    ext2.setAttribute("x2", d.x2 + 5); ext2.setAttribute("y2", d.y2);
+    g.appendChild(ext2);
+  }
+
+  // 箭头
+  g.appendChild(makeArrow(d.x1, d.y1, d.x2, d.y2));
+  g.appendChild(makeArrow(d.x2, d.y2, d.x1, d.y1));
+
+  // 文字
+  const text = document.createElementNS(SVG_NS, "text");
+  text.classList.add("dim-text");
+  const cx = (d.x1 + d.x2) / 2;
+  const cy = (d.y1 + d.y2) / 2;
+  text.setAttribute("x", cx); text.setAttribute("y", cy);
+  text.textContent = d.text;
+  // 背景白框(避免与尺寸线重叠)
+  const bg = document.createElementNS(SVG_NS, "rect");
+  bg.setAttribute("x", cx - d.text.length * 4); bg.setAttribute("y", cy - 8);
+  bg.setAttribute("width", d.text.length * 8); bg.setAttribute("height", 16);
+  bg.setAttribute("fill", "#fff"); bg.setAttribute("stroke", "none");
+  g.insertBefore(bg, text);
+
+  // 拖拽手柄(中间)
+  const handle = document.createElementNS(SVG_NS, "rect");
+  handle.classList.add("dim-handle");
+  handle.setAttribute("x", cx - 4); handle.setAttribute("y", cy - 4);
+  handle.setAttribute("width", 8); handle.setAttribute("height", 8);
+  handle.addEventListener("mousedown", (e) => startDragDim(e, d));
+  g.appendChild(handle);
+
+  // 右键删除
+  g.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showContextMenu(e, [{label:"删除标注", action:()=>{
+      drawingState.dimensions = drawingState.dimensions.filter(x=>x.id!==d.id);
+      render();
+    }}]);
+  });
+
+  svg.appendChild(g);
+}
+
+function makeArrow(x1, y1, x2, y2) {
+  const angle = Math.atan2(y2 - y1, x2 - x1);
+  const size = 6;
+  const p1 = [x2 - size * Math.cos(angle - 0.4), y2 - size * Math.sin(angle - 0.4)];
+  const p2 = [x2 - size * Math.cos(angle + 0.4), y2 - size * Math.sin(angle + 0.4)];
+  const arrow = document.createElementNS(SVG_NS, "polygon");
+  arrow.classList.add("dim-arrow");
+  arrow.setAttribute("points", `${x2},${y2} ${p1[0]},${p1[1]} ${p2[0]},${p2[1]}`);
+  return arrow;
+}
+
+function renderText(t) {
+  const g = document.createElementNS(SVG_NS, "g");
+  const text = document.createElementNS(SVG_NS, "text");
+  text.setAttribute("x", t.x); text.setAttribute("y", t.y);
+  text.setAttribute("font-size", t.fontSize || 14);
+  text.setAttribute("fill", "#000");
+  text.setAttribute("cursor", "move");
+  text.textContent = t.text;
+  text.addEventListener("mousedown", (e) => startDragText(e, t));
+  text.addEventListener("dblclick", (e) => {
+    const newText = prompt("编辑文字:", t.text);
+    if (newText !== null) { t.text = newText; render(); }
+  });
+  text.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showContextMenu(e, [{label:"删除文字", action:()=>{
+      drawingState.texts = drawingState.texts.filter(x=>x.id!==t.id);
+      render();
+    }}]);
+  });
+  g.appendChild(text);
+  svg.appendChild(g);
+}
+
+function renderTable(t) {
+  const g = document.createElementNS(SVG_NS, "g");
+  g.setAttribute("transform", `translate(${t.x},${t.y})`);
+  const colW = [80, 80, 50];
+  const rowH = 22;
+  const headerH = 26;
+  const titleH = 22;
+  const totalW = colW.reduce((a,b)=>a+b, 0);
+  const totalH = titleH + headerH + t.rows.length * rowH;
+
+  // 标题
+  const titleBg = document.createElementNS(SVG_NS, "rect");
+  titleBg.classList.add("table-cell");
+  titleBg.setAttribute("x", 0); titleBg.setAttribute("y", 0);
+  titleBg.setAttribute("width", totalW); titleBg.setAttribute("height", titleH);
+  titleBg.setAttribute("fill", "#d0d0d0");
+  g.appendChild(titleBg);
+  const titleText = document.createElementNS(SVG_NS, "text");
+  titleText.classList.add("table-header");
+  titleText.setAttribute("x", totalW/2); titleText.setAttribute("y", titleH/2);
+  titleText.textContent = t.title;
+  g.appendChild(titleText);
+
+  // 表头
+  let cx = 0;
+  for (let i = 0; i < t.headers.length; i++) {
+    const cell = document.createElementNS(SVG_NS, "rect");
+    cell.classList.add("table-cell");
+    cell.setAttribute("x", cx); cell.setAttribute("y", titleH);
+    cell.setAttribute("width", colW[i]); cell.setAttribute("height", headerH);
+    cell.setAttribute("fill", "#e8e8e8");
+    g.appendChild(cell);
+    const text = document.createElementNS(SVG_NS, "text");
+    text.classList.add("table-header");
+    text.setAttribute("x", cx + colW[i]/2);
+    text.setAttribute("y", titleH + headerH/2);
+    text.textContent = t.headers[i];
+    g.appendChild(text);
+    cx += colW[i];
+  }
+
+  // 数据行
+  for (let r = 0; r < t.rows.length; r++) {
+    cx = 0;
+    for (let c = 0; c < t.rows[r].length; c++) {
+      const cell = document.createElementNS(SVG_NS, "rect");
+      cell.classList.add("table-cell");
+      cell.setAttribute("x", cx);
+      cell.setAttribute("y", titleH + headerH + r * rowH);
+      cell.setAttribute("width", colW[c]); cell.setAttribute("height", rowH);
+      g.appendChild(cell);
+      const text = document.createElementNS(SVG_NS, "text");
+      text.classList.add("table-text");
+      text.setAttribute("x", cx + colW[c]/2);
+      text.setAttribute("y", titleH + headerH + r * rowH + rowH/2);
+      text.textContent = t.rows[r][c];
+      g.appendChild(text);
+      cx += colW[c];
+    }
+  }
+
+  // 拖拽
+  g.style.cursor = "move";
+  g.addEventListener("mousedown", (e) => startDragTable(e, t));
+  g.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    showContextMenu(e, [{label:"编辑表格", action:()=>editTable(t)}, {label:"删除表格", action:()=>{
+      drawingState.tables = drawingState.tables.filter(x=>x.id!==t.id);
+      render();
+    }}]);
+  });
+
+  svg.appendChild(g);
+}
+
+function editTable(t) {
+  const newData = prompt("编辑表格数据(JSON格式):", JSON.stringify(t.rows));
+  if (newData) {
+    try { t.rows = JSON.parse(newData); render(); }
+    catch(e) { alert("JSON 格式错误"); }
+  }
+}
+
+function renderTitleBlock(tb) {
+  const g = document.createElementNS(SVG_NS, "g");
+  g.setAttribute("transform", `translate(${tb.x},${tb.y})`);
+
+  // 外框
+  const border = document.createElementNS(SVG_NS, "rect");
+  border.classList.add("title-block");
+  border.setAttribute("x", 0); border.setAttribute("y", 0);
+  border.setAttribute("width", tb.w); border.setAttribute("height", tb.h);
+  g.appendChild(border);
+
+  // 字段(2行4列)
+  const fields = Object.entries(tb.fields);
+  const colW = tb.w / 4;
+  const rowH = tb.h / (Math.ceil(fields.length / 4));
+  for (let i = 0; i < fields.length; i++) {
+    const col = i % 4;
+    const row = Math.floor(i / 4);
+    const x = col * colW;
+    const y = row * rowH;
+
+    // 分隔线
+    if (col > 0) {
+      const vline = document.createElementNS(SVG_NS, "line");
+      vline.setAttribute("x1", x); vline.setAttribute("y1", y);
+      vline.setAttribute("x2", x); vline.setAttribute("y2", y + rowH);
+      vline.setAttribute("stroke", "#000"); vline.setAttribute("stroke-width", 0.5);
+      g.appendChild(vline);
+    }
+    if (row > 0) {
+      const hline = document.createElementNS(SVG_NS, "line");
+      hline.setAttribute("x1", 0); hline.setAttribute("y1", y);
+      hline.setAttribute("x2", tb.w); hline.setAttribute("y2", y);
+      hline.setAttribute("stroke", "#000"); hline.setAttribute("stroke-width", 0.5);
+      g.appendChild(hline);
+    }
+
+    // 标签
+    const label = document.createElementNS(SVG_NS, "text");
+    label.classList.add("title-label");
+    label.setAttribute("x", x + 4); label.setAttribute("y", y + 12);
+    label.textContent = fields[i][0];
+    g.appendChild(label);
+
+    // 值
+    const val = document.createElementNS(SVG_NS, "text");
+    val.classList.add("title-text");
+    val.setAttribute("x", x + 4); val.setAttribute("y", y + rowH - 6);
+    val.textContent = fields[i][1];
+    val.style.cursor = "text";
+    val.addEventListener("dblclick", () => {
+      const nv = prompt(`修改 ${fields[i][0]}:`, fields[i][1]);
+      if (nv !== null) { tb.fields[fields[i][0]] = nv; render(); }
+    });
+    g.appendChild(val);
+  }
+
+  // 拖拽
+  g.style.cursor = "move";
+  g.addEventListener("mousedown", (e) => startDragTitle(e, tb));
+  svg.appendChild(g);
+}
+
+// ===================== 拖拽 =====================
+function startDragView(e, v) {
+  e.stopPropagation();
+  const pt = svgPoint(e);
+  dragState = {
+    type: "view", view: v,
+    startX: pt.x, startY: pt.y,
+    origX: v.x, origY: v.y,
+  };
+}
+function startDragDim(e, d) {
+  e.stopPropagation();
+  const pt = svgPoint(e);
+  dragState = {
+    type: "dim", dim: d,
+    startX: pt.x, startY: pt.y,
+    origY1: d.y1, origY2: d.y2,
+    origX1: d.x1, origX2: d.x2,
+  };
+}
+function startDragText(e, t) {
+  e.stopPropagation();
+  const pt = svgPoint(e);
+  dragState = { type: "text", text: t, startX: pt.x, startY: pt.y, origX: t.x, origY: t.y };
+}
+function startDragTable(e, t) {
+  e.stopPropagation();
+  const pt = svgPoint(e);
+  dragState = { type: "table", table: t, startX: pt.x, startY: pt.y, origX: t.x, origY: t.y };
+}
+function startDragTitle(e, tb) {
+  e.stopPropagation();
+  const pt = svgPoint(e);
+  dragState = { type: "title", title: tb, startX: pt.x, startY: pt.y, origX: tb.x, origY: tb.y };
+}
+
+svg.addEventListener("mousemove", (e) => {
+  if (!dragState) return;
+  const pt = svgPoint(e);
+  const dx = pt.x - dragState.startX;
+  const dy = pt.y - dragState.startY;
+  if (dragState.type === "view") {
+    dragState.view.x = dragState.origX + dx;
+    dragState.view.y = dragState.origY + dy;
+  } else if (dragState.type === "dim") {
+    const d = dragState.dim;
+    if (d.type === "horizontal") {
+      d.y1 = dragState.origY1 + dy;
+      d.y2 = dragState.origY2 + dy;
+    } else if (d.type === "vertical") {
+      d.x1 = dragState.origX1 + dx;
+      d.x2 = dragState.origX2 + dx;
+    }
+  } else if (dragState.type === "text") {
+    dragState.text.x = dragState.origX + dx;
+    dragState.text.y = dragState.origY + dy;
+  } else if (dragState.type === "table") {
+    dragState.table.x = dragState.origX + dx;
+    dragState.table.y = dragState.origY + dy;
+  } else if (dragState.type === "title") {
+    dragState.title.x = dragState.origX + dx;
+    dragState.title.y = dragState.origY + dy;
+  }
+  render();
+});
+
+svg.addEventListener("mouseup", () => { dragState = null; });
+
+// ===================== 尺寸标注模式 =====================
+document.getElementById("btnAddDim").addEventListener("click", () => {
+  mode = mode === "dimension" ? "select" : "dimension";
+  updateToolbar();
+});
+document.getElementById("btnAddDimAligned").addEventListener("click", () => {
+  mode = mode === "aligned" ? "select" : "aligned";
+  updateToolbar();
+});
+
+svg.addEventListener("click", (e) => {
+  if (mode !== "dimension" && mode !== "aligned") return;
+  const pt = svgPoint(e);
+  if (!dimStartPoint) {
+    dimStartPoint = pt;
+    setInfo("点击第二个点完成标注");
+  } else {
+    const isH = Math.abs(pt.x - dimStartPoint.x) > Math.abs(pt.y - dimStartPoint.y);
+    const type = mode === "aligned" ? "aligned" : (isH ? "horizontal" : "vertical");
+    let x1 = dimStartPoint.x, y1 = dimStartPoint.y;
+    let x2 = pt.x, y2 = pt.y;
+    if (type === "horizontal") y2 = y1;
+    else if (type === "vertical") x2 = x1;
+    const dist = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
+    drawingState.dimensions.push({
+      id: uid(), type, x1, y1, x2, y2,
+      text: Math.round(dist / (drawingState.views[0]?.scale || 1) * 100) / 100 + "",
+      offset: 0
+    });
+    dimStartPoint = null;
+    mode = "select";
+    updateToolbar();
+    render();
+    setInfo("标注已添加");
+  }
+});
+
+// ===================== 文字 =====================
+document.getElementById("btnAddText").addEventListener("click", () => {
+  const text = prompt("输入文字:");
+  if (text) {
+    drawingState.texts.push({id: uid(), x: 100, y: 100, text, fontSize: 14});
+    render();
+  }
+});
+
+// ===================== 隐藏线切换 =====================
+document.getElementById("btnToggleHidden").addEventListener("click", () => {
+  for (const v of drawingState.views) v.showHidden = !v.showHidden;
+  render();
+});
+
+// ===================== 保存/读取 =====================
+document.getElementById("btnExportJson").addEventListener("click", () => {
+  const data = JSON.stringify(drawingState, null, 2);
+  const blob = new Blob([data], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "drawing_" + (document.getElementById("modelSelect").value || "untitled") + ".json";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById("btnImportJson").addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file"; input.accept = ".json";
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        drawingState = JSON.parse(ev.target.result);
+        render();
+        setInfo("工程图已加载");
+      } catch(err) { alert("文件格式错误"); }
+    };
+    reader.readAsText(file);
+  };
+  input.click();
+});
+
+// ===================== 导出PDF =====================
+document.getElementById("btnExportPdf").addEventListener("click", async () => {
+  showStatus("正在导出PDF...");
+  try {
+    // 收集SVG数据
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const resp = await fetch("/api/drawing-pdf", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        svg: svgData,
+        model: document.getElementById("modelSelect").value || "untitled"
+      })
+    });
+    if (!resp.ok) throw new Error("导出失败");
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "drawing_" + (document.getElementById("modelSelect").value || "untitled") + ".pdf";
+    a.click();
+    URL.revokeObjectURL(url);
+    hideStatus();
+    setInfo("PDF已导出");
+  } catch(e) {
+    hideStatus();
+    alert("导出失败: " + e.message);
+  }
+});
+
+// ===================== 右键菜单 =====================
+function showContextMenu(e, items) {
+  const menu = document.getElementById("ctxMenu");
+  menu.innerHTML = "";
+  for (const item of items) {
+    const div = document.createElement("div");
+    div.textContent = item.label;
+    div.onclick = () => { item.action(); menu.style.display = "none"; };
+    menu.appendChild(div);
+  }
+  menu.style.display = "block";
+  menu.style.left = e.clientX + "px";
+  menu.style.top = e.clientY + "px";
+}
+document.addEventListener("click", () => {
+  document.getElementById("ctxMenu").style.display = "none";
+});
+
+// ===================== 工具栏状态 =====================
+function updateToolbar() {
+  document.getElementById("btnAddDim").classList.toggle("active", mode === "dimension");
+  document.getElementById("btnAddDimAligned").classList.toggle("active", mode === "aligned");
+  if (mode === "dimension" || mode === "aligned") {
+    setInfo("标注模式: 点击两个点创建标注");
+  } else {
+    setInfo("就绪");
+  }
+}
+
+// ===================== 初始化 =====================
+document.getElementById("btnLoad").addEventListener("click", loadViews);
+document.getElementById("btnAddTable").addEventListener("click", () => {
+  drawingState.tables.push({
+    id: uid(), x: 1000, y: 80,
+    title: "新表格",
+    headers: ["参数", "值", "单位"],
+    rows: [["", "", ""]]
+  });
+  render();
+});
+document.getElementById("btnAddTitle").addEventListener("click", () => {
+  if (drawingState.titleBlock) {
+    render();
+    return;
+  }
+  autoAddTitleBlock(document.getElementById("modelSelect").value || "未命名");
+  render();
+});
+
+loadModelList();
+</script>
+</body>
+</html>

@@ -37,6 +37,7 @@ CONFIG_DIR = rb.CONFIG_DIR
 # 3D 查看器相关路径(viewer.html 与 o3dv 静态资源均位于 src/ 下)
 _STATIC_DIR = os.path.join(_HERE, "static")
 _VIEWER_HTML = os.path.join(_HERE, "viewer.html")
+_DRAWING_EDITOR_HTML = os.path.join(_HERE, "drawing_editor.html")
 
 app = Flask(__name__)
 
@@ -291,6 +292,10 @@ function renderResult(r){
     const productName = encodeURIComponent(r.model_code || '装配体');
     viewLinks.push(`<a class="view-link" href="/viewer?modelUrl=${modelUrl}&productName=${productName}" target="_blank">👁 查看模型</a>`);
   }
+  // 工程图按钮(新标签页打开工程图编辑器)
+  if(r.step_file){
+    viewLinks.push(`<a class="view-link" href="/drawing" target="_blank">📐 工程图</a>`);
+  }
   document.getElementById('resultArea').innerHTML = `
     <div class="ok-msg">✓ 生成完成: <b>${r.model_code}</b> · 系列 ${r.series} · 电机 ${r.motor}</div>
     <div class="dl-row">${dlLinks.join('')}${viewLinks.join('')}</div>
@@ -499,12 +504,79 @@ def download(filename):
     return send_from_directory(OUT_DIR, filename, as_attachment=True)
 
 
+# ===================== 工程图相关路由 =====================
+@app.route("/drawing")
+def drawing_editor():
+    """工程图编辑器页面"""
+    return send_file(_DRAWING_EDITOR_HTML)
+
+
+@app.route("/api/drawing-views/<model_code>")
+def api_drawing_views(model_code):
+    """生成指定型号的 2D 工程图视图(主视/俯视/侧视/轴测)
+
+    从 assembly.step 生成 HLR 投影,返回 JSON 格式的 2D 线框数据。
+    """
+    import drawing_engine
+    step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
+    if not os.path.isfile(step_path):
+        return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
+
+    try:
+        with _build_lock:
+            result = drawing_engine.generate_drawing_views(step_path)
+        return jsonify({"ok": True, "result": result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/drawing-pdf", methods=["POST"])
+def api_drawing_pdf():
+    """将前端 SVG 数据转换为 PDF 导出
+
+    请求体: {"svg": "<svg>...</svg>", "model": "250-E-H2K1-L100"}
+    响应: PDF 文件下载
+    """
+    try:
+        import io
+        from reportlab.graphics import renderPDF
+        from svglib.svglib import svg2rlg
+
+        data = request.get_json()
+        svg_str = data.get("svg", "")
+        model = data.get("model", "untitled")
+
+        # 将 SVG 字符串转为 reportlab drawing
+        svg_io = io.StringIO(svg_str)
+        drawing = svg2rlg(svg_io)
+
+        if drawing is None:
+            return jsonify({"ok": False, "error": "SVG 解析失败"}), 500
+
+        # 渲染为 PDF
+        pdf_buffer = io.BytesIO()
+        renderPDF.drawToFile(drawing, pdf_buffer, "工程图_" + model)
+        pdf_buffer.seek(0)
+
+        return send_file(
+            pdf_buffer,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=f"工程图_{model}.pdf"
+        )
+    except ImportError:
+        return jsonify({"ok": False, "error": "缺少依赖: pip install svglib reportlab"}), 500
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     os.makedirs(OUT_DIR, exist_ok=True)
     print("=" * 56)
     print("  装配体生成可视化面板")
     print("  浏览器打开: http://127.0.0.1:5001")
     print("  3D 查看器:   http://127.0.0.1:5001/viewer")
+    print("  工程图编辑器: http://127.0.0.1:5001/drawing")
     print("=" * 56)
     # pythonOCC 非线程安全,用单线程串行处理请求
     app.run(host="127.0.0.1", port=5001, debug=False, threaded=False)
