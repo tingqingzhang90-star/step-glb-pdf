@@ -269,6 +269,19 @@
   </div>
 </div>
 
+<!-- 内联脚本:HTML 解析时立即检查 URL 参数,提前显示加载动画(不等 o3dv.min.js 下载) -->
+<script>
+  (function () {
+    var p = new URLSearchParams(location.search);
+    if (p.get('modelUrl')) {
+      var lo = document.getElementById('loadingOverlay');
+      var eo = document.getElementById('emptyOverlay');
+      if (lo) lo.classList.add('active');
+      if (eo) eo.classList.add('hidden');
+    }
+  })();
+</script>
+
 <script>
   let viewer = null;
   let currentModel = null;
