@@ -398,7 +398,7 @@ def write_stl(shape, path, linear_deflection=0.2, angular_deflection=0.1):
     writer.Write(shape, path)
 
 
-def extract_hard_edges(shape, discretization=0.5, angle_threshold=5.0):
+def extract_hard_edges(shape, discretization=0.5, angle_threshold=15.0):
     """从 STEP B-rep 提取硬边(面与面真实交界,非相切边)
 
     SolidWorks 只在面与面交界处画轮廓线,曲面上不画三角网格线。
@@ -413,7 +413,7 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=5.0):
     Args:
         shape: TopoDS_Shape (装配体)
         discretization: 离散化间距(mm),默认 0.5mm
-        angle_threshold: 角度阈值(度),默认 5.0°,小于此角度的边不显示
+        angle_threshold: 角度阈值(度),默认 15.0°,小于此角度的边不显示
 
     Returns:
         list of list of [x,y,z]: 每条硬边的点序列
@@ -421,11 +421,39 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=5.0):
     from OCC.Core.TopExp import TopExp_Explorer
     from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
     from OCC.Core.TopoDS import topods
-    from OCC.Core.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+    from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape, TopTools_ListOfShape
+    from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
     from OCC.Core.GCPnts import GCPnts_UniformAbscissa
     from OCC.Core.BRep import BRep_Tool
     from OCC.Core.GeomAbs import GeomAbs_G1
+    from OCC.Core.GeomAPI import GeomAPI_ProjectPointOnSurf
+    from OCC.Core.gp import gp_Pnt, gp_Vec
     import math
+
+    # 建立边到面的映射(手动遍历)
+    # 用 id() 作为 key,用 IsSame() 判断边是否相同
+    edge_face_map = {}  # id(edge) -> {'edge': edge, 'faces': []}
+    face_explorer = TopExp_Explorer(shape, TopAbs_FACE)
+    while face_explorer.More():
+        face = topods.Face(face_explorer.Current())
+        # 遍历该面的所有边
+        edge_explorer = TopExp_Explorer(face, TopAbs_EDGE)
+        while edge_explorer.More():
+            edge = topods.Edge(edge_explorer.Current())
+            edge_id = id(edge)
+            # 检查是否已有相同的边(用 IsSame 判断)
+            found = False
+            for eid, entry in edge_face_map.items():
+                if entry['edge'].IsSame(edge):
+                    # 检查这个面是否已经添加过
+                    if not any(face.IsSame(f) for f in entry['faces']):
+                        entry['faces'].append(face)
+                    found = True
+                    break
+            if not found:
+                edge_face_map[edge_id] = {'edge': edge, 'faces': [face]}
+            edge_explorer.Next()
+        face_explorer.Next()
 
     edges_data = []
     explorer = TopExp_Explorer(shape, TopAbs_EDGE)
@@ -433,59 +461,88 @@ def extract_hard_edges(shape, discretization=0.5, angle_threshold=5.0):
     while explorer.More():
         edge = topods.Edge(explorer.Current())
 
-        # 查找该边的相邻面(使用 TopExp_Explorer)
-        faces = []
-        face_explorer = TopExp_Explorer(edge, TopAbs_FACE)
-        while face_explorer.More():
-            faces.append(topods.Face(face_explorer.Current()))
-            face_explorer.Next()
+        # 查找该边的相邻面(从字典中查找)
+        entry = None
+        for eid, e in edge_face_map.items():
+            if e['edge'].IsSame(edge):
+                entry = e
+                break
 
-        # 如果只有一个面(自由边)或没有面,跳过
-        if len(faces) < 2:
+        if entry is None:
             explorer.Next()
             continue
 
-        face1 = faces[0]
-        face2 = faces[1]
+        faces_list = entry['faces']
+        # 去重(同一个面可能因为遍历方式被添加多次)
+        unique_faces = []
+        for f in faces_list:
+            if not any(f.IsSame(uf) for uf in unique_faces):
+                unique_faces.append(f)
 
-        # 如果两个面相同,跳过
-        if face1.IsSame(face2):
+        if len(unique_faces) < 2:
+            # 自由边(只有一个面),跳过
             explorer.Next()
             continue
+
+        face1 = unique_faces[0]
+        face2 = unique_faces[1]
 
         # 检查连续性: 如果两个面在边处相切(G1或更高),则不是硬边,跳过
-        continuity = BRep_Tool.Continuity(edge, face1, face2)
-        if continuity >= GeomAbs_G1:
-            # 相切边(如圆柱面与圆角过渡面之间),不画线
-            explorer.Next()
-            continue
+        try:
+            continuity = BRep_Tool.Continuity(edge, face1, face2)
+            if continuity >= GeomAbs_G1:
+                # 相切边(如圆柱面与圆角过渡面之间),不画线
+                explorer.Next()
+                continue
+        except Exception:
+            # Continuity 检查失败,继续处理
+            pass
 
         # 计算两个面在边中点处的法向量夹角
         try:
-            curve = BRepAdaptor_Curve(edge)
-            u_mid = (curve.FirstParameter() + curve.LastParameter()) / 2.0
-            p_mid = curve.Value(u_mid)
+            curve_adaptor = BRepAdaptor_Curve(edge)
+            u_mid = (curve_adaptor.FirstParameter() + curve_adaptor.LastParameter()) / 2.0
+            p_mid = curve_adaptor.Value(u_mid)
 
-            # 获取 face1 在 p_mid 处的法向量
-            surf1 = BRepAdaptor_Surface(face1)
-            u1, v1 = surf1.Value(p_mid.X(), p_mid.Y(), p_mid.Z())
-            norm1 = surf1.Normal(u1, v1)
+            # 对每个面,找到边上中点在面上的最近点,计算法向量
+            normals = []
+            for face in [face1, face2]:
+                # 获取底层几何曲面
+                geom_surf = BRep_Tool.Surface(face)
+                # 使用投影找到面上最近点
+                projector = GeomAPI_ProjectPointOnSurf(p_mid, geom_surf)
+                if projector.IsDone() and projector.NbPoints() > 0:
+                    # 获取最近点的 UV 参数
+                    u_face, v_face = projector.LowerDistanceParameters()
+                    # 使用 D1 方法计算法向量: D1U × D1V
+                    pnt = gp_Pnt()
+                    d1u = gp_Vec()
+                    d1v = gp_Vec()
+                    geom_surf.D1(u_face, v_face, pnt, d1u, d1v)
+                    # 法向量 = d1u × d1v
+                    normal = d1u.Crossed(d1v)
+                    normals.append(normal)
 
-            # 获取 face2 在 p_mid 处的法向量
-            surf2 = BRepAdaptor_Surface(face2)
-            u2, v2 = surf2.Value(p_mid.X(), p_mid.Y(), p_mid.Z())
-            norm2 = surf2.Normal(u2, v2)
+            if len(normals) == 2:
+                norm1, norm2 = normals
+                # 归一化法向量
+                mag1 = norm1.Magnitude()
+                mag2 = norm2.Magnitude()
 
-            # 计算法向量夹角(弧度)
-            dot = norm1.X() * norm2.X() + norm1.Y() * norm2.Y() + norm1.Z() * norm2.Z()
-            dot = max(-1.0, min(1.0, dot))  # 限制在 [-1, 1] 范围
-            angle_rad = math.acos(abs(dot))  # 取绝对值,因为法向量方向可能相反
-            angle_deg = math.degrees(angle_rad)
+                if mag1 > 1e-10 and mag2 > 1e-10:
+                    n1 = gp_Vec(norm1.X()/mag1, norm1.Y()/mag1, norm1.Z()/mag1)
+                    n2 = gp_Vec(norm2.X()/mag2, norm2.Y()/mag2, norm2.Z()/mag2)
 
-            # 如果夹角小于阈值,不画线(模拟 SolidWorks 的角度过滤)
-            if angle_deg < angle_threshold:
-                explorer.Next()
-                continue
+                    # 计算法向量夹角
+                    dot = n1.Dot(n2)
+                    dot = max(-1.0, min(1.0, dot))
+                    angle_rad = math.acos(abs(dot))  # 取绝对值,因为法向量方向可能相反
+                    angle_deg = math.degrees(angle_rad)
+
+                    # 如果夹角小于阈值,不画线(模拟 SolidWorks 的角度过滤)
+                    if angle_deg < angle_threshold:
+                        explorer.Next()
+                        continue
         except Exception as e:
             # 如果法向量计算失败,保守处理:画线
             pass
