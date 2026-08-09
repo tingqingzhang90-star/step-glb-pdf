@@ -18,6 +18,19 @@
     </div>
 
     <!-- CAD 查看器 -->
+    <!--
+      关键 props 说明：
+      1. 不设置 useMainThreadDraw（默认 true）：使用主线程渲染。
+         原先 :useMainThreadDraw="false" 启用 worker 模式，会请求
+         /assets/mtext-renderer-worker.js，但 @mlightcad/mtext-renderer 包未安装，
+         worker 文件不存在，Vite dev server 返回 HTML SPA fallback，触发
+         "non-JavaScript MIME type text/html" 严格 MIME 检查错误。
+      2. baseUrl 末尾必须带 "/"：修复 cad-simple-viewer 内部 BUG。
+         AcApDocManager.js 中 DEFAULT_BASE_URL = '.../cad-data'（末尾无 /），
+         第 250 行 this._fontLoader.baseUrl = this._baseUrl + 'fonts/'
+         拼接后变成 '.../cad-datafonts/'，请求 fonts.json 时返回 404。
+         显式传入带 "/" 结尾的 baseUrl，拼接后正确为 '.../cad-data/fonts/'。
+    -->
     <div class="cad-container">
       <MlCadViewer
         ref="cadViewer"
@@ -25,7 +38,7 @@
         theme="light"
         :mode="8"
         :url="dxfUrl"
-        :useMainThreadDraw="false"
+        baseUrl="https://cdn.jsdelivr.net/gh/mlightcad/cad-data/"
         @create="onViewerCreate"
       />
       <!-- 加载遮罩 -->
