@@ -285,7 +285,7 @@ async function loadModelList() {
   try {
     const res = await fetch('/api/files')
     const data = await res.json()
-    if (data.ok && data.groups) {
+    if (data.groups) {
       const all = []
       for (const g of data.groups) {
         const names = (g.files || []).map(f => f.name)
