@@ -218,35 +218,23 @@ def _fix_step_header_for_solidworks(step_path):
         step_path: STEP 文件路径(将被原地修改)
     """
     try:
+        t_post = time.time()
+
         # pythonOCC 7.9 以 UTF-8 编码写入中文字符
         with open(step_path, 'r', encoding='utf-8') as f:
             content = f.read()
+        t_read = time.time()
 
-        original = content
+        # ① 用正则批量替换非 ASCII 字符为 \X2\hhhh\X0\ 转义
+        # 正则引擎(C 实现)扫描 9MB+ 文本比逐字符 Python 循环快 10-50 倍
+        # 连续的非 ASCII 字符合并到一个转义块(与 SolidWorks 格式一致)
+        def _escape_match(m):
+            return '\\X2\\' + ''.join(format(ord(c), '04x') for c in m.group()) + '\\X0\\'
 
-        # ① 将非 ASCII 字符转换为 \X2\HHHH\X0\ 转义序列(STEP 标准,与 SolidWorks 一致)
-        # 连续的非 ASCII 字符合并到一个转义块中(如 SolidWorks: \X2\516d89d287ba6bcd\X0\)
-        def escape_non_ascii(text):
-            result = []
-            i = 0
-            n = len(text)
-            while i < n:
-                cp = ord(text[i])
-                if cp > 127:
-                    hex_str = ''
-                    while i < n and ord(text[i]) > 127:
-                        hex_str += format(ord(text[i]), '04x')
-                        i += 1
-                    result.append('\\X2\\' + hex_str + '\\X0\\')
-                else:
-                    result.append(text[i])
-                    i += 1
-            return ''.join(result)
-
-        content = escape_non_ascii(content)
+        content = re.sub(r'[^\x00-\x7f]+', _escape_match, content)
+        t_escape = time.time()
 
         # ② 修改文件头为 SolidWorks 格式
-        # 提取原始时间戳(保留导出时间)
         timestamp = ""
         ts_match = re.search(r"'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'", content)
         if ts_match:
@@ -258,32 +246,30 @@ def _fix_step_header_for_solidworks(step_path):
             f"'SwSTEP 2.0', 'SolidWorks 2024', '' );"
         )
 
-        # 替换 FILE_DESCRIPTION(单行)
         content = re.sub(
             r"FILE_DESCRIPTION\s*\([^\n]*\);",
             "FILE_DESCRIPTION ( 'STEP AP214' ), '1' );",
             content, count=1
         )
-
-        # 替换 FILE_NAME(跨行,匹配到 FILE_SCHEMA 之前)
         content = re.sub(
             r"FILE_NAME\s*\(.*?(?=FILE_SCHEMA)",
             new_file_name + "\n",
             content, count=1, flags=re.DOTALL
         )
-
-        # 替换 FILE_SCHEMA(单行,去掉 { 1 0 10303 214 ... } 扩展参数)
         content = re.sub(
             r"FILE_SCHEMA\s*\([^\n]*\);",
             "FILE_SCHEMA ( ( 'AUTOMOTIVE_DESIGN' ) );",
             content, count=1
         )
 
-        if content != original:
-            # 以 latin-1 写回(此时内容已全部为 ASCII,latin-1 与 ASCII 兼容)
-            with open(step_path, 'w', encoding='latin-1') as f:
-                f.write(content)
-            log(f"  ✓ STEP 已转换为 SolidWorks 格式(\\X2\\ 转义 + 文件头)")
+        # 以 latin-1 写回(此时内容已全部为 ASCII,latin-1 与 ASCII 兼容)
+        with open(step_path, 'w', encoding='latin-1') as f:
+            f.write(content)
+        t_write = time.time()
+
+        log(f"  ✓ STEP 已转换为 SolidWorks 格式(\\X2\\ 转义 + 文件头) "
+            f"[读取{(t_read-t_post)*1000:.0f}ms 转义{(t_escape-t_read)*1000:.0f}ms "
+            f"文件头+写回{(t_write-t_escape)*1000:.0f}ms]")
     except Exception as e:
         log(f"  ⚠ STEP 后处理失败(不影响功能): {e}")
 
@@ -866,17 +852,23 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
 
     writer = STEPCAFControl_Writer()
     writer.SetNameMode(True)  # ★ 保留零件名称
+    t_transfer = time.time()
     writer.Transfer(doc)
     writer.Write(out_path)
+    t_write = time.time()
 
-    # ★ 后处理:修改文件头为 SolidWorks 格式(保留 \X2\XXXX\X0\ 转义)
+    # ★ 后处理:UTF-8 中文转 \X2\ 转义 + 文件头改为 SolidWorks 格式
     #   SolidWorks 根据文件头判断 STEP 来源,对自身格式能正确解析 \X2\ 中文转义
     _fix_step_header_for_solidworks(out_path)
 
-    total = time.time() - t0
+    t_post = time.time()
+    total = t_post - t0
     size_mb = os.path.getsize(out_path) / 1024 / 1024
     log(f"  ✓ 导出: {out_path} ({size_mb:.2f} MB, {total:.2f}s, "
         f"{len(part_labels)} 零件, 跳过 {skipped} 抑制件)")
+    log(f"    耗时分解: XCAF构建{(t_transfer-t0)*1000:.0f}ms "
+        f"Transfer+Write{(t_write-t_transfer)*1000:.0f}ms "
+        f"后处理{(t_post-t_write)*1000:.0f}ms")
     return out_path, total
 
 
