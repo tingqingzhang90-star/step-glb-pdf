@@ -6,6 +6,8 @@
 <title>3D 模型查看器</title>
 <!-- o3dv 渲染库(本地静态资源,由 server.py 提供) -->
 <script src="/static/o3dv/o3dv.min.js"></script>
+<!-- Three.js for B-rep edge rendering -->
+<script src="https://cdn.bootcdn.net/ajax/libs/three.js/r128/three.min.js"></script>
 <!-- Feather Icons CDN -->
 <script src="https://cdn.bootcdn.net/ajax/libs/feather-icons/4.29.0/feather.min.js"></script>
 <style>
@@ -273,6 +275,9 @@
   let viewer = null;
   let currentModel = null;
   let bgColors = null;
+  // B-rep 硬边渲染(Three.js 叠加层)
+  let edgeScene = null, edgeCamera = null, edgeRenderer = null, edgeLines = null;
+  let edgesUrl = null; // 当前模型的 edges.json URL
 
   // 等 o3dv 库加载完成
   window.addEventListener('load', function () {
@@ -307,7 +312,7 @@
     const viewerConfig = {
       backgroundColor: new OV.RGBAColor(15, 20, 25, 255),
       defaultColor: new OV.RGBColor(200, 200, 200),
-      edgeSettings: new OV.EdgeSettings(true, new OV.RGBColor(15, 20, 25), 12),
+      edgeSettings: new OV.EdgeSettings(true, new OV.RGBColor(80, 80, 80), 25),
       onModelLoaded: () => {
         if (window._currentLoadTimeout) {
           clearTimeout(window._currentLoadTimeout);
@@ -329,6 +334,105 @@
       alert('3D 查看器初始化失败:\n' + error.message);
     }
   }
+
+  // ---- B-rep 硬边叠加渲染(Three.js) ----
+  function initEdgeOverlay() {
+    const container = document.getElementById('viewerContainer');
+    const w = container.clientWidth, h = container.clientHeight;
+
+    edgeScene = new THREE.Scene();
+    edgeCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100000);
+    edgeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    edgeRenderer.setSize(w, h);
+    edgeRenderer.setPixelRatio(window.devicePixelRatio);
+    edgeRenderer.domElement.style.cssText =
+      'position:absolute;top:0;left:0;pointer-events:none;z-index:5';
+    container.appendChild(edgeRenderer.domElement);
+
+    // 窗口缩放同步
+    window.addEventListener('resize', () => {
+      const w2 = container.clientWidth, h2 = container.clientHeight;
+      edgeCamera.aspect = w2 / h2;
+      edgeCamera.updateProjectionMatrix();
+      edgeRenderer.setSize(w2, h2);
+    });
+  }
+
+  function loadEdgesOverlay() {
+    if (!edgesUrl) { clearEdges(); return; }
+    fetch(edgesUrl).then(r => {
+      if (!r.ok) throw new Error('edges.json 不存在');
+      return r.json();
+    }).then(data => {
+      clearEdges();
+      if (!data.edges || !data.edges.length) return;
+
+      const material = new THREE.LineBasicMaterial({
+        color: 0x888888,
+        transparent: true,
+        opacity: 0.6,
+        depthTest: true,
+      });
+
+      // 将所有边合并为一个 BufferGeometry (性能优化)
+      const positions = [];
+      for (const edge of data.edges) {
+        if (edge.length < 2) continue;
+        for (let i = 0; i < edge.length - 1; i++) {
+          positions.push(edge[i][0], edge[i][1], edge[i][2]);
+          positions.push(edge[i+1][0], edge[i+1][1], edge[i+1][2]);
+        }
+      }
+      if (positions.length === 0) return;
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      edgeLines = new THREE.LineSegments(geom, material);
+      edgeScene.add(edgeLines);
+
+      // 同步 o3dv 相机到边线相机
+      syncEdgeCamera();
+      renderEdges();
+      console.log(`硬边渲染: ${data.edges.length} 条边, ${positions.length/6} 段线段`);
+    }).catch(err => {
+      console.log('edges.json 加载跳过:', err.message);
+    });
+  }
+
+  function syncEdgeCamera() {
+    if (!viewer || !edgeCamera) return;
+    try {
+      const innerViewer = viewer.GetViewer();
+      if (!innerViewer) return;
+      // 从 o3dv 内部获取相机参数
+      const cam = innerViewer.camera;
+      if (!cam) return;
+      const eye = cam.eye, center = cam.center, up = cam.up;
+      edgeCamera.position.set(eye.x, eye.y, eye.z);
+      edgeCamera.up.set(up.x, up.y, up.z);
+      edgeCamera.lookAt(center.x, center.y, center.z);
+      edgeCamera.fov = cam.fov || 45;
+      edgeCamera.updateProjectionMatrix();
+    } catch (e) { /* o3dv 内部 API 可能变化 */ }
+  }
+
+  function renderEdges() {
+    if (edgeRenderer && edgeScene && edgeCamera) {
+      edgeRenderer.render(edgeScene, edgeCamera);
+    }
+  }
+
+  function clearEdges() {
+    if (edgeLines) {
+      edgeScene.remove(edgeLines);
+      edgeLines.geometry.dispose();
+      edgeLines.material.dispose();
+      edgeLines = null;
+    }
+  }
+
+  // 初始化边线叠加层(已禁用,改用 o3dv 原生 EdgeSettings)
+  // initEdgeOverlay();
 
   // 事件监听
   function initEventListeners() {

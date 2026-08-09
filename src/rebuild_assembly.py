@@ -721,13 +721,15 @@ def step5_export_glb(compound, out_path):
     glb_size_mb = os.path.getsize(glb_path) / 1024 / 1024
     log(f"  ✓ GLB 导出: {glb_path} ({glb_size_mb:.2f} MB, {t_glb:.2f}s)")
 
-    # 5.3 提取 B-rep 硬边 → edges.json (供前端 Three.js LineSegments 渲染)
-    t2 = time.time()
-    edges_data = extract_hard_edges(compound, discretization=0.5)
-    edges_path = os.path.join(os.path.dirname(glb_path), "edges.json")
-    save_edges_json(edges_data, edges_path)
-    t_edges = time.time() - t2
-    log(f"  ✓ 硬边提取: {t_edges:.2f}s")
+    # 5.3 硬边提取已禁用(耗时约 40s,影响生成体验)
+    # 如需恢复,取消下方注释即可。函数 extract_hard_edges/save_edges_json 保留备用。
+    # t2 = time.time()
+    # edges_data = extract_hard_edges(compound, discretization=0.5)
+    # edges_path = os.path.join(os.path.dirname(glb_path), "edges.json")
+    # save_edges_json(edges_data, edges_path)
+    # t_edges = time.time() - t2
+    # log(f"  ✓ 硬边提取: {t_edges:.2f}s")
+    t_edges = 0.0
 
     # 清理 STL
     try:
