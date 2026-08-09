@@ -414,7 +414,17 @@ def api_options():
 
 @app.route("/api/build", methods=["POST"])
 def api_build():
-    """按选型生成装配体"""
+    """按选型生成装配体
+
+    ★ STEP 导出说明:
+      装配体 STEP 使用 XCAF 模式导出(rebuild_assembly.step3_export_assembly_step_xcaf),
+      保留零件名称和装配体层次结构(PRODUCT + NEXT_ASSEMBLY_USAGE_OCCURRENCE)。
+      SolidWorks 导入后可展开查看各零件,与 SW 原生导出效果一致。
+
+      旧版导出(step3_export_assembly_step)使用 STEPControl_Writer + Compound,
+      会丢失零件名称,SolidWorks 中显示为 "Open CASCADE STEP translator...",
+      该函数已保留但不再在主流程中调用,仅供单零件/单面 STEP 导出或备用回退。
+    """
     data = request.get_json(force=True) or {}
     model_code = (data.get("model_code") or "").strip()
     if not model_code:

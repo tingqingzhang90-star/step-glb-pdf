@@ -618,9 +618,22 @@ def step2_apply_transform_and_merge(shapes, parts_data):
 
 
 def step3_export_assembly_step(compound, out_path):
-    """步骤 3: 导出装配体 STEP(out_path 为完整输出路径)"""
+    """步骤 3: 导出装配体 STEP(旧版,基于 STEPControl_Writer + Compound)
+
+    ⚠ 此函数将所有零件合并为一个 TopoDS_Compound 后用 STEPControl_Writer 导出,
+      导出的 STEP 文件会丢失装配体层次结构和零件名称:
+      - SolidWorks 导入时每个零件显示为 "Open CASCADE STEP translator 7.9 X.X.step"
+      - 无法展开查看各零件,因为缺少 PRODUCT/NEXT_ASSEMBLY_USAGE_OCCURRENCE 实体
+
+    保留此函数用于:
+      1. GLB 导出流程仍需 Compound(已应用变换)
+      2. 备用方案(XCAF 导出失败时可回退)
+      3. 单零件/单面 STEP 导出(不涉及装配体结构)
+
+    如需保留装配体结构(每个零件有独立名称),请使用 step3_export_assembly_step_xcaf
+    """
     from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_AsIs
-    log("\n=== Step 3: 导出装配体 STEP ===")
+    log("\n=== Step 3: 导出装配体 STEP (旧版 Compound 模式) ===")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     t0 = time.time()
     writer = STEPControl_Writer()
@@ -629,6 +642,100 @@ def step3_export_assembly_step(compound, out_path):
     total = time.time() - t0
     size_mb = os.path.getsize(out_path) / 1024 / 1024
     log(f"  ✓ 导出: {out_path} ({size_mb:.2f} MB, {total:.2f}s)")
+    return out_path, total
+
+
+def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装配体"):
+    """步骤 3: 导出装配体 STEP(新版,基于 XCAF 保留零件名称+装配体层次结构)
+
+    使用 XCAF(XDE) 文档结构 + STEPCAFControl_Writer 导出,生成的 STEP 文件包含:
+      - PRODUCT 实体(每个零件有独立名称,如 "250前盖")
+      - NEXT_ASSEMBLY_USAGE_OCCURRENCE(装配体层次结构)
+      - SolidWorks 导入时可展开查看各零件,与 SW 原生导出效果一致
+
+    ★ pythonOCC 7.9.3 conda-forge 构建的 XCAF 初始化注意事项(崩溃修复):
+      1. 用 TDocStd_Application() 而非 XCAFApp_Application.GetApplication()
+      2. 必须先 binxcafdrivers.DefineFormat(app) 注册驱动
+      3. TDocStd_Document("XCAF") 直接传字符串,不要用 TCollection_ExtendedString
+         (后者会导致 STATUS_STACK_BUFFER_OVERRUN 崩溃)
+      4. app.NewDocument("BinXCAF", doc) 用 "BinXCAF" 格式
+      参考: https://github.com/tpaviot/pythonocc-core/issues/1428
+
+    Args:
+        shapes: dict {name: TopoDS_Shape} 原始零件 shape(未应用变换)
+        parts_data: dict {name: {transform_matrix, suppressed, ...}}
+        out_path: 输出 STEP 文件完整路径
+        asm_name: 装配体名称(默认 "装配体",可用 model_code)
+    Returns:
+        (out_path, elapsed_time)
+    """
+    from OCC.Core.BinXCAFDrivers import binxcafdrivers
+    from OCC.Core.TDocStd import TDocStd_Application, TDocStd_Document
+    from OCC.Core.XCAFDoc import XCAFDoc_DocumentTool
+    from OCC.Core.TDataStd import TDataStd_Name
+    from OCC.Core.STEPCAFControl import STEPCAFControl_Writer
+    from OCC.Core.TopLoc import TopLoc_Location
+    from OCC.Core.TopoDS import TopoDS_Compound
+    from OCC.Core.BRep import BRep_Builder
+    from OCC.Core.gp import gp_Trsf
+
+    log("\n=== Step 3: 导出装配体 STEP (XCAF 模式,保留零件名称) ===")
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    t0 = time.time()
+
+    # ★ XCAF 文档初始化(修复 conda-forge 崩溃)
+    app = TDocStd_Application()
+    binxcafdrivers.DefineFormat(app)
+    doc = TDocStd_Document("XCAF")
+    app.NewDocument("BinXCAF", doc)
+    shape_tool = XCAFDoc_DocumentTool.ShapeTool(doc.Main())
+
+    # 1. 为每个未抑制的零件创建 label + 名称
+    part_labels = {}  # {name: TDF_Label}
+    skipped = 0
+    for name, shape in shapes.items():
+        info = parts_data.get(name, {})
+        if info.get("suppressed", False):
+            skipped += 1
+            continue
+        # 提取基础名(去掉 -N 后缀,如 "250前盖-1" → "250前盖")
+        m = _KEY_RE.match(name)
+        base_name = m.group(1) if m else name
+        part_label = shape_tool.AddShape(shape, False)
+        TDataStd_Name.Set(part_label, base_name)
+        part_labels[name] = part_label
+        log(f"  ✓ 零件: {base_name}")
+
+    # 2. 创建装配体 label(用空 Compound 作为占位 shape)
+    builder = BRep_Builder()
+    asm_compound = TopoDS_Compound()
+    builder.MakeCompound(asm_compound)
+    asm_label = shape_tool.AddShape(asm_compound, True)
+    TDataStd_Name.Set(asm_label, asm_name)
+
+    # 3. 为每个零件添加 Component(带变换矩阵作为 Location)
+    for name, part_label in part_labels.items():
+        info = parts_data.get(name, {})
+        matrix = info.get("transform_matrix")
+        if matrix:
+            trsf = matrix_to_trsf(matrix)
+        else:
+            trsf = gp_Trsf()  # 单位变换
+        loc = TopLoc_Location(trsf)
+        shape_tool.AddComponent(asm_label, part_label, loc)
+
+    # 4. 更新装配体并导出
+    shape_tool.UpdateAssemblies()
+
+    writer = STEPCAFControl_Writer()
+    writer.SetNameMode(True)  # ★ 保留零件名称
+    writer.Transfer(doc)
+    writer.Write(out_path)
+
+    total = time.time() - t0
+    size_mb = os.path.getsize(out_path) / 1024 / 1024
+    log(f"  ✓ 导出: {out_path} ({size_mb:.2f} MB, {total:.2f}s, "
+        f"{len(part_labels)} 零件, 跳过 {skipped} 抑制件)")
     return out_path, total
 
 
@@ -848,7 +955,13 @@ def build_assembly(model_code, motor=None, series=None):
     cyl_path = os.path.join(model_dir, "cylinder.step")
 
     # Step 3: 装配体 STEP
-    asm_step, t_step = step3_export_assembly_step(compound, asm_path)
+    # ★ 使用 XCAF 模式导出,保留零件名称和装配体层次结构
+    #   旧版 step3_export_assembly_step(compound, asm_path) 会丢失零件名称,
+    #   SolidWorks 导入时所有零件显示为 "Open CASCADE STEP translator..."
+    #   新版 step3_export_assembly_step_xcaf 使用 XCAF/XDE 文档结构,
+    #   生成 PRODUCT + NEXT_ASSEMBLY_USAGE_OCCURRENCE 实体,与 SW 原生导出一致
+    asm_step, t_step = step3_export_assembly_step_xcaf(
+        shapes, parts_data, asm_path, asm_name=model_code)
 
     # Step 4: 缸体验证
     t_stretch = 0.0
