@@ -193,11 +193,51 @@ _KEY_RE = re.compile(r"^(.+)-(\d+)$")  # "250前盖-1" → 基础名"250前盖"
 _HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
 
 
-def _to_ascii_name(name):
-    """将中文零件名转为纯 ASCII,解决 SolidWorks 不支持 STEP Unicode 转义的问题
+def _decode_step_unicode_escapes(step_path):
+    """STEP 文件后处理:将 \\X2\\XXXX\\X0\\ Unicode 转义序列替换为实际 UTF-8 字符
 
-    SolidWorks 导入 STEP 时, \X2\...\X0\ Unicode 转义序列会显示为下划线。
-    策略: 提取 ASCII 部分(型号前缀+零件标识),中文部分用拼音首字母或下划线替代。
+    pythonOCC 的 XCAF STEP 导出器会将非 ASCII 字符编码为 ISO 10303-21 标准的
+    \\X2\\HHHH\\X0\\ 转义序列(HHHH 为 4 位十六进制 Unicode 码点)。
+    SolidWorks 对这种转义序列支持不佳,会显示为横线/下划线。
+
+    解决方案:读取 STEP 文件,将所有 \\X2\\XXXX\\X0\\ 替换为对应的 UTF-8 字符,
+    然后以 UTF-8 编码重新写入文件。SolidWorks 可正确识别 UTF-8 编码的 STEP 文件。
+
+    Args:
+        step_path: STEP 文件路径(将被原地修改)
+    """
+    try:
+        # STEP 文件默认使用 ISO-8859-1(Latin-1) 编码
+        # 转义序列 \\X2\\XXXX\\X0\\ 在文件中以 ASCII/Latin-1 字节存储
+        with open(step_path, 'r', encoding='latin-1') as f:
+            content = f.read()
+
+        def replace_escape(match):
+            hex_str = match.group(1)
+            code_point = int(hex_str, 16)
+            return chr(code_point)
+
+        # 替换所有 \\X2\\XXXX\\X0\\ 转义序列
+        new_content = re.sub(r'\\X2\\([0-9A-Fa-f]{4})\\X0\\', replace_escape, content)
+
+        # 仅当内容发生变化时才写回
+        if new_content != content:
+            with open(step_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            log(f"  ✓ STEP Unicode 转义已解码为 UTF-8")
+    except Exception as e:
+        log(f"  ⚠ STEP Unicode 解码失败(不影响功能): {e}")
+
+
+def _to_ascii_name(name):
+    """将中文零件名转为纯 ASCII(备用方案,当前已改用 UTF-8 直接写入)
+
+    原用于解决 SolidWorks 不支持 STEP Unicode 转义的问题。
+    现已改用 _decode_step_unicode_escapes() 后处理 STEP 文件,
+    将 \\X2\\XXXX\\X0\\ 转义序列替换为实际 UTF-8 字符,
+    SolidWorks 可正确识别 UTF-8 编码的 STEP 文件中的中文名称。
+
+    保留此函数作为备用回退方案。
 
     例: "250前盖" → "250QG"  "250缸体" → "250GT"  "装配体" → "ASM"
         "11kw电机" → "11kwDJ"  "AB180" → "AB180"
@@ -736,20 +776,20 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
         # 提取基础名(去掉 -N 后缀,如 "250前盖-1" → "250前盖")
         m = _KEY_RE.match(name)
         base_name = m.group(1) if m else name
-        # ★ SolidWorks 不支持 STEP 中 \X2\...\X0\ Unicode 转义序列,
-        #   中文名称会显示为下划线。用纯 ASCII 名称(保留型号前缀+零件标识)
-        ascii_name = _to_ascii_name(base_name)
+        # ★ 直接使用中文名称,导出后通过 _decode_step_unicode_escapes()
+        #   将 STEP 文件中的 \X2\XXXX\X0\ 转义序列替换为实际 UTF-8 字符,
+        #   SolidWorks 可正确识别 UTF-8 编码的 STEP 文件中的中文名称
         part_label = shape_tool.AddShape(shape, False)
-        TDataStd_Name.Set(part_label, ascii_name)
+        TDataStd_Name.Set(part_label, base_name)
         part_labels[name] = part_label
-        log(f"  ✓ 零件: {base_name} → {ascii_name}")
+        log(f"  ✓ 零件: {base_name}")
 
     # 2. 创建装配体 label(用空 Compound 作为占位 shape)
     builder = BRep_Builder()
     asm_compound = TopoDS_Compound()
     builder.MakeCompound(asm_compound)
     asm_label = shape_tool.AddShape(asm_compound, True)
-    TDataStd_Name.Set(asm_label, _to_ascii_name(asm_name))
+    TDataStd_Name.Set(asm_label, asm_name)
 
     # 3. 为每个零件添加 Component(带变换矩阵作为 Location)
     for name, part_label in part_labels.items():
@@ -769,6 +809,10 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
     writer.SetNameMode(True)  # ★ 保留零件名称
     writer.Transfer(doc)
     writer.Write(out_path)
+
+    # ★ 后处理:将 STEP 中的 \X2\XXXX\X0\ Unicode 转义序列替换为实际 UTF-8 字符
+    #   使 SolidWorks 能正确显示中文零件名称
+    _decode_step_unicode_escapes(out_path)
 
     total = time.time() - t0
     size_mb = os.path.getsize(out_path) / 1024 / 1024
