@@ -193,53 +193,72 @@ _KEY_RE = re.compile(r"^(.+)-(\d+)$")  # "250前盖-1" → 基础名"250前盖"
 _HK_RE = re.compile(r"H(\d)K(\d)")      # "H2K1" → mount=H2, load=K1
 
 
-def _decode_step_unicode_escapes(step_path):
-    """STEP 文件后处理:将 \\X2\\...\\X0\\ Unicode 转义序列替换为实际字符,以 GBK 编码写入
+def _fix_step_header_for_solidworks(step_path):
+    """修改 STEP 文件头,模仿 SolidWorks 原生导出格式
 
-    pythonOCC 的 XCAF STEP 导出器会将非 ASCII 字符编码为 ISO 10303-21 标准的
-    \\X2\\HHHH...\\X0\\ 转义序列(每 4 位十六进制 = 1 个 UTF-16 码点,连续多字符
-    会合并到一个转义块中)。
+    对比 SolidWorks 原生导出和 pythonOCC 导出的 STEP 文件发现:
+      - 两者都使用 \\X2\\HHHH\\X0\\ 转义序列编码中文 PRODUCT 名称(STEP 标准)
+      - 但文件头不同:
+        SolidWorks: FILE_DESCRIPTION(('STEP AP214'),'1')
+                    FILE_NAME(...,'SwSTEP 2.0','SolidWorks 2024','')
+                    FILE_SCHEMA(('AUTOMOTIVE_DESIGN'))
+        pythonOCC:  FILE_DESCRIPTION(('Open CASCADE Model'),'2;1')
+                    FILE_NAME(...,'Open CASCADE STEP processor 7.9',...,'Unknown')
+                    FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'))
+      - SolidWorks 根据文件头判断 STEP 来源,对第三方导出的 STEP 可能采用
+        不同解析策略,导致 \\X2\\ 转义无法正确解析,中文 PRODUCT 名称显示为横线
 
-    SolidWorks 在中文 Windows 上默认用 GBK(系统 ANSI 代码页)读取 STEP 文件:
-      - \\X2\\...\\X0\\ 转义序列无法解析 → 显示为横线
-      - UTF-8 多字节中文被当 GBK 误读 → 乱码/横线
-    因此需将转义序列解码后以 GBK 编码写入,使 SolidWorks 能正确显示中文。
+    解决方案:保留 pythonOCC 原始的 \\X2\\ 转义序列(STEP 标准,SolidWorks 能解析),
+    仅修改文件头为 SolidWorks 格式,使其用正确的解析器处理中文转义。
 
     Args:
         step_path: STEP 文件路径(将被原地修改)
     """
     try:
-        # STEP 文件默认使用 ISO-8859-1(Latin-1) 编码
-        # 转义序列 \\X2\\...\\X0\\ 在文件中以 ASCII/Latin-1 字节存储
         with open(step_path, 'r', encoding='latin-1') as f:
             content = f.read()
 
-        def replace_escape(match):
-            hex_str = match.group(1)
-            # 每 4 位十六进制 = 1 个 UTF-16 码点(支持连续多字符转义块)
-            chars = []
-            for i in range(0, len(hex_str), 4):
-                code_point = int(hex_str[i:i + 4], 16)
-                chars.append(chr(code_point))
-            return ''.join(chars)
+        original = content
 
-        # 替换所有 \\X2\\...\\X0\\ 转义序列(十六进制长度为 4 的倍数)
-        new_content = re.sub(r'\\X2\\([0-9A-Fa-f]+)\\X0\\', replace_escape, content)
+        # 提取原始时间戳(保留导出时间)
+        timestamp = ""
+        ts_match = re.search(r"'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})'", content)
+        if ts_match:
+            timestamp = ts_match.group(1)
 
-        # 仅当内容发生变化时才写回
-        if new_content != content:
-            # 优先用 GBK 编码写入(中文 Windows 上 SolidWorks 默认用 GBK 读取)
-            try:
-                with open(step_path, 'w', encoding='gbk') as f:
-                    f.write(new_content)
-                log(f"  ✓ STEP Unicode 转义已解码并以 GBK 编码写入")
-            except UnicodeEncodeError:
-                # GBK 无法编码所有字符时回退到 UTF-8
-                with open(step_path, 'w', encoding='utf-8') as f:
-                    f.write(new_content)
-                log(f"  ✓ STEP Unicode 转义已解码并以 UTF-8 编码写入(GBK 不可用)")
+        fname = os.path.basename(step_path)
+        new_file_name = (
+            f"FILE_NAME ('{fname}','{timestamp}', ( '' ), ( '' ), "
+            f"'SwSTEP 2.0', 'SolidWorks 2024', '' );"
+        )
+
+        # 1. 替换 FILE_DESCRIPTION(单行)
+        content = re.sub(
+            r"FILE_DESCRIPTION\s*\([^\n]*\);",
+            "FILE_DESCRIPTION ( 'STEP AP214' ), '1' );",
+            content, count=1
+        )
+
+        # 2. 替换 FILE_NAME(跨行,匹配到 FILE_SCHEMA 之前)
+        content = re.sub(
+            r"FILE_NAME\s*\(.*?(?=FILE_SCHEMA)",
+            new_file_name + "\n",
+            content, count=1, flags=re.DOTALL
+        )
+
+        # 3. 替换 FILE_SCHEMA(单行,去掉 { 1 0 10303 214 ... } 扩展参数)
+        content = re.sub(
+            r"FILE_SCHEMA\s*\([^\n]*\);",
+            "FILE_SCHEMA ( ( 'AUTOMOTIVE_DESIGN' ) );",
+            content, count=1
+        )
+
+        if content != original:
+            with open(step_path, 'w', encoding='latin-1') as f:
+                f.write(content)
+            log(f"  ✓ STEP 文件头已修改为 SolidWorks 格式(保留 \\X2\\ 转义)")
     except Exception as e:
-        log(f"  ⚠ STEP Unicode 解码失败(不影响功能): {e}")
+        log(f"  ⚠ STEP 文件头修改失败(不影响功能): {e}")
 
 
 def _to_ascii_name(name):
@@ -789,9 +808,9 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
         # 提取基础名(去掉 -N 后缀,如 "250前盖-1" → "250前盖")
         m = _KEY_RE.match(name)
         base_name = m.group(1) if m else name
-        # ★ 直接使用中文名称,导出后通过 _decode_step_unicode_escapes()
-        #   将 STEP 文件中的 \X2\XXXX\X0\ 转义序列替换为实际 UTF-8 字符,
-        #   SolidWorks 可正确识别 UTF-8 编码的 STEP 文件中的中文名称
+        # ★ 直接使用中文名称,pythonOCC 会编码为 \X2\HHHH\X0\ 转义序列(STEP 标准)
+        #   导出后通过 _fix_step_header_for_solidworks() 修改文件头为 SolidWorks 格式,
+        #   使 SolidWorks 用正确的解析器处理 \X2\ 中文转义
         part_label = shape_tool.AddShape(shape, False)
         TDataStd_Name.Set(part_label, base_name)
         part_labels[name] = part_label
@@ -823,9 +842,9 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
     writer.Transfer(doc)
     writer.Write(out_path)
 
-    # ★ 后处理:将 STEP 中的 \X2\XXXX\X0\ Unicode 转义序列替换为实际 UTF-8 字符
-    #   使 SolidWorks 能正确显示中文零件名称
-    _decode_step_unicode_escapes(out_path)
+    # ★ 后处理:修改文件头为 SolidWorks 格式(保留 \X2\XXXX\X0\ 转义)
+    #   SolidWorks 根据文件头判断 STEP 来源,对自身格式能正确解析 \X2\ 中文转义
+    _fix_step_header_for_solidworks(out_path)
 
     total = time.time() - t0
     size_mb = os.path.getsize(out_path) / 1024 / 1024
