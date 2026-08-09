@@ -700,7 +700,7 @@ def build_assembly(model_code, motor=None, series=None):
     glb_path, t_glb = step5_export_glb(compound, glb_path)
 
     total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
-    return {
+    result = {
         "model_code": model_code,
         "motor": motor,
         "series": series_name,
@@ -721,6 +721,20 @@ def build_assembly(model_code, motor=None, series=None):
             "glb": round(t_glb, 2),
         },
     }
+    # 保存构建元数据到 output 子目录,供前端加载历史结果
+    def _rel(p):
+        return os.path.relpath(p, OUT_DIR).replace("\\", "/") if p else None
+    info = dict(result)
+    info["step_file"] = _rel(asm_step)
+    info["glb_file"] = _rel(glb_path)
+    info["cylinder_file"] = _rel(cyl_out)
+    info_path = os.path.join(model_dir, "build_info.json")
+    try:
+        with open(info_path, "w", encoding="utf-8") as f:
+            json.dump(info, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return result
 
 
 def main():

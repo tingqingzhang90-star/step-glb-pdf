@@ -206,6 +206,11 @@
             <option value="black">纯黑背景</option>
           </select>
         </div>
+        <div class="control-group">
+          <button class="btn" id="edgeToggleBtn">
+            <i data-feather="box"></i><span>边线: 开</span>
+          </button>
+        </div>
       </div>
       <!-- 操作 -->
       <div class="section">
@@ -302,7 +307,7 @@
     const viewerConfig = {
       backgroundColor: new OV.RGBAColor(15, 20, 25, 255),
       defaultColor: new OV.RGBColor(200, 200, 200),
-      edgeSettings: new OV.EdgeSettings(false, new OV.RGBColor(0, 0, 0), 1),
+      edgeSettings: new OV.EdgeSettings(true, new OV.RGBColor(15, 20, 25), 12),
       onModelLoaded: () => {
         if (window._currentLoadTimeout) {
           clearTimeout(window._currentLoadTimeout);
@@ -376,6 +381,22 @@
     // 投影模式
     document.getElementById('projectionSelect').addEventListener('change', (e) => {
       setProjectionMode(e.target.value);
+    });
+
+    // 边线开关
+    let edgeEnabled = true;
+    document.getElementById('edgeToggleBtn').addEventListener('click', () => {
+      edgeEnabled = !edgeEnabled;
+      const btn = document.getElementById('edgeToggleBtn');
+      btn.querySelector('span').textContent = edgeEnabled ? '边线: 开' : '边线: 关';
+      if (viewer) {
+        try {
+          const innerViewer = viewer.GetViewer();
+          if (innerViewer && innerViewer.SetEdgeSettings) {
+            innerViewer.SetEdgeSettings(new OV.EdgeSettings(edgeEnabled, new OV.RGBColor(80, 80, 80), 25));
+          }
+        } catch (error) { console.log('边线切换失败'); }
+      }
     });
   }
 

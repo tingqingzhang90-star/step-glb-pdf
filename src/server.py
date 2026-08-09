@@ -109,7 +109,10 @@ HTML = r"""<!DOCTYPE html>
   .file a.view-link{color:var(--accent2)}
   .grp{margin-bottom:14px}
   .grp-hd{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:7px;
-          padding-bottom:5px;border-bottom:1px solid var(--border)}
+          padding-bottom:5px;border-bottom:1px solid var(--border);
+          cursor:pointer;user-select:none;transition:.15s}
+  .grp-hd:hover{background:#1e2a3a;border-radius:4px;padding:4px 6px;margin:-4px -6px 3px}
+  .grp-hd.clickable::after{content:' 📋';font-size:11px;opacity:.5}
   .grp-cnt{font-size:11px;color:var(--txt2);font-weight:400;margin-left:6px}
   .dl-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
   .dl-row a{flex:1;min-width:140px;text-align:center;padding:10px;background:var(--panel2);
@@ -319,7 +322,7 @@ async function loadFiles(){
   }
   list.innerHTML = data.groups.map(g=>`
     <div class="grp">
-      <div class="grp-hd">${g.model} <span class="grp-cnt">${g.files.length} 件</span></div>
+      <div class="grp-hd${g.has_info?' clickable':''}" onclick="${g.has_info?`loadHistory('${g.model}')`:''}">${g.model} <span class="grp-cnt">${g.files.length} 件</span></div>
       ${g.files.map(f=>{
         const isGlb = f.name.toLowerCase().endsWith('.glb');
         const viewLink = isGlb
@@ -332,6 +335,22 @@ async function loadFiles(){
         </div>`;
       }).join('')}
     </div>`).join('');
+}
+
+async function loadHistory(model){
+  const area = document.getElementById('resultArea');
+  area.innerHTML = '<div class="empty"><span class="spinner"></span>加载历史记录...</div>';
+  try{
+    const r = await fetch(`/api/build-info/${encodeURIComponent(model)}`);
+    const data = await r.json();
+    if(!data.ok){
+      area.innerHTML = `<div class="err-msg">加载失败: ${data.error||'未知错误'}</div>`;
+      return;
+    }
+    renderResult(data.result);
+  }catch(e){
+    area.innerHTML = `<div class="err-msg">请求异常: ${e}</div>`;
+  }
 }
 
 function fmtSize(b){
@@ -428,7 +447,8 @@ def api_files():
             if not os.path.isdir(dpath):
                 continue
             files = []
-            for fname in sorted(os.listdir(dpath)):
+            has_info = False
+            for fname in os.listdir(dpath):
                 fp = os.path.join(dpath, fname)
                 if os.path.isfile(fp):
                     st = os.stat(fp)
@@ -438,9 +458,29 @@ def api_files():
                         "size": st.st_size,
                         "mtime": int(st.st_mtime),
                     })
+                    if fname == "build_info.json":
+                        has_info = True
+            # 分组内文件按修改时间倒序(最新的在前)
+            files.sort(key=lambda f: f["mtime"], reverse=True)
             if files:
-                groups.append({"model": dname, "files": files})
+                groups.append({"model": dname, "files": files, "has_info": has_info})
+    # 按最新文件修改时间倒序(最近生成的排前面)
+    groups.sort(key=lambda g: max(f["mtime"] for f in g["files"]), reverse=True)
     return jsonify({"groups": groups, "total": sum(len(g["files"]) for g in groups)})
+
+
+@app.route("/api/build-info/<model_code>")
+def api_build_info(model_code):
+    """读取指定型号的构建元数据(build_info.json)"""
+    info_path = os.path.join(OUT_DIR, model_code, "build_info.json")
+    if not os.path.isfile(info_path):
+        return jsonify({"ok": False, "error": "未找到构建记录"}), 404
+    try:
+        with open(info_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify({"ok": True, "result": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/download/<path:filename>")
