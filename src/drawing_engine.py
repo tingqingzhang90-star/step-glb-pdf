@@ -805,11 +805,17 @@ def _segments_to_svg(segments, hidden_segments=None, width=120, height=90,
 
 
 def generate_all_standard_views(step_path, include_hidden=False,
-                                thumb_width=120, thumb_height=90):
-    """生成所有 9 个标准视图(含 SVG 缩略图)
+                                thumb_width=120, thumb_height=90,
+                                canvas_width=400, canvas_height=300):
+    """生成所有 9 个标准视图(含 SVG 缩略图 + 画布用边线数据)
 
     用于 SolidWorks 风格视图面板:导入模型后预生成所有可用视图,
     用户从面板拖拽视图到图纸画布。
+
+    关键修复:
+      - 缩略图归一化到 thumb_width×thumb_height(120×90)用于面板显示
+      - 画布边线归一化到 canvas_width×canvas_height(400×300)用于放置
+      - 之前两者共用同一尺寸,导致边线坐标太小在 A0 画布上不可见
 
     性能优化:
       - 使用 BRep 缓存读取(比 STEP 快 14 倍)
@@ -821,6 +827,8 @@ def generate_all_standard_views(step_path, include_hidden=False,
         include_hidden: 是否生成隐藏边(虚线),默认 False(更快)
         thumb_width: 缩略图宽度(px)
         thumb_height: 缩略图高度(px)
+        canvas_width: 画布边线归一化宽度(px)
+        canvas_height: 画布边线归一化高度(px)
 
     Returns:
         {
@@ -828,10 +836,10 @@ def generate_all_standard_views(step_path, include_hidden=False,
                 "front": {
                     "label": "前视",
                     "group": "standard",
-                    "thumbnail": "<svg>...</svg>",      # 缩略图 SVG
-                    "edges": [...],                      # 归一化后的边线(用于放置到画布)
+                    "thumbnail": "<svg>...</svg>",      # 缩略图 SVG (120×90)
+                    "edges": [...],                      # 画布边线 (400×300)
                     "hidden_edges": [...],
-                    "bbox": {"x", "y", "width", "height", "scale", "orig_width", "orig_height"},
+                    "bbox": {"x", "y", "width", "height"},
                     "seg_count": int,
                     "project_time": float
                 },
@@ -875,25 +883,28 @@ def generate_all_standard_views(step_path, include_hidden=False,
         )
         t_proj = time.time() - t2
 
-        # 归一化(用于缩略图和画布放置)
-        norm_visible, norm_hidden, view_bbox = _normalize_view(
+        # 1. 缩略图归一化(小尺寸,用于面板显示)
+        thumb_visible, thumb_hidden, _ = _normalize_view(
             visible, hidden, thumb_width, thumb_height
         )
-
-        # 生成 SVG 缩略图
         thumbnail = _segments_to_svg(
-            norm_visible, norm_hidden, thumb_width, thumb_height
+            thumb_visible, thumb_hidden, thumb_width, thumb_height
+        )
+
+        # 2. 画布边线归一化(大尺寸,用于放置到图纸)
+        canvas_visible, canvas_hidden, canvas_bbox = _normalize_view(
+            visible, hidden, canvas_width, canvas_height
         )
 
         result_views[view_name] = {
             "label": cfg["label"],
             "group": cfg["group"],
             "thumbnail": thumbnail,
-            "edges": norm_visible,
-            "hidden_edges": norm_hidden,
-            "bbox": view_bbox,
-            "seg_count": len(norm_visible),
-            "hidden_count": len(norm_hidden),
+            "edges": canvas_visible,
+            "hidden_edges": canvas_hidden,
+            "bbox": canvas_bbox,
+            "seg_count": len(canvas_visible),
+            "hidden_count": len(canvas_hidden),
             "project_time": round(t_proj, 3)
         }
 
