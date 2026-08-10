@@ -100,13 +100,17 @@ def read_shape_cached(step_path):
 def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     """对 shape 执行 HLR 投影,返回 (visible_edges, hidden_edges)
 
-    使用 HLRBRep_Algo(精确隐藏线消除算法)。
-    默认不生成隐藏边(工程图通常只显示可见轮廓),大幅减少输出数据量。
+    模仿 FreeCAD TechDraw DrawViewPart.cpp 的实现:
+      1) 预处理: center(将 shape 包围盒中心移到原点,避免坐标过大)
+      2) HLR 投影: HLRBRep_Algo + HLRAlgo_Projector(gp_Ax2)
+      3) 边线分类: 分别提取 OutLineV/Rg1LineV/OutLineH(参考 FreeCAD)
 
-    关键优化(参考 OCC 官方文档和 CadQuery 实践):
-      - 使用 OutLineVCompound() 只提取外轮廓边,避免内部边杂乱
-      - VCompound() 返回所有可见边(包括内部边),工业图不用
-      - OutLineVCompound() 返回外轮廓边,是工业图标准做法
+    边线类型(参考 FreeCAD TechDraw 和 OCC 文档):
+      - OutLineVCompound:  外轮廓可见边(主实线,工业图主体)
+      - Rg1LineVCompound:  G1连续边(光滑过渡边,细实线)
+      - VCompound:         所有可见边(含内部边,通常不用)
+      - OutLineHCompound:  外轮廓隐藏边(虚线)
+      - HCompound:         所有隐藏边(虚线)
 
     Args:
         shape: TopoDS_Shape - 3D 形状
@@ -125,35 +129,88 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
         else:
             up_dir = gp_Dir(0, 1, 0)
 
-    # 构造投影坐标系(使用 gp_Ax2,参考 OCC 论坛官方回复)
+    # === 1) 预处理: 将 shape 包围盒中心移到原点 ===
+    # 参考 FreeCAD DrawViewPart.cpp 的 center() 步骤
+    # 目的: 避免大坐标值导致浮点精度问题
+    from OCC.Core.Bnd import Bnd_Box
+    from OCC.Core.BRepBndLib import brepbndlib
+    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCC.Core.gp import gp_Trsf, gp_Vec
+
+    bbox = Bnd_Box()
+    brepbndlib.Add(shape, bbox)
+    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
+    cx = (xmin + xmax) / 2.0
+    cy = (ymin + ymax) / 2.0
+    cz = (zmin + zmax) / 2.0
+
+    # 平移到原点(只在坐标较大时才平移,避免无谓开销)
+    if max(abs(cx), abs(cy), abs(cz)) > 1000:
+        trsf = gp_Trsf()
+        trsf.SetTranslation(gp_Vec(-cx, -cy, -cz))
+        shape = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+
+    # === 2) HLR 投影(精确算法) ===
     origin = gp_Pnt(0, 0, 0)
     ax2 = gp_Ax2(origin, view_dir, up_dir)
 
-    # 使用精确 HLR 算法
     hlr = HLRBRep_Algo()
     hlr.Add(shape)
     hlr.Projector(HLRAlgo_Projector(ax2))
     hlr.Update()
     hlr.Hide()
 
-    # 提取可见和隐藏边
+    # === 3) 边线分类提取(参考 FreeCAD TechDraw) ===
     hlr_to_shape = HLRBRep_HLRToShape(hlr)
 
-    # 可见边(实线)— 优先使用 OutLineVCompound(外轮廓,工业图标准)
-    # OutLineVCompound 只包含外轮廓边,避免内部边杂乱
-    visible_shape = hlr_to_shape.OutLineVCompound()
-    if visible_shape is None or visible_shape.IsNull():
-        # 回退到 VCompound(所有可见边)
-        visible_shape = hlr_to_shape.VCompound()
-    visible_segments = _extract_2d_segments(visible_shape)
+    visible_segments = []
 
-    # 隐藏边(虚线) - 默认不提取(性能优化)
+    # 3a) 外轮廓可见边(主实线)— 工业图主体
+    outline_v = hlr_to_shape.OutLineVCompound()
+    if outline_v is not None and not outline_v.IsNull():
+        segs = _extract_2d_segments(outline_v)
+        for s in segs:
+            s["edge_class"] = "outline"  # 外轮廓
+        visible_segments.extend(segs)
+
+    # 3b) G1连续边(光滑过渡边,细实线)— 可选,通常工业图也显示
+    # 注意: Rg1LineVCompound 在某些 OCC 版本可能返回 None
+    try:
+        rg1_v = hlr_to_shape.Rg1LineVCompound()
+        if rg1_v is not None and not rg1_v.IsNull():
+            segs = _extract_2d_segments(rg1_v)
+            for s in segs:
+                s["edge_class"] = "smooth"  # 光滑过渡边
+            visible_segments.extend(segs)
+    except Exception:
+        pass  # 某些 OCC 版本不支持此方法
+
+    # 3c) 如果外轮廓为空,回退到 VCompound(所有可见边)
+    if not visible_segments:
+        v_compound = hlr_to_shape.VCompound()
+        if v_compound is not None and not v_compound.IsNull():
+            segs = _extract_2d_segments(v_compound)
+            for s in segs:
+                s["edge_class"] = "visible"
+            visible_segments.extend(segs)
+
+    # 3d) 隐藏边(虚线) - 默认不提取(性能优化)
     hidden_segments = []
     if show_hidden:
-        hidden_shape = hlr_to_shape.OutLineHCompound()
-        if hidden_shape is None or hidden_shape.IsNull():
-            hidden_shape = hlr_to_shape.HCompound()
-        hidden_segments = _extract_2d_segments(hidden_shape)
+        outline_h = hlr_to_shape.OutLineHCompound()
+        if outline_h is not None and not outline_h.IsNull():
+            segs = _extract_2d_segments(outline_h)
+            for s in segs:
+                s["edge_class"] = "hidden_outline"
+            hidden_segments.extend(segs)
+        else:
+            # 回退到 HCompound
+            h_compound = hlr_to_shape.HCompound()
+            if h_compound is not None and not h_compound.IsNull():
+                segs = _extract_2d_segments(h_compound)
+                for s in segs:
+                    s["edge_class"] = "hidden"
+                hidden_segments.extend(segs)
 
     return visible_segments, hidden_segments
 
