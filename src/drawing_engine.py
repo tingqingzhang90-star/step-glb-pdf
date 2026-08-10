@@ -1005,19 +1005,19 @@ STANDARD_VIEW_CONFIGS = {
     #   viewer front: eye=+Z → view_dir=-Z(从 +Z 看向原点)
     #   drawing_engine front: dir=-Z(视线方向 -Z, 投影到 X-Y 平面)
     #
-    # viewer setCameraView → view_dir → drawing_engine dir:
-    #   front: eye=+Z → view_dir=-Z → dir=-Z  (圆形端面 300×338)
-    #   back:  eye=-Z → view_dir=+Z → dir=+Z  (圆形端面,另一侧)
-    #   left:  eye=-X → view_dir=+X → dir=+X  (侧面,长轴水平)
-    #   right: eye=+X → view_dir=-X → dir=-X  (侧面,长轴水平)
-    #   top:   eye=+Y → view_dir=-Y → dir=-Y  (俯视侧面)
-    #   bottom:eye=-Y → view_dir=+Y → dir=+Y  (仰视侧面)
+    # viewer setCameraView → 实际显示 → drawing_engine dir:
+    #   front: eye=+Z → 圆形端面 → dir=-Z(沿Z轴投影,显示X-Y平面)
+    #   back:  eye=-Z → 圆形端面 → dir=+Z
+    #   left:  eye=-X → 圆柱水平(电机在左) → dir=-Y(沿Y轴投影,显示X-Z平面)
+    #   right: eye=+X → 圆柱水平(电机在右) → dir=+Y
+    #   top:   eye=+Y → 圆柱垂直(电机在上) → dir=+X(沿X轴投影,显示Y-Z平面)
+    #   bottom:eye=-Y → 圆柱垂直(电机在下) → dir=-X
     "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
     "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
-    "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
-    "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, -1), "label": "下视",  "group": "standard"},
+    "left":     {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "左视",  "group": "standard"},
+    "right":    {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "右视",  "group": "standard"},
+    "top":      {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "上视",  "group": "standard"},
+    "bottom":   {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "下视",  "group": "standard"},
     # 3 个轴测视图
     "isometric":      {"dir": gp_Dir(-1, -1, -1),  "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
     "dimetric_left":  {"dir": gp_Dir(1, -1, -0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
