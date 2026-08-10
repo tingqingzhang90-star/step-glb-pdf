@@ -160,57 +160,41 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     hlr.Update()
     hlr.Hide()
 
-    # === 3) 边线分类提取(参考 FreeCAD TechDraw) ===
+    # === 3) 边线分类提取(参考 FreeCAD TechDraw DrawViewPart.cpp) ===
+    #
+    # FreeCAD 的实际做法(从源码确认):
+    #   - 主源: VCompound() — 所有可见边(装配体需要完整边线,不能只用轮廓)
+    #   - OutLineVCompound() 只用于标记哪些边是外轮廓(线宽加粗)
+    #   - 不叠加 OutLineV + Rg1LineV(会重复/冲突)
+    #
+    # 之前用 OutLineVCompound 作为主源导致视图破碎:
+    #   装配体含多个零件,每个零件只返回自己的外轮廓片段,
+    #   零件之间不连接,看起来像断开的碎片。
     hlr_to_shape = HLRBRep_HLRToShape(hlr)
 
+    # 3a) 主源: 所有可见边(装配体工程图必须用这个)
+    v_compound = hlr_to_shape.VCompound()
     visible_segments = []
+    if v_compound is not None and not v_compound.IsNull():
+        visible_segments = _extract_2d_segments(v_compound)
+        for s in visible_segments:
+            s["edge_class"] = "visible"
 
-    # 3a) 外轮廓可见边(主实线)— 工业图主体
+    # 3b) 标记外轮廓边(用于线宽区分,不额外添加边)
     outline_v = hlr_to_shape.OutLineVCompound()
     if outline_v is not None and not outline_v.IsNull():
-        segs = _extract_2d_segments(outline_v)
-        for s in segs:
-            s["edge_class"] = "outline"  # 外轮廓
-        visible_segments.extend(segs)
+        outline_segs = _extract_2d_segments(outline_v)
+        # 将 visible_segments 中与 outline 重合的边标记为 outline
+        _mark_outline_edges(visible_segments, outline_segs)
 
-    # 3b) G1连续边(光滑过渡边,细实线)— 可选,通常工业图也显示
-    # 注意: Rg1LineVCompound 在某些 OCC 版本可能返回 None
-    try:
-        rg1_v = hlr_to_shape.Rg1LineVCompound()
-        if rg1_v is not None and not rg1_v.IsNull():
-            segs = _extract_2d_segments(rg1_v)
-            for s in segs:
-                s["edge_class"] = "smooth"  # 光滑过渡边
-            visible_segments.extend(segs)
-    except Exception:
-        pass  # 某些 OCC 版本不支持此方法
-
-    # 3c) 如果外轮廓为空,回退到 VCompound(所有可见边)
-    if not visible_segments:
-        v_compound = hlr_to_shape.VCompound()
-        if v_compound is not None and not v_compound.IsNull():
-            segs = _extract_2d_segments(v_compound)
-            for s in segs:
-                s["edge_class"] = "visible"
-            visible_segments.extend(segs)
-
-    # 3d) 隐藏边(虚线) - 默认不提取(性能优化)
+    # 3c) 隐藏边(虚线) - 默认不提取(性能优化)
     hidden_segments = []
     if show_hidden:
-        outline_h = hlr_to_shape.OutLineHCompound()
-        if outline_h is not None and not outline_h.IsNull():
-            segs = _extract_2d_segments(outline_h)
-            for s in segs:
-                s["edge_class"] = "hidden_outline"
-            hidden_segments.extend(segs)
-        else:
-            # 回退到 HCompound
-            h_compound = hlr_to_shape.HCompound()
-            if h_compound is not None and not h_compound.IsNull():
-                segs = _extract_2d_segments(h_compound)
-                for s in segs:
-                    s["edge_class"] = "hidden"
-                hidden_segments.extend(segs)
+        h_compound = hlr_to_shape.HCompound()
+        if h_compound is not None and not h_compound.IsNull():
+            hidden_segments = _extract_2d_segments(h_compound)
+            for s in hidden_segments:
+                s["edge_class"] = "hidden"
 
     return visible_segments, hidden_segments
 
@@ -371,6 +355,40 @@ def _project_to_image(shape, view_dir, up_dir=None,
         "view_dir": (float(view_dir.X()), float(view_dir.Y()), float(view_dir.Z())),
         "up_dir": (float(up_dir.X()), float(up_dir.Y()), float(up_dir.Z()))
     }
+
+
+def _mark_outline_edges(visible_segments, outline_segments, tol=0.5):
+    """将 visible_segments 中与 outline 重合的边标记为 edge_class='outline'
+
+    用途: 外轮廓边用粗线(1.5px),内部边用细线(0.75px),区分层次。
+    通过比较边的包围盒中心点距离来判断重合(简单高效)。
+    """
+    if not outline_segments:
+        return
+    # 构建 outline 边的中心点集合
+    outline_centers = set()
+    for seg in outline_segments:
+        if seg["type"] == "line":
+            cx = round((seg["x1"] + seg["x2"]) / 2.0, 1)
+            cy = round((seg["y1"] + seg["y2"]) / 2.0, 1)
+            outline_centers.add((cx, cy))
+        elif seg["type"] == "circle":
+            cx = round(seg["cx"], 1)
+            cy = round(seg["cy"], 1)
+            outline_centers.add((cx, cy))
+
+    # 标记 visible_segments 中匹配的边
+    for seg in visible_segments:
+        if seg["type"] == "line":
+            cx = round((seg["x1"] + seg["x2"]) / 2.0, 1)
+            cy = round((seg["y1"] + seg["y2"]) / 2.0, 1)
+            if (cx, cy) in outline_centers:
+                seg["edge_class"] = "outline"
+        elif seg["type"] == "circle":
+            cx = round(seg["cx"], 1)
+            cy = round(seg["cy"], 1)
+            if (cx, cy) in outline_centers:
+                seg["edge_class"] = "outline"
 
 
 def _extract_2d_segments(shape):
