@@ -657,7 +657,7 @@
   }
 
   // 提取6个标准视图的边线数据(用于工程图标注)
-  // 复用 setCameraView 的相机方向,确保与 3D 视图完全一致
+  // 使用深度缓冲做隐藏线消除(HLR),只保留可见边
   function extractStandardViewEdges() {
     if (!viewer || !currentModel) {
       alert('请先加载模型');
@@ -665,11 +665,12 @@
     }
     const resultEl = document.getElementById('edgeExtractResult');
     resultEl.style.display = 'block';
-    resultEl.innerHTML = '<div style="color:var(--text-primary)">正在提取边线...</div>';
+    resultEl.innerHTML = '<div style="color:var(--text-primary)">正在提取边线(含HLR)...</div>';
 
     try {
       const innerViewer = viewer.GetViewer();
       const scene = innerViewer.scene;
+      const renderer = innerViewer.renderer;
       const bbox = OV.GetBoundingBox(currentModel);
       const center = {
         x: (bbox.min.x + bbox.max.x) / 2,
@@ -678,6 +679,10 @@
       };
       const size = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z);
       const distance = size * 2;
+
+      // 获取 THREE 命名空间(从 scene 原型链提取)
+      // scene 是 THREE.Scene 实例,其 __proto__ 链上有 Object3D
+      const THREE_NS = getThreeNamespace(scene);
 
       // 1. 收集所有边线 3D 顶点(世界坐标 mm)
       const allEdges = [];
@@ -709,13 +714,37 @@
         '下视(bottom)': { eye: [0, -distance, 0], up: [0, 0, 1] }
       };
 
-      // 3. 生成可视化 SVG
-      const svgSize = 200; // 每个视图的画布大小
-      const padding = 20;
+      // 3. 创建离屏渲染器和正交相机(用于 HLR)
+      const hlrSize = 512;
+      const hlrRenderer = new THREE_NS.WebGLRenderer({ antialias: false, preserveDrawingBuffer: true });
+      hlrRenderer.setSize(hlrSize, hlrSize);
+      hlrRenderer.setClearColor(0x000000, 1);
+
+      const halfSize = size * 0.6;
+      const hlrCamera = new THREE_NS.OrthographicCamera(-halfSize, halfSize, halfSize, -halfSize, 0.1, distance * 3);
+
+      // 4. 对每个视图做 HLR + 投影
+      const svgSize = 200;
+      const padding = 15;
       let html = `<div style="margin-bottom:8px;color:var(--text-primary);font-weight:600">模型 BBox: X=${(bbox.max.x-bbox.min.x).toFixed(0)} Y=${(bbox.max.y-bbox.min.y).toFixed(0)} Z=${(bbox.max.z-bbox.min.z).toFixed(0)} 总边线=${allEdges.length}</div>`;
       html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">';
 
       for (const [name, cfg] of Object.entries(viewConfigs)) {
+        // 设置相机
+        hlrCamera.position.set(center.x + cfg.eye[0], center.y + cfg.eye[1], center.z + cfg.eye[2]);
+        hlrCamera.up.set(cfg.up[0], cfg.up[1], cfg.up[2]);
+        hlrCamera.lookAt(center.x, center.y, center.z);
+        hlrCamera.updateProjectionMatrix();
+
+        // 渲染场景获取深度缓冲
+        hlrRenderer.render(scene, hlrCamera);
+
+        // 读取深度缓冲
+        const depthBuffer = new Float32Array(hlrSize * hlrSize);
+        const gl = hlrRenderer.getContext();
+        gl.readPixels(0, 0, hlrSize, hlrSize, gl.DEPTH_COMPONENT, gl.FLOAT, depthBuffer);
+
+        // 计算视图方向向量(用于 2D 投影)
         const dirLen = Math.hypot(cfg.eye[0], cfg.eye[1], cfg.eye[2]);
         const dir = [cfg.eye[0]/dirLen, cfg.eye[1]/dirLen, cfg.eye[2]/dirLen];
         const up = cfg.up;
@@ -725,33 +754,64 @@
           dir[0]*up[1] - dir[1]*up[0]
         ];
 
-        // 投影所有边线到 2D
+        // 投影边线并做 HLR 过滤
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        const projected = [];
+        const visibleEdges = [];
+        let hiddenCount = 0;
+
         for (const edge of allEdges) {
-          const dx1 = edge.v1[0]-center.x, dy1 = edge.v1[1]-center.y, dz1 = edge.v1[2]-center.z;
-          const dx2 = edge.v2[0]-center.x, dy2 = edge.v2[1]-center.y, dz2 = edge.v2[2]-center.z;
-          const sx1 = dx1*right[0]+dy1*right[1]+dz1*right[2];
-          const sy1 = dx1*up[0]+dy1*up[1]+dz1*up[2];
-          const sx2 = dx2*right[0]+dy2*right[1]+dz2*right[2];
-          const sy2 = dx2*up[0]+dy2*up[1]+dz2*up[2];
+          const mx = (edge.v1[0] + edge.v2[0]) / 2;
+          const my = (edge.v1[1] + edge.v2[1]) / 2;
+          const mz = (edge.v1[2] + edge.v2[2]) / 2;
+
+          const dx = mx - center.x, dy = my - center.y, dz = mz - center.z;
+          const sx = dx*right[0] + dy*right[1] + dz*right[2];
+          const sy = dx*up[0] + dy*up[1] + dz*up[2];
+
+          const ndcX = sx / halfSize;
+          const ndcY = sy / halfSize;
+          const px = Math.floor((ndcX + 1) / 2 * hlrSize);
+          const py = Math.floor((1 - ndcY) / 2 * hlrSize);
+
+          if (px < 0 || px >= hlrSize || py < 0 || py >= hlrSize) {
+            hiddenCount++;
+            continue;
+          }
+
+          const depthIdx = py * hlrSize + px;
+          const surfaceDepth = depthBuffer[depthIdx];
+
+          const camDirX = dir[0], camDirY = dir[1], camDirZ = dir[2];
+          const edgeDepth = dx*camDirX + dy*camDirY + dz*camDirZ + distance;
+          const normalizedEdgeDepth = (edgeDepth - hlrCamera.near) / (hlrCamera.far - hlrCamera.near);
+
+          const tolerance = 0.002;
+          if (normalizedEdgeDepth > surfaceDepth + tolerance) {
+            hiddenCount++;
+            continue;
+          }
+
+          const sx1 = (edge.v1[0]-center.x)*right[0] + (edge.v1[1]-center.y)*right[1] + (edge.v1[2]-center.z)*right[2];
+          const sy1 = (edge.v1[0]-center.x)*up[0] + (edge.v1[1]-center.y)*up[1] + (edge.v1[2]-center.z)*up[2];
+          const sx2 = (edge.v2[0]-center.x)*right[0] + (edge.v2[1]-center.y)*right[1] + (edge.v2[2]-center.z)*right[2];
+          const sy2 = (edge.v2[0]-center.x)*up[0] + (edge.v2[1]-center.y)*up[1] + (edge.v2[2]-center.z)*up[2];
+
           minX = Math.min(minX, sx1, sx2);
           minY = Math.min(minY, sy1, sy2);
           maxX = Math.max(maxX, sx1, sx2);
           maxY = Math.max(maxY, sy1, sy2);
-          projected.push({ x1: sx1, y1: sy1, x2: sx2, y2: sy2 });
+          visibleEdges.push({ x1: sx1, y1: sy1, x2: sx2, y2: sy2 });
         }
 
         const w = maxX - minX, h = maxY - minY;
-        const scale = (svgSize - 2*padding) / Math.max(w, h);
+        const scale = (svgSize - 2*padding) / Math.max(w, h, 1);
         const offsetX = (svgSize - w*scale)/2 - minX*scale;
         const offsetY = (svgSize - h*scale)/2 - minY*scale;
 
-        // 生成 SVG
         let svgLines = '';
-        for (const p of projected) {
+        for (const p of visibleEdges) {
           const px1 = p.x1*scale + offsetX;
-          const py1 = svgSize - (p.y1*scale + offsetY); // Y 轴翻转
+          const py1 = svgSize - (p.y1*scale + offsetY);
           const px2 = p.x2*scale + offsetX;
           const py2 = svgSize - (p.y2*scale + offsetY);
           svgLines += `<line x1="${px1.toFixed(1)}" y1="${py1.toFixed(1)}" x2="${px2.toFixed(1)}" y2="${py2.toFixed(1)}" stroke="#333" stroke-width="0.5"/>`;
@@ -759,16 +819,70 @@
 
         html += `<div style="border:1px solid var(--border-color);border-radius:6px;padding:8px;background:var(--bg-secondary)">`;
         html += `<div style="font-size:12px;color:var(--text-primary);margin-bottom:4px;font-weight:600">${name}</div>`;
-        html += `<div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px">${w.toFixed(0)}×${h.toFixed(0)}mm</div>`;
+        html += `<div style="font-size:10px;color:var(--text-secondary);margin-bottom:6px">${w.toFixed(0)}×${h.toFixed(0)}mm 可见:${visibleEdges.length} 隐藏:${hiddenCount}</div>`;
         html += `<svg width="${svgSize}" height="${svgSize}" style="background:#fff;border-radius:4px">${svgLines}</svg>`;
         html += `</div>`;
       }
       html += '</div>';
       resultEl.innerHTML = html;
+
+      hlrRenderer.dispose();
     } catch (error) {
       resultEl.innerHTML = `<div style="color:var(--error)">提取失败: ${error.message}</div>`;
       console.error(error);
     }
+  }
+
+  // 从 Three.js 对象的原型链提取 THREE 命名空间
+  function getThreeNamespace(obj) {
+    // 方法1: 如果 window.THREE 存在直接用
+    if (window.THREE) return window.THREE;
+    // 方法2: 从对象的原型链找到 Object3D 类,其模块作用域包含所有 THREE 类
+    // 遍历原型链找 constructor
+    let current = obj;
+    while (current) {
+      const ctor = current.constructor;
+      if (ctor && ctor.name === 'Object3D') {
+        // Object3D 的模块作用域就是 THREE
+        // 但无法直接访问模块作用域,改用方法3
+        break;
+      }
+      current = Object.getPrototypeOf(current);
+    }
+    // 方法3: 从 WebGLRenderer 实例获取
+    // renderer 是 WebGLRenderer 实例,其原型链上有 WebGLRenderer -> Renderer -> Object
+    // 但同样无法访问模块作用域
+    // 方法4: 利用 scene 上挂载的 THREE 内部引用
+    // Three.js 的 Scene 对象没有直接引用 THREE 命名空间
+    // 最终方案: 从 o3dv 的 OV 对象获取,OV 内部引用了 THREE
+    // OV 是 o3dv 的全局对象,它内部使用了 THREE
+    // 通过 OV 的任意方法或属性,可以间接获取 THREE
+    // 最可靠的方式: 从 renderer 的 properties 获取 gl,然后反推
+    // 但实际上最简单的是: o3dv 的 min.js 中 THREE 被打包为模块变量
+    // 我们无法直接访问,但可以重新创建所需的类
+    // 方案: 不依赖 THREE 命名空间,用原生 WebGL API
+    // 但 OrthographicCamera 和 WebGLRenderer 需要 THREE...
+    // 最终方案: 从 scene 对象上找 _three 或类似属性
+    // 或者从 OV 模块获取
+    if (typeof OV !== 'undefined' && OV._THREE) return OV._THREE;
+    // 尝试从 OV 模块内部获取
+    // OV 是 o3dv 的命名空间,查看其属性
+    for (const key of Object.keys(OV)) {
+      const val = OV[key];
+      if (val && typeof val === 'object' && val.WebGLRenderer && val.Scene) {
+        return val;
+      }
+    }
+    // 最后尝试: 从 scene 的 uuid 属性所在的模块获取
+    // Three.js 对象都有 uuid,其构造函数在模块作用域中
+    // 通过 eval 或 Function 构造器无法访问闭包变量
+    // 终极方案: 利用 renderer 的 context 和 Three.js 内部结构
+    // renderer.properties 包含 WebGL 上下文信息
+    // 但实际上,我们只需要 WebGLRenderer 和 OrthographicCamera
+    // 这两个类在 o3dv 的 bundle 中
+    // 通过 OV.EmbeddedViewer 或 OV.Viewer 可以间接创建
+    // 查看 OV 是否有创建渲染器的方法
+    throw new Error('无法获取 THREE 命名空间。o3dv 内部打包了 THREE 但未暴露。请检查 OV 对象是否有 THREE 引用。');
   }
 
   // 暴露给外部调用

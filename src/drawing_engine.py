@@ -250,45 +250,44 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     return visible_segments, hidden_segments
 
 
-def _project_to_image(shape, view_dir, up_dir=None,
-                      image_size=(400, 300), line_thickness=1.0,
-                      use_hlr=True):
+def _project_to_image(shape, view_name,
+                      image_size=(400, 300), use_hlr=True):
     """使用 OCC 离屏渲染导出视图 PNG(Base64 编码)
 
-    这是 SolidWorks 等专业软件内部使用的 3D 渲染管线 + HLR 模式。
-    相比 HLRBRep_Algo 几何算法,渲染管线方式:
-      - 效果可靠(就是 pythonOCC GUI 中看到的效果)
-      - 速度极快(OpenGL GPU 加速,毫秒级)
-      - 无需处理边线断裂问题(渲染管线天然处理遮挡)
+    使用 OCC 内置的 View_Front/Top/Left/Right/Bottom/Back 方法,
+    这些方法由 OCC 内部正确处理相机方向,与 SolidWorks/FreeCAD 一致。
+    参考: https://blog.csdn.net/qq_43184070/article/details/151617543
 
     Args:
         shape: TopoDS_Shape - 3D 形状
-        view_dir: gp_Dir - 视图方向(投影方向)
-        up_dir: gp_Dir - 上方向(控制视图旋转)
+        view_name: str - 视图名称(front/back/left/right/top/bottom)
         image_size: (width, height) - 输出图像尺寸
-        line_thickness: 线宽
         use_hlr: 是否使用 HLR 模式(隐藏线消除),True=线框+隐藏线消除
 
     Returns:
         dict: {
-            "png_base64": str,        # PNG 图像的 base64 编码
+            "png_base64": str,
             "width": int, "height": int,
-            "view_dir": tuple, "up_dir": tuple
+            "view_name": str
         }
     """
     import base64
     import tempfile
     import os as os_module
     from OCC.Display.OCCViewer import OffscreenRenderer
-    from OCC.Core.Quantity import Quantity_Color, Quantity_NOC_BLACK, Quantity_NOC_WHITE
+    from OCC.Core.Quantity import Quantity_Color, Quantity_NOC_BLACK
     from OCC.Core.AIS import AIS_Shape
     from OCC.Core.Aspect import Aspect_GFM_NONE
 
-    if up_dir is None:
-        if abs(view_dir.Z()) < 0.9:
-            up_dir = gp_Dir(0, 0, 1)
-        else:
-            up_dir = gp_Dir(0, 1, 0)
+    # 视图名称到 OCC 内置方法的映射
+    view_method_map = {
+        "front":  "View_Front",
+        "back":   "View_Back",
+        "left":   "View_Left",
+        "right":  "View_Right",
+        "top":    "View_Top",
+        "bottom": "View_Bottom",
+    }
 
     # 1. 创建离屏渲染器(无需 GUI)
     renderer = OffscreenRenderer(screen_size=image_size)
@@ -317,15 +316,10 @@ def _project_to_image(shape, view_dir, up_dir=None,
     renderer.Context.Display(ais_shape, True)
     ais_shape.SetColor(Quantity_Color(Quantity_NOC_BLACK))
 
-    # 7. 设置视图方向(OCC V3d_View 的 eye/center/up 三个向量)
-    eye = gp_Pnt(0, 0, 0)
-    center = gp_Pnt(float(view_dir.X()), float(view_dir.Y()), float(view_dir.Z()))
-    up = gp_Pnt(float(up_dir.X()), float(up_dir.Y()), float(up_dir.Z()))
-    renderer.View.SetEye(eye)
-    renderer.View.SetAt(center)
-    renderer.View.SetUp(up)
-    # SetProj 必须用 gp_Dir 类型
-    renderer.View.SetProj(view_dir, up_dir)
+    # 7. 使用 OCC 内置视图方向方法
+    method_name = view_method_map.get(view_name, "View_Front")
+    view_method = getattr(renderer, method_name)
+    view_method()
 
     # 8. 自适应模型到视图
     renderer.FitAll()
@@ -352,8 +346,7 @@ def _project_to_image(shape, view_dir, up_dir=None,
         "png_base64": png_b64,
         "width": image_size[0],
         "height": image_size[1],
-        "view_dir": (float(view_dir.X()), float(view_dir.Y()), float(view_dir.Z())),
-        "up_dir": (float(up_dir.X()), float(up_dir.Y()), float(up_dir.Z()))
+        "view_name": view_name
     }
 
 
@@ -1022,26 +1015,34 @@ def _rotate_shape_to_standard(shape):
 
 
 STANDARD_VIEW_CONFIGS = {
-    # 6 个基本视图(模型已旋转到标准位置:长轴沿X轴水平)
+    # 6 个基本视图 - 直接匹配 viewer.html 的 Z-up 坐标系(不旋转模型)
     #
-    # 旋转后模型 bbox: X=1731(长轴), Y=348, Z=350
-    # viewer 相机方向(旋转后坐标系):
-    #   front: eye=+Z(短轴) → dir=-Z → 圆形端面(350×348)
-    #   back:  eye=-Z → dir=+Z → 圆形端面(另一侧)
-    #   left:  eye=-X(长轴) → dir=+X → 侧面(长轴水平,电机在左)
-    #   right: eye=+X → dir=-X → 侧面(长轴水平,电机在右)
-    #   top:   eye=+Y → dir=-Y → 俯视(长轴水平)
-    #   bottom:eye=-Y → dir=+Y → 仰视(长轴水平)
+    # STEP/GLB BBox: X=300, Y=338, Z=1626(长轴沿Z), 与 viewer.html 一致
+    # viewer.html 的 eye/up 配置转换为 OCC HLR 的 dir(投影方向):
+    #   dir = 从相机到模型的方向 = -eye_normalized
+    #
+    # viewer.html 配置:
+    #   front:  eye=(0,0,+d), up=(0,1,0)  → dir=(0,0,-1) 看圆形端面(X-Y平面)
+    #   back:   eye=(0,0,-d), up=(0,1,0)  → dir=(0,0,1)
+    #   left:   eye=(-d,0,0), up=(0,1,0)  → dir=(1,0,0)  看侧面(Y-Z平面),长轴水平
+    #   right:  eye=(+d,0,0), up=(0,1,0)  → dir=(-1,0,0)
+    #   top:    eye=(0,+d,0), up=(0,0,-1) → dir=(0,-1,0)
+    #   bottom: eye=(0,-d,0), up=(0,0,1)  → dir=(0,1,0)
+    #
+    # gp_Ax2(origin, N=view_dir, V=up):
+    #   U = V × N (屏幕右方向)
+    #   screen_X = U 方向分量
+    #   screen_Y = V 方向分量(屏幕上方)
     "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
     "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
     "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
     "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, -1), "label": "下视",  "group": "standard"},
+    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, -1), "label": "上视",  "group": "standard"},
+    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
     # 3 个轴测视图
-    "isometric":      {"dir": gp_Dir(1, -1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
-    "dimetric_left":  {"dir": gp_Dir(-1, -1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
-    "dimetric_right": {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
+    "isometric":      {"dir": gp_Dir(-1, -1, 1),   "up": gp_Dir(0, 0, 1), "label": "等轴测",     "group": "isometric"},
+    "dimetric_left":  {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "左右二等角", "group": "isometric"},
+    "dimetric_right": {"dir": gp_Dir(-1, -1, -0.5),"up": gp_Dir(0, 0, 1), "label": "上下二等角", "group": "isometric"},
 }
 
 
@@ -1157,6 +1158,9 @@ def generate_all_standard_views(step_path, include_hidden=False,
     # 读取 shape(使用 BRep 缓存)
     shape = read_shape_cached(step_path)
     t_read = time.time() - t0
+
+    # 不旋转模型 - STEP/GLB 坐标系一致(Z-up, 长轴沿Z), 直接匹配 viewer.html
+    # (之前错误地旋转模型导致视图方向全部错误)
 
     # 模型包围盒
     from OCC.Core.Bnd import Bnd_Box
