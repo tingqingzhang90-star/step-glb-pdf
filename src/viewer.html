@@ -591,13 +591,16 @@
       const size = Math.max(bbox.max.x - bbox.min.x, bbox.max.y - bbox.min.y, bbox.max.z - bbox.min.z);
       const distance = size * 2;
       let eye, up;
+      // ★ Z-up 模型坐标系(与 drawing_engine.py / CAD 惯例一致)
+      // 模型 bounding box: Z轴最大(1731.5mm)=高度, Y轴=深度(348mm), X轴=宽度(350mm)
+      // 相机 eye 位置决定观察方向,up 控制视图旋转
       switch (view) {
-        case 'front':  eye = new OV.Coord3D(center.x, center.y, center.z + distance); up = new OV.Coord3D(0, 1, 0); break;
-        case 'back':   eye = new OV.Coord3D(center.x, center.y, center.z - distance); up = new OV.Coord3D(0, 1, 0); break;
-        case 'left':   eye = new OV.Coord3D(center.x - distance, center.y, center.z); up = new OV.Coord3D(0, 1, 0); break;
-        case 'right':  eye = new OV.Coord3D(center.x + distance, center.y, center.z); up = new OV.Coord3D(0, 1, 0); break;
-        case 'top':    eye = new OV.Coord3D(center.x, center.y + distance, center.z); up = new OV.Coord3D(0, 0, -1); break;
-        case 'bottom': eye = new OV.Coord3D(center.x, center.y - distance, center.z); up = new OV.Coord3D(0, 0, 1); break;
+        case 'front':  eye = new OV.Coord3D(center.x, center.y - distance, center.z); up = new OV.Coord3D(0, 0, 1); break;
+        case 'back':   eye = new OV.Coord3D(center.x, center.y + distance, center.z); up = new OV.Coord3D(0, 0, 1); break;
+        case 'left':   eye = new OV.Coord3D(center.x - distance, center.y, center.z); up = new OV.Coord3D(0, 0, 1); break;
+        case 'right':  eye = new OV.Coord3D(center.x + distance, center.y, center.z); up = new OV.Coord3D(0, 0, 1); break;
+        case 'top':    eye = new OV.Coord3D(center.x, center.y, center.z + distance); up = new OV.Coord3D(0, 1, 0); break;
+        case 'bottom': eye = new OV.Coord3D(center.x, center.y, center.z - distance); up = new OV.Coord3D(0, -1, 0); break;
       }
       const camera = new OV.Camera(eye, center, up, 45.0);
       innerViewer.SetCamera(camera);
