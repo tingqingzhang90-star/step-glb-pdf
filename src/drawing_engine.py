@@ -1105,9 +1105,15 @@ def _create_shared_renderer(shape):
 
 
 def _set_view_orientation(renderer, view_dir, up_dir):
-    """设置渲染器视图方向(eye/center/up 三向量)"""
-    renderer.View.SetEye(gp_Pnt(0, 0, 0))
-    renderer.View.SetAt(gp_Pnt(float(view_dir.X()), float(view_dir.Y()), float(view_dir.Z())))
+    """设置渲染器视图方向
+
+    pythonOCC 注意点:
+      - V3d_View.SetEye(eye) 只接受 1 个参数(gp_Pnt)
+      - 视图方向由 SetProj(V, Up) 控制(投影方向 + 上方向)
+      - 不能同时调用 SetEye + SetAt + SetUp + SetProj,会导致冲突
+    """
+    # 仅设置中心点和投影方向(eye 由 OCC 根据 center + dir 自动计算)
+    renderer.View.SetAt(gp_Pnt(0, 0, 0))
     renderer.View.SetUp(gp_Pnt(float(up_dir.X()), float(up_dir.Y()), float(up_dir.Z())))
     renderer.View.SetProj(view_dir, up_dir)
 
