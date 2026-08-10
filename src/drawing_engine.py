@@ -989,7 +989,7 @@ def generate_all_standard_views(step_path, include_hidden=False,
     Args:
         step_path: STEP 文件路径
         include_hidden: 已通过 HLR 模式自动处理,此参数保留向后兼容
-        thumb_size: 缩略图尺寸 (width, height)
+        thumb_size: 缩略图尺寸(仅用于前端显示,后端只渲染 canvas_size 大图)
         canvas_size: 画布大图尺寸 (width, height)
 
     Returns:
@@ -998,7 +998,7 @@ def generate_all_standard_views(step_path, include_hidden=False,
                 "front": {
                     "label": "前视",
                     "group": "standard",
-                    "thumbnail": "data:image/png;base64,...",
+                    "thumbnail": "data:image/png;base64,...",  # 同 image(前端 CSS 缩放)
                     "image": "data:image/png;base64,...",
                     "thumbnail_size": [w, h],
                     "image_size": [w, h],
@@ -1029,9 +1029,9 @@ def generate_all_standard_views(step_path, include_hidden=False,
         "depth": round(float(zmax - zmin), 2)
     }
 
-    # 共享渲染器(9 视图复用 1 个)
+    # 共享渲染器(9 视图复用 1 个,创建时指定 canvas_size)
     t1 = time.time()
-    renderer = _create_shared_renderer(shape)
+    renderer = _create_shared_renderer(shape, canvas_size)
     result_views = {}
     for view_name, cfg in STANDARD_VIEW_CONFIGS.items():
         t2 = time.time()
@@ -1041,16 +1041,15 @@ def generate_all_standard_views(step_path, include_hidden=False,
         renderer.Context.UpdateCurrentViewer()
         renderer.Repaint()
 
-        # 缩略图
-        thumb_png = _render_to_base64(renderer, thumb_size)
-        # 大图(用于画布放置)
-        canvas_png = _render_to_base64(renderer, canvas_size)
+        # 渲染为 PNG(渲染一次,缩略图由前端 CSS 缩放)
+        canvas_png = _render_to_base64(renderer)
         t_proj = time.time() - t2
 
         result_views[view_name] = {
             "label": cfg["label"],
             "group": cfg["group"],
-            "thumbnail": f"data:image/png;base64,{thumb_png}",
+            # 缩略图与大图共用同一 PNG(前端通过 width/height CSS 缩放)
+            "thumbnail": f"data:image/png;base64,{canvas_png}",
             "image": f"data:image/png;base64,{canvas_png}",
             "thumbnail_size": list(thumb_size),
             "image_size": list(canvas_size),
@@ -1072,16 +1071,17 @@ def generate_all_standard_views(step_path, include_hidden=False,
     }
 
 
-def _create_shared_renderer(shape):
+def _create_shared_renderer(shape, screen_size=(400, 300)):
     """创建共享渲染器(供 generate_all_standard_views 一次性创建复用)
 
     9 视图渲染只创建 1 个渲染器,显著降低初始化开销。
+    创建时指定 screen_size,避免后续调用 SetSize(参数个数不匹配)。
     """
     from OCC.Display.OCCViewer import OffscreenRenderer
     from OCC.Core.Quantity import Quantity_Color, Quantity_NOC_BLACK
     from OCC.Core.AIS import AIS_Shape
 
-    renderer = OffscreenRenderer(screen_size=(400, 300))
+    renderer = OffscreenRenderer(screen_size=screen_size)
     renderer.hide_triedron()
 
     # 白色背景
@@ -1108,13 +1108,11 @@ def _set_view_orientation(renderer, view_dir, up_dir):
     """设置渲染器视图方向
 
     pythonOCC V3d_View API 参数规范(参考 OCC 官方文档):
+      - SetProj(Vx, Vy, Vz): 3 个 double,设置投影方向
       - SetAt(X, Y, Z): 3 个 double,设置视图中心点
       - SetUp(X, Y, Z): 3 个 double,设置上方向
-      - SetProj(Vx, Vy, Vz): 3 个 double,设置投影方向
       - SetEye(X, Y, Z): 3 个 double,设置眼睛位置
-
-    注意: 这些方法不接受 gp_Pnt/gp_Dir 对象,而是接受 3 个 double。
-    pythonOCC 的 SWIG 绑定要求严格匹配参数个数。
+      - SetSize(size): 1 个 double,设置视图高度(不接受 width, height)
 
     简化方案: 仅使用 SetProj(Vx, Vy, Vz),OCC 会自动计算 eye 和 up。
     """
@@ -1126,14 +1124,15 @@ def _set_view_orientation(renderer, view_dir, up_dir):
     )
 
 
-def _render_to_base64(renderer, size):
-    """将当前渲染器视图渲染为指定尺寸的 PNG,返回 base64 字符串"""
+def _render_to_base64(renderer):
+    """将当前渲染器视图渲染为 PNG,返回 base64 字符串
+
+    渲染器创建时已指定 screen_size,无需再调用 SetSize。
+    """
     import base64
     import tempfile
     import os as os_module
 
-    renderer.View.SetSize(size[0], size[1])
-    renderer.View.MustBeResized()
     renderer.Context.UpdateCurrentViewer()
     renderer.Repaint()
 
