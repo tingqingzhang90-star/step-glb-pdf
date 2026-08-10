@@ -1107,15 +1107,23 @@ def _create_shared_renderer(shape):
 def _set_view_orientation(renderer, view_dir, up_dir):
     """设置渲染器视图方向
 
-    pythonOCC 注意点:
-      - V3d_View.SetEye(eye) 只接受 1 个参数(gp_Pnt)
-      - 视图方向由 SetProj(V, Up) 控制(投影方向 + 上方向)
-      - 不能同时调用 SetEye + SetAt + SetUp + SetProj,会导致冲突
+    pythonOCC V3d_View API 参数规范(参考 OCC 官方文档):
+      - SetAt(X, Y, Z): 3 个 double,设置视图中心点
+      - SetUp(X, Y, Z): 3 个 double,设置上方向
+      - SetProj(Vx, Vy, Vz): 3 个 double,设置投影方向
+      - SetEye(X, Y, Z): 3 个 double,设置眼睛位置
+
+    注意: 这些方法不接受 gp_Pnt/gp_Dir 对象,而是接受 3 个 double。
+    pythonOCC 的 SWIG 绑定要求严格匹配参数个数。
+
+    简化方案: 仅使用 SetProj(Vx, Vy, Vz),OCC 会自动计算 eye 和 up。
     """
-    # 仅设置中心点和投影方向(eye 由 OCC 根据 center + dir 自动计算)
-    renderer.View.SetAt(gp_Pnt(0, 0, 0))
-    renderer.View.SetUp(gp_Pnt(float(up_dir.X()), float(up_dir.Y()), float(up_dir.Z())))
-    renderer.View.SetProj(view_dir, up_dir)
+    # 仅设置投影方向(OCC 自动计算 eye/up)
+    renderer.View.SetProj(
+        float(view_dir.X()),
+        float(view_dir.Y()),
+        float(view_dir.Z())
+    )
 
 
 def _render_to_base64(renderer, size):
