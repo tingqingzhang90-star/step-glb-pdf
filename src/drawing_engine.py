@@ -151,8 +151,23 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
         shape = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
 
     # === 2) HLR 投影(精确算法) ===
+    #
+    # gp_Ax2(origin, N, V) 中 V 是 XDirection(屏幕右方向), 不是屏幕上方向!
+    # YDirection = N × V (屏幕上方向)
+    #
+    # 我们传入的 up_dir 是"屏幕上方向", 需要转换为 XDirection:
+    #   XDir = up × N  (这样 YDir = N × XDir = N × (up × N) = up)
+    #
+    # 验证 left 视图: N=(1,0,0), up=(0,1,0)
+    #   XDir = up × N = (0,0,-1) → Z轴水平(长轴1626 ✓)
+    #   YDir = N × XDir = (0,1,0) → Y轴垂直 ✓
     origin = gp_Pnt(0, 0, 0)
-    ax2 = gp_Ax2(origin, view_dir, up_dir)
+    x_dir = gp_Dir(
+        up_dir.Y() * view_dir.Z() - up_dir.Z() * view_dir.Y(),
+        up_dir.Z() * view_dir.X() - up_dir.X() * view_dir.Z(),
+        up_dir.X() * view_dir.Y() - up_dir.Y() * view_dir.X()
+    )
+    ax2 = gp_Ax2(origin, view_dir, x_dir)
 
     hlr = HLRBRep_Algo()
     hlr.Add(shape)
@@ -223,8 +238,14 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
         else:
             up_dir = gp_Dir(0, 1, 0)
 
+    # gp_Ax2 的 V 参数是 XDirection(屏幕右), 不是屏幕上方向, 需转换
     origin = gp_Pnt(0, 0, 0)
-    ax2 = gp_Ax2(origin, view_dir, up_dir)
+    x_dir = gp_Dir(
+        up_dir.Y() * view_dir.Z() - up_dir.Z() * view_dir.Y(),
+        up_dir.Z() * view_dir.X() - up_dir.X() * view_dir.Z(),
+        up_dir.X() * view_dir.Y() - up_dir.Y() * view_dir.X()
+    )
+    ax2 = gp_Ax2(origin, view_dir, x_dir)
 
     # 使用多边形离散 HLR 算法(速度快 10-20 倍)
     hlr = HLRBRep_PolyAlgo()
