@@ -152,20 +152,24 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
 
     # === 2) HLR 投影(精确算法) ===
     #
-    # gp_Ax2(origin, N, V) 中 V 是 XDirection(屏幕右方向), 不是屏幕上方向!
+    # gp_Ax2(origin, N, V) 中 V 是 XDirection(屏幕右/水平方向), 不是屏幕上方向!
     # YDirection = N × V (屏幕上方向)
     #
     # 我们传入的 up_dir 是"屏幕上方向", 需要转换为 XDirection:
-    #   XDir = up × N  (这样 YDir = N × XDir = N × (up × N) = up)
+    #   XDir = N × up  (这样 YDir = N × XDir = up)
     #
     # 验证 left 视图: N=(1,0,0), up=(0,1,0)
-    #   XDir = up × N = (0,0,-1) → Z轴水平(长轴1626 ✓)
+    #   XDir = N × up = (0,0,1) → Z轴水平(长轴1626 ✓)
     #   YDir = N × XDir = (0,1,0) → Y轴垂直 ✓
+    #
+    # 验证 front 视图: N=(0,0,-1), up=(0,1,0)
+    #   XDir = N × up = (1,0,0) → X轴水平(303 ✓)
+    #   YDir = N × XDir = (0,1,0) → Y轴垂直(338 ✓)
     origin = gp_Pnt(0, 0, 0)
     x_dir = gp_Dir(
-        up_dir.Y() * view_dir.Z() - up_dir.Z() * view_dir.Y(),
-        up_dir.Z() * view_dir.X() - up_dir.X() * view_dir.Z(),
-        up_dir.X() * view_dir.Y() - up_dir.Y() * view_dir.X()
+        view_dir.Y() * up_dir.Z() - view_dir.Z() * up_dir.Y(),
+        view_dir.Z() * up_dir.X() - view_dir.X() * up_dir.Z(),
+        view_dir.X() * up_dir.Y() - view_dir.Y() * up_dir.X()
     )
     ax2 = gp_Ax2(origin, view_dir, x_dir)
 
@@ -239,11 +243,12 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
             up_dir = gp_Dir(0, 1, 0)
 
     # gp_Ax2 的 V 参数是 XDirection(屏幕右), 不是屏幕上方向, 需转换
+    # XDir = N × up (这样 YDir = N × XDir = up)
     origin = gp_Pnt(0, 0, 0)
     x_dir = gp_Dir(
-        up_dir.Y() * view_dir.Z() - up_dir.Z() * view_dir.Y(),
-        up_dir.Z() * view_dir.X() - up_dir.X() * view_dir.Z(),
-        up_dir.X() * view_dir.Y() - up_dir.Y() * view_dir.X()
+        view_dir.Y() * up_dir.Z() - view_dir.Z() * up_dir.Y(),
+        view_dir.Z() * up_dir.X() - view_dir.X() * up_dir.Z(),
+        view_dir.X() * up_dir.Y() - view_dir.Y() * up_dir.X()
     )
     ax2 = gp_Ax2(origin, view_dir, x_dir)
 
@@ -1054,8 +1059,8 @@ STANDARD_VIEW_CONFIGS = {
     #   U = V × N (屏幕右方向)
     #   screen_X = U 方向分量
     #   screen_Y = V 方向分量(屏幕上方)
-    "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
-    "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
+    "front":    {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
+    "back":     {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
     "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
     "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
     "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, -1), "label": "上视",  "group": "standard"},
