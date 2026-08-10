@@ -993,26 +993,45 @@ def generate_drawing_views_raw(step_path, views=None):
 # 9 个标准视图配置(对应 SolidWorks 视图调色板)
 # dir: 投影方向(从该方向看模型)
 # up:  视图上方向(控制视图旋转)
+def _rotate_shape_to_standard(shape):
+    """将模型旋转到 viewer 显示的标准位置
+
+    GLB bbox: X=300, Y=338, Z=1626(长轴沿Z)
+    但 o3dv viewer 加载 GLB 后自动旋转,使长轴水平显示(沿X轴)。
+    为匹配 viewer 显示,需将 STEP shape 绕 Y 轴旋转 -90°:
+      原 STEP +Z(长轴1731) → 新 +X(水平)
+      原 STEP +X(350) → 新 -Z
+      原 STEP +Y(348) → 新 +Y(不变)
+
+    Args:
+        shape: TopoDS_Shape - 原始 STEP 形状
+
+    Returns:
+        TopoDS_Shape - 旋转后的形状(长轴沿X轴)
+    """
+    from OCC.Core.gp import gp_Ax1, gp_Pnt, gp_Dir, gp_Trsf
+    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
+
+    # 绕 Y 轴旋转 -90°(使原Z轴变X轴)
+    axis = gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 1, 0))
+    trsf = gp_Trsf()
+    trsf.SetRotation(axis, -3.141592653589793 / 2)  # -90°
+
+    transform = BRepBuilderAPI_Transform(shape, trsf, True)
+    return transform.Shape()
+
+
 STANDARD_VIEW_CONFIGS = {
-    # 6 个基本视图
+    # 6 个基本视图(模型已旋转到标准位置:长轴沿X轴水平)
     #
-    # 经实测确认: GLB 导出未做坐标变换, GLB 与 STEP 坐标系一致(Z-up)
-    #   GLB bbox: X=300, Y=338, Z=1626(长轴)
-    #   STEP bbox: X=350, Y=348, Z=1731.5(长轴)
-    #   圆柱轴线沿 +Z 方向
-    #
-    # _project_shape 的 view_dir 是视线方向(投影线方向), 与 viewer 的 view_dir 一致:
-    #   viewer front: eye=+Z → view_dir=-Z(从 +Z 看向原点)
-    #   drawing_engine front: dir=-Z(视线方向 -Z, 投影到 X-Y 平面)
-    #
-    # 严格对照 viewer.html setCameraView 的相机方向:
-    #   viewer eye 位置 → 视线方向(eye→center) → drawing_engine dir
-    #   front:  eye=+Z → dir=-Z (圆形端面)
-    #   back:   eye=-Z → dir=+Z (圆形端面,另一侧)
-    #   left:   eye=-X → dir=+X (侧面,电机在左)
-    #   right:  eye=+X → dir=-X (侧面,电机在右)
-    #   top:    eye=+Y → dir=-Y (俯视侧面)
-    #   bottom: eye=-Y → dir=+Y (仰视侧面)
+    # 旋转后模型 bbox: X=1731(长轴), Y=348, Z=350
+    # viewer 相机方向(旋转后坐标系):
+    #   front: eye=+Z(短轴) → dir=-Z → 圆形端面(350×348)
+    #   back:  eye=-Z → dir=+Z → 圆形端面(另一侧)
+    #   left:  eye=-X(长轴) → dir=+X → 侧面(长轴水平,电机在左)
+    #   right: eye=+X → dir=-X → 侧面(长轴水平,电机在右)
+    #   top:   eye=+Y → dir=-Y → 俯视(长轴水平)
+    #   bottom:eye=-Y → dir=+Y → 仰视(长轴水平)
     "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
     "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
     "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
@@ -1020,9 +1039,9 @@ STANDARD_VIEW_CONFIGS = {
     "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "上视",  "group": "standard"},
     "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, -1), "label": "下视",  "group": "standard"},
     # 3 个轴测视图
-    "isometric":      {"dir": gp_Dir(-1, -1, -1),  "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
-    "dimetric_left":  {"dir": gp_Dir(1, -1, -0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
-    "dimetric_right": {"dir": gp_Dir(-1, -1, -0.5),"up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
+    "isometric":      {"dir": gp_Dir(1, -1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
+    "dimetric_left":  {"dir": gp_Dir(-1, -1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
+    "dimetric_right": {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
 }
 
 
