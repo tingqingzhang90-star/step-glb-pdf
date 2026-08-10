@@ -129,7 +129,7 @@
                 @click="onPaletteClick(vw)"
                 :title="`点击或拖拽放置「${vw.label}」`"
               >
-                <div class="view-thumbnail" v-html="vw.thumbnail"></div>
+                <img class="view-thumbnail" :src="vw.thumbnail" :alt="vw.label" />
                 <span class="view-label">{{ vw.label }}</span>
               </div>
             </div>
@@ -148,7 +148,7 @@
                 @click="onPaletteClick(vw)"
                 :title="`点击或拖拽放置「${vw.label}」`"
               >
-                <div class="view-thumbnail" v-html="vw.thumbnail"></div>
+                <img class="view-thumbnail" :src="vw.thumbnail" :alt="vw.label" />
                 <span class="view-label">{{ vw.label }}</span>
               </div>
             </div>
@@ -163,8 +163,8 @@
                 <span class="prop-value">{{ selectedView.label }}</span>
               </div>
               <div class="prop-row">
-                <span class="prop-label">边数</span>
-                <span class="prop-value">{{ selectedView.edges.length }}</span>
+                <span class="prop-label">类型</span>
+                <span class="prop-value">{{ selectedView.group === 'standard' ? '标准视图' : '轴测视图' }}</span>
               </div>
               <div class="prop-row">
                 <span class="prop-label">比例</span>
