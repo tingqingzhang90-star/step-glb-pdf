@@ -294,10 +294,19 @@ def _compute_bbox(segments_list):
     return min_x, min_y, max_x, max_y
 
 
-def _normalize_view(segments, hidden_segments, target_width=400, target_height=300):
+def _normalize_view(segments, hidden_segments, target_width=400, target_height=300,
+                    uniform_scale=None):
     """归一化视图坐标到 [0, target_width] x [0, target_height]
 
     保持宽高比,居中放置。
+
+    Args:
+        segments: 可见边线段列表
+        hidden_segments: 隐藏边线段列表
+        target_width: 目标宽度
+        target_height: 目标高度
+        uniform_scale: 统一缩放比例(由外部传入,确保所有视图比例一致)。
+                       为 None 时自动计算(旧行为,仅用于独立视图生成)。
     """
     all_segs = segments + hidden_segments
     if not all_segs:
@@ -310,11 +319,17 @@ def _normalize_view(segments, hidden_segments, target_width=400, target_height=3
     if width < 0.01 or height < 0.01:
         return segments, hidden_segments, {"x": 0, "y": 0, "width": 0, "height": 0, "scale": 1}
 
-    # 计算缩放比例(保持宽高比)
     margin = 10
     avail_w = target_width - 2 * margin
     avail_h = target_height - 2 * margin
-    scale = min(avail_w / width, avail_h / height)
+
+    # 统一缩放:所有视图使用相同的 scale(基于模型3D包围盒),
+    # 确保视图之间大小成比例(如 SolidWorks 工程图)
+    if uniform_scale is not None:
+        scale = uniform_scale
+    else:
+        # 独立缩放(旧行为,仅用于 generate_view_by_name 等单视图场景)
+        scale = min(avail_w / width, avail_h / height)
 
     # 居中偏移
     offset_x = margin + (avail_w - width * scale) / 2 - min_x * scale
@@ -876,36 +891,66 @@ def generate_all_standard_views(step_path, include_hidden=False,
     }
 
     result_views = {}
+    # ===== 第一遍: 投影所有视图,收集原始2D坐标 =====
+    raw_views = {}
     for view_name, cfg in STANDARD_VIEW_CONFIGS.items():
         t2 = time.time()
         visible, hidden = _project_shape(
             shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
         )
         t_proj = time.time() - t2
+        raw_views[view_name] = {
+            "visible": visible,
+            "hidden": hidden,
+            "label": cfg["label"],
+            "group": cfg["group"],
+            "project_time": round(t_proj, 3)
+        }
 
-        # 1. 缩略图归一化(小尺寸,用于面板显示)
+    # ===== 计算统一缩放比例 =====
+    # 基于所有视图的2D包围盒,取最大尺寸,确保所有视图比例一致
+    all_raw = []
+    for rv in raw_views.values():
+        all_raw.extend(rv["visible"])
+        all_raw.extend(rv["hidden"])
+
+    if all_raw:
+        min_x, min_y, max_x, max_y = _compute_bbox([all_raw])
+        max_2d_extent = max(max_x - min_x, max_y - min_y)
+    else:
+        max_2d_extent = 1.0
+
+    # 统一缩放:基于最大2D尺寸,缩放到画布可用区域
+    margin = 10
+    avail = min(canvas_width - 2 * margin, canvas_height - 2 * margin)
+    uniform_scale = avail / max_2d_extent if max_2d_extent > 0.01 else 1.0
+
+    # ===== 第二遍: 用统一缩放比例归一化所有视图 =====
+    for view_name, rv in raw_views.items():
+        # 缩略图(独立缩放,填满小画布)
         thumb_visible, thumb_hidden, _ = _normalize_view(
-            visible, hidden, thumb_width, thumb_height
+            rv["visible"], rv["hidden"], thumb_width, thumb_height
         )
         thumbnail = _segments_to_svg(
             thumb_visible, thumb_hidden, thumb_width, thumb_height
         )
 
-        # 2. 画布边线归一化(大尺寸,用于放置到图纸)
+        # 画布边线(统一缩放,所有视图比例一致)
         canvas_visible, canvas_hidden, canvas_bbox = _normalize_view(
-            visible, hidden, canvas_width, canvas_height
+            rv["visible"], rv["hidden"], canvas_width, canvas_height,
+            uniform_scale=uniform_scale
         )
 
         result_views[view_name] = {
-            "label": cfg["label"],
-            "group": cfg["group"],
+            "label": rv["label"],
+            "group": rv["group"],
             "thumbnail": thumbnail,
             "edges": canvas_visible,
             "hidden_edges": canvas_hidden,
             "bbox": canvas_bbox,
             "seg_count": len(canvas_visible),
             "hidden_count": len(canvas_hidden),
-            "project_time": round(t_proj, 3)
+            "project_time": rv["project_time"]
         }
 
     elapsed = time.time() - t0
