@@ -29,7 +29,8 @@ from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Trsf, gp_Lin, gp_Pln
-from OCC.Core.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape, HLRBRep_PolyAlgo
+from OCC.Core.HLRBRep import (HLRBRep_Algo, HLRBRep_HLRToShape,
+                              HLRBRep_PolyAlgo, HLRBRep_PolyHLRToShape)
 from OCC.Core.HLRAlgo import HLRAlgo_Projector
 from OCC.Core.Geom import Geom_Line, Geom_Plane
 from OCC.Core.GeomAPI import GeomAPI_IntCS
@@ -179,8 +180,8 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     hlr.Projector(HLRAlgo_Projector(ax2))
     hlr.Update()
 
-    # 提取可见和隐藏边
-    hlr_to_shape = HLRBRep_HLRToShape(hlr)
+    # 提取可见和隐藏边(PolyAlgo 必须用 PolyHLRToShape)
+    hlr_to_shape = HLRBRep_PolyHLRToShape(hlr)
 
     # 可见边(实线)
     visible_shape = hlr_to_shape.VCompound()
