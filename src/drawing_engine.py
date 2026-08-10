@@ -581,8 +581,13 @@ def _normalize_view(segments, hidden_segments, target_width=400, target_height=3
     offset_y = margin + (avail_h - height * scale) / 2 - min_y * scale
 
     def transform_seg(seg):
+        """归一化边线坐标(像素),同时保留 meta(实际 mm 值)和 edge_class
+
+        meta 中的 length/radius/orientation 等是模型实际尺寸(mm),
+        不随画布缩放变化,用于前端标注显示真实尺寸。
+        """
         if seg["type"] == "line":
-            return {
+            result = {
                 "type": "line",
                 "x1": round(seg["x1"] * scale + offset_x, 2),
                 "y1": round(seg["y1"] * scale + offset_y, 2),
@@ -590,19 +595,26 @@ def _normalize_view(segments, hidden_segments, target_width=400, target_height=3
                 "y2": round(seg["y2"] * scale + offset_y, 2),
             }
         elif seg["type"] == "circle":
-            return {
+            result = {
                 "type": "circle",
                 "cx": round(seg["cx"] * scale + offset_x, 2),
                 "cy": round(seg["cy"] * scale + offset_y, 2),
                 "r": round(seg["r"] * scale, 2),
             }
         elif seg["type"] == "polyline":
-            return {
+            result = {
                 "type": "polyline",
                 "points": [[round(x * scale + offset_x, 2), round(y * scale + offset_y, 2)]
                            for x, y in seg["points"]]
             }
-        return seg
+        else:
+            return seg
+        # 保留元数据(实际 mm 值,不随缩放变化)和边线分类(外轮廓/可见/隐藏)
+        if "meta" in seg:
+            result["meta"] = seg["meta"]
+        if "edge_class" in seg:
+            result["edge_class"] = seg["edge_class"]
+        return result
 
     norm_segments = [transform_seg(s) for s in segments]
     norm_hidden = [transform_seg(s) for s in hidden_segments]
@@ -1193,6 +1205,11 @@ def generate_all_standard_views(step_path, include_hidden=False,
     return {
         "views": result_views,
         "model_bbox": model_bbox,
+        "scale_info": {
+            "uniform_scale": round(uniform_scale, 4),
+            "mm_per_pixel": round(1.0 / uniform_scale, 6) if uniform_scale > 0.01 else 0,
+            "max_2d_extent_mm": round(max_2d_extent, 2)
+        },
         "elapsed": round(elapsed, 3),
         "timing": {
             "read": round(t_read, 3),
