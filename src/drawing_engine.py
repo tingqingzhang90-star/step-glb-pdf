@@ -146,6 +146,55 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     return visible_segments, hidden_segments
 
 
+def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
+    """对 shape 执行 HLR 投影(多边形离散算法,快速版)
+
+    使用 HLRBRep_PolyAlgo(基于三角化的离散隐藏线消除算法)。
+    相比 HLRBRep_Algo 精确算法,速度提升 10-20 倍,结果为多段线而非精确几何,
+    对于工程图视图完全够用。
+
+    前置条件:shape 必须已三角化(BRepMesh_IncrementalMesh)
+
+    Args:
+        shape: TopoDS_Shape - 3D 形状(必须已三角化)
+        view_dir: gp_Dir - 视图方向(投影方向)
+        up_dir: gp_Dir - 上方向(控制视图旋转角度)
+        show_hidden: bool - 是否生成隐藏边(虚线)
+
+    Returns:
+        (visible_segments, hidden_segments)
+    """
+    if up_dir is None:
+        if abs(view_dir.Z()) < 0.9:
+            up_dir = gp_Dir(0, 0, 1)
+        else:
+            up_dir = gp_Dir(0, 1, 0)
+
+    origin = gp_Pnt(0, 0, 0)
+    ax2 = gp_Ax2(origin, view_dir, up_dir)
+
+    # 使用多边形离散 HLR 算法(速度快 10-20 倍)
+    hlr = HLRBRep_PolyAlgo()
+    hlr.Load(shape)
+    hlr.Projector(HLRAlgo_Projector(ax2))
+    hlr.Update()
+
+    # 提取可见和隐藏边
+    hlr_to_shape = HLRBRep_HLRToShape(hlr)
+
+    # 可见边(实线)
+    visible_shape = hlr_to_shape.VCompound()
+    visible_segments = _extract_2d_segments(visible_shape)
+
+    # 隐藏边(虚线)
+    hidden_segments = []
+    if show_hidden:
+        hidden_shape = hlr_to_shape.HCompound()
+        hidden_segments = _extract_2d_segments(hidden_shape)
+
+    return visible_segments, hidden_segments
+
+
 def _extract_2d_segments(shape):
     """将 HLR 投影后的 shape 转换为 2D 线段/圆弧数据
 
@@ -895,7 +944,8 @@ def generate_all_standard_views(step_path, include_hidden=False,
     raw_views = {}
     for view_name, cfg in STANDARD_VIEW_CONFIGS.items():
         t2 = time.time()
-        visible, hidden = _project_shape(
+        # 使用多边形离散算法(速度快 10-20 倍),shape 已预三角化
+        visible, hidden = _project_shape_poly(
             shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
         )
         t_proj = time.time() - t2
