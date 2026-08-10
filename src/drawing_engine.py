@@ -173,23 +173,25 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     )
     ax2 = gp_Ax2(origin, view_dir, x_dir)
 
-    hlr = HLRBRep_Algo()
-    hlr.Add(shape)
+    # === 2) HLR 投影(多边形算法,装配体更鲁棒) ===
+    #
+    # HLRBRep_Algo 精确算法在处理装配体时经常丢失边(断裂/空白),
+    # 改用 HLRBRep_PolyAlgo 多边形算法,对装配体更鲁棒。
+    # 前置条件: shape 必须已三角化。
+    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+    mesh = BRepMesh_IncrementalMesh(shape, 0.1, True)
+    mesh.Perform()
+
+    hlr = HLRBRep_PolyAlgo()
+    hlr.Load(shape)
     hlr.Projector(HLRAlgo_Projector(ax2))
     hlr.Update()
-    hlr.Hide()
 
     # === 3) 边线分类提取(参考 FreeCAD TechDraw DrawViewPart.cpp) ===
     #
-    # FreeCAD 的实际做法(从源码确认):
-    #   - 主源: VCompound() — 所有可见边(装配体需要完整边线,不能只用轮廓)
-    #   - OutLineVCompound() 只用于标记哪些边是外轮廓(线宽加粗)
-    #   - 不叠加 OutLineV + Rg1LineV(会重复/冲突)
-    #
-    # 之前用 OutLineVCompound 作为主源导致视图破碎:
-    #   装配体含多个零件,每个零件只返回自己的外轮廓片段,
-    #   零件之间不连接,看起来像断开的碎片。
-    hlr_to_shape = HLRBRep_HLRToShape(hlr)
+    # PolyHLRToShape 默认构造函数不接受参数,需先创建再 Update。
+    hlr_to_shape = HLRBRep_PolyHLRToShape()
+    hlr_to_shape.Update(hlr)
 
     # 3a) 主源: 所有可见边(装配体工程图必须用这个)
     v_compound = hlr_to_shape.VCompound()
@@ -203,7 +205,6 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     outline_v = hlr_to_shape.OutLineVCompound()
     if outline_v is not None and not outline_v.IsNull():
         outline_segs = _extract_2d_segments(outline_v)
-        # 将 visible_segments 中与 outline 重合的边标记为 outline
         _mark_outline_edges(visible_segments, outline_segs)
 
     # 3c) 隐藏边(虚线) - 默认不提取(性能优化)
