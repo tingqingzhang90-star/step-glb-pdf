@@ -180,8 +180,10 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     hlr.Projector(HLRAlgo_Projector(ax2))
     hlr.Update()
 
-    # 提取可见和隐藏边(PolyAlgo 必须用 PolyHLRToShape)
-    hlr_to_shape = HLRBRep_PolyHLRToShape(hlr)
+    # 提取可见和隐藏边
+    # PolyHLRToShape 默认构造函数不接受参数,需先创建再 Update
+    hlr_to_shape = HLRBRep_PolyHLRToShape()
+    hlr_to_shape.Update(hlr)
 
     # 可见边(实线)
     visible_shape = hlr_to_shape.VCompound()
