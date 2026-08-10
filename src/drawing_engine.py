@@ -995,12 +995,15 @@ def generate_drawing_views_raw(step_path, views=None):
 # up:  视图上方向(控制视图旋转)
 STANDARD_VIEW_CONFIGS = {
     # 6 个基本视图
-    "front":    {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "前视",  "group": "standard"},
-    "back":     {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "后视",  "group": "standard"},
+    # 模型 cylinder 长轴沿 Z(1731.5mm),X/Y 为截面方向(350/348mm)
+    # SolidWorks 前视显示圆形端面 → 沿 Z 轴方向投影
+    # SolidWorks 右/左视显示水平圆柱侧面 → 沿 X 轴方向投影
+    "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
+    "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
     "left":     {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 0, 1),  "label": "左视",  "group": "standard"},
     "right":    {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 0, 1),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, -1, 0), "label": "下视",  "group": "standard"},
+    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "上视",  "group": "standard"},
+    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
     # 3 个轴测视图
     "isometric":      {"dir": gp_Dir(1, -1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
     "dimetric_left":  {"dir": gp_Dir(-1, -1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
