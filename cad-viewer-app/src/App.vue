@@ -65,15 +65,26 @@
               stroke-width="2"
               stroke-dasharray="4,2"
             />
-            <!-- 视图图像(基于 OCC 离屏渲染 PNG,效果可靠) -->
-            <image
-              v-if="pv.image"
-              :href="pv.image"
-              :x="0" :y="0"
-              :width="pv.bbox.width"
-              :height="pv.bbox.height"
-              preserveAspectRatio="xMidYMid meet"
-            />
+            <!-- 视图图像(基于 HLRBRep 边线数据,支持关联式标注) -->
+            <g class="visible-edges">
+              <line v-for="(seg, i) in pv.edges" :key="'v'+i"
+                    v-if="seg && seg.type === 'line'"
+                    :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2"
+                    stroke="#333" stroke-width="1" />
+              <circle v-else-if="seg && seg.type === 'circle'"
+                      :cx="seg.cx" :cy="seg.cy" :r="seg.r"
+                      stroke="#333" stroke-width="1" fill="none" />
+              <polyline v-else-if="seg && seg.type === 'polyline'"
+                        :points="polylinePoints(seg.points)"
+                        stroke="#333" stroke-width="1" fill="none" />
+            </g>
+            <!-- 隐藏边(虚线) -->
+            <g class="hidden-edges">
+              <line v-for="(seg, i) in pv.hiddenEdges" :key="'h'+i"
+                    v-if="seg && seg.type === 'line'"
+                    :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2"
+                    stroke="#999" stroke-width="0.8" stroke-dasharray="3,2" />
+            </g>
             <!-- 视图标签 -->
             <text :x="0" :y="pv.bbox.height + 16"
                   font-size="11" fill="#666">{{ pv.label }}</text>
@@ -129,7 +140,7 @@
                 @click="onPaletteClick(vw)"
                 :title="`点击或拖拽放置「${vw.label}」`"
               >
-                <img class="view-thumbnail" :src="vw.thumbnail" :alt="vw.label" />
+                <div class="view-thumbnail" v-html="vw.thumbnail"></div>
                 <span class="view-label">{{ vw.label }}</span>
               </div>
             </div>
@@ -148,7 +159,7 @@
                 @click="onPaletteClick(vw)"
                 :title="`点击或拖拽放置「${vw.label}」`"
               >
-                <img class="view-thumbnail" :src="vw.thumbnail" :alt="vw.label" />
+                <div class="view-thumbnail" v-html="vw.thumbnail"></div>
                 <span class="view-label">{{ vw.label }}</span>
               </div>
             </div>
@@ -163,8 +174,8 @@
                 <span class="prop-value">{{ selectedView.label }}</span>
               </div>
               <div class="prop-row">
-                <span class="prop-label">类型</span>
-                <span class="prop-value">{{ selectedView.group === 'standard' ? '标准视图' : '轴测视图' }}</span>
+                <span class="prop-label">边数</span>
+                <span class="prop-value">{{ selectedView.edges?.length || 0 }}</span>
               </div>
               <div class="prop-row">
                 <span class="prop-label">比例</span>
@@ -363,9 +374,10 @@ function placeView(view, x, y) {
     name: view.name,
     label: view.label,
     group: view.group,
-    // PNG 图像(基于 OCC 离屏渲染,效果可靠)
-    image: view.image,
-    bbox: { x: 0, y: 0, width: view.image_size?.[0] || 400, height: view.image_size?.[1] || 300 },
+    // 边线数据(含元数据,用于关联式标注)
+    edges: (view.edges || []).filter(s => s && s.type),
+    hiddenEdges: (view.hidden_edges || []).filter(s => s && s.type),
+    bbox: view.bbox || { x: 0, y: 0, width: 400, height: 300 },
     x: Math.max(0, x),
     y: Math.max(0, y),
     scale: 1

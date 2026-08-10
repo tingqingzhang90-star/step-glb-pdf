@@ -103,6 +103,11 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     使用 HLRBRep_Algo(精确隐藏线消除算法)。
     默认不生成隐藏边(工程图通常只显示可见轮廓),大幅减少输出数据量。
 
+    关键优化(参考 OCC 官方文档和 CadQuery 实践):
+      - 使用 OutLineVCompound() 只提取外轮廓边,避免内部边杂乱
+      - VCompound() 返回所有可见边(包括内部边),工业图不用
+      - OutLineVCompound() 返回外轮廓边,是工业图标准做法
+
     Args:
         shape: TopoDS_Shape - 3D 形状
         view_dir: gp_Dir - 视图方向(投影方向)
@@ -120,7 +125,7 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
         else:
             up_dir = gp_Dir(0, 1, 0)
 
-    # 构造投影坐标系
+    # 构造投影坐标系(使用 gp_Ax2,参考 OCC 论坛官方回复)
     origin = gp_Pnt(0, 0, 0)
     ax2 = gp_Ax2(origin, view_dir, up_dir)
 
@@ -134,14 +139,20 @@ def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
     # 提取可见和隐藏边
     hlr_to_shape = HLRBRep_HLRToShape(hlr)
 
-    # 可见边(实线)
-    visible_shape = hlr_to_shape.VCompound()
+    # 可见边(实线)— 优先使用 OutLineVCompound(外轮廓,工业图标准)
+    # OutLineVCompound 只包含外轮廓边,避免内部边杂乱
+    visible_shape = hlr_to_shape.OutLineVCompound()
+    if visible_shape is None or visible_shape.IsNull():
+        # 回退到 VCompound(所有可见边)
+        visible_shape = hlr_to_shape.VCompound()
     visible_segments = _extract_2d_segments(visible_shape)
 
     # 隐藏边(虚线) - 默认不提取(性能优化)
     hidden_segments = []
     if show_hidden:
-        hidden_shape = hlr_to_shape.HCompound()
+        hidden_shape = hlr_to_shape.OutLineHCompound()
+        if hidden_shape is None or hidden_shape.IsNull():
+            hidden_shape = hlr_to_shape.HCompound()
         hidden_segments = _extract_2d_segments(hidden_shape)
 
     return visible_segments, hidden_segments
@@ -979,18 +990,22 @@ def _segments_to_svg(segments, hidden_segments=None, width=120, height=90,
 
 
 def generate_all_standard_views(step_path, include_hidden=False,
-                                thumb_size=(200, 150),
-                                canvas_size=(400, 300)):
-    """生成所有 9 个标准视图(PNG 图像,基于 OCC 离屏渲染)
+                                thumb_width=200, thumb_height=150,
+                                canvas_width=400, canvas_height=300):
+    """生成所有 9 个标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
 
-    使用 OCC OffscreenRenderer + HLR 模式,从 3D 模型生成 2D 工程图视图。
-    这是 SolidWorks 等专业软件内部使用的方法,效果可靠、速度极快。
+    使用 HLRBRep_Algo 精确算法 + OutLineVCompound 只提取外轮廓边。
+    边线数据保留元数据(方向、位置等),用于关联式标注:
+      - 标注记录"标注的是哪条边"(通过 bbox_role 等规则)
+      - 模型更新后重新投影,通过规则匹配边线,自动重新计算标注
 
     Args:
         step_path: STEP 文件路径
-        include_hidden: 已通过 HLR 模式自动处理,此参数保留向后兼容
-        thumb_size: 缩略图尺寸(仅用于前端显示,后端只渲染 canvas_size 大图)
-        canvas_size: 画布大图尺寸 (width, height)
+        include_hidden: 是否生成隐藏边(虚线),默认 False(更快)
+        thumb_width: 缩略图宽度(px)
+        thumb_height: 缩略图高度(px)
+        canvas_width: 画布边线归一化宽度(px)
+        canvas_height: 画布边线归一化高度(px)
 
     Returns:
         {
@@ -998,17 +1013,19 @@ def generate_all_standard_views(step_path, include_hidden=False,
                 "front": {
                     "label": "前视",
                     "group": "standard",
-                    "thumbnail": "data:image/png;base64,...",  # 同 image(前端 CSS 缩放)
-                    "image": "data:image/png;base64,...",
-                    "thumbnail_size": [w, h],
-                    "image_size": [w, h],
+                    "thumbnail": "<svg>...</svg>",
+                    "edges": [...],                      # 画布边线(含元数据)
+                    "hidden_edges": [...],
+                    "bbox": {"x", "y", "width", "height"},
+                    "seg_count": int,
+                    "hidden_count": int,
                     "project_time": float
                 },
                 ...
             },
             "model_bbox": {"width", "height", "depth"},
             "elapsed": float,
-            "timing": {"read": float, "render": float, "total": float}
+            "timing": {"read": float, "project": float, "total": float}
         }
     """
     t0 = time.time()
@@ -1029,34 +1046,73 @@ def generate_all_standard_views(step_path, include_hidden=False,
         "depth": round(float(zmax - zmin), 2)
     }
 
-    # 共享渲染器(9 视图复用 1 个,创建时指定 canvas_size)
+    # 第一遍: 投影所有视图,收集原始2D坐标
     t1 = time.time()
-    renderer = _create_shared_renderer(shape, canvas_size)
-    result_views = {}
+    raw_views = {}
     for view_name, cfg in STANDARD_VIEW_CONFIGS.items():
         t2 = time.time()
-        # 设置视图方向
-        _set_view_orientation(renderer, cfg["dir"], cfg["up"])
-        renderer.FitAll()
-        renderer.Context.UpdateCurrentViewer()
-        renderer.Repaint()
-
-        # 渲染为 PNG(渲染一次,缩略图由前端 CSS 缩放)
-        canvas_png = _render_to_base64(renderer)
+        # 使用精确算法 + OutLineVCompound(外轮廓边,工业图标准)
+        visible, hidden = _project_shape(
+            shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
+        )
         t_proj = time.time() - t2
-
-        result_views[view_name] = {
+        raw_views[view_name] = {
+            "visible": visible,
+            "hidden": hidden,
             "label": cfg["label"],
             "group": cfg["group"],
-            # 缩略图与大图共用同一 PNG(前端通过 width/height CSS 缩放)
-            "thumbnail": f"data:image/png;base64,{canvas_png}",
-            "image": f"data:image/png;base64,{canvas_png}",
-            "thumbnail_size": list(thumb_size),
-            "image_size": list(canvas_size),
             "project_time": round(t_proj, 3)
         }
-    _destroy_renderer(renderer)
-    t_render = time.time() - t1
+    t_project = time.time() - t1
+
+    # 计算统一缩放比例(所有视图比例一致)
+    all_raw = []
+    for rv in raw_views.values():
+        all_raw.extend(rv["visible"])
+        all_raw.extend(rv["hidden"])
+
+    if all_raw:
+        min_x, min_y, max_x, max_y = _compute_bbox([all_raw])
+        max_2d_extent = max(max_x - min_x, max_y - min_y)
+    else:
+        max_2d_extent = 1.0
+
+    margin = 10
+    avail = min(canvas_width - 2 * margin, canvas_height - 2 * margin)
+    uniform_scale = avail / max_2d_extent if max_2d_extent > 0.01 else 1.0
+
+    # 第二遍: 归一化 + 分配元数据 + 生成 SVG
+    result_views = {}
+    for view_name, rv in raw_views.items():
+        # 为边线分配包围盒角色(用于关联式标注)
+        visible_with_roles = _assign_bbox_roles(rv["visible"])
+        hidden_with_roles = _assign_bbox_roles(rv["hidden"])
+
+        # 缩略图(独立缩放)
+        thumb_v, thumb_h, _ = _normalize_view(
+            visible_with_roles, hidden_with_roles, thumb_width, thumb_height
+        )
+        thumbnail = _segments_to_svg(
+            thumb_v, thumb_h, thumb_width, thumb_height
+        )
+
+        # 画布边线(统一缩放,保留元数据用于标注)
+        canvas_v, canvas_h, canvas_bbox = _normalize_view(
+            visible_with_roles, hidden_with_roles,
+            canvas_width, canvas_height, uniform_scale=uniform_scale
+        )
+
+        result_views[view_name] = {
+            "label": rv["label"],
+            "group": rv["group"],
+            "thumbnail": thumbnail,
+            "edges": canvas_v,
+            "hidden_edges": canvas_h,
+            "bbox": canvas_bbox,
+            "seg_count": len(canvas_v),
+            "hidden_count": len(canvas_h),
+            "project_time": rv["project_time"]
+        }
 
     elapsed = time.time() - t0
     return {
@@ -1065,7 +1121,7 @@ def generate_all_standard_views(step_path, include_hidden=False,
         "elapsed": round(elapsed, 3),
         "timing": {
             "read": round(t_read, 3),
-            "render": round(t_render, 3),
+            "project": round(t_project, 3),
             "total": round(elapsed, 3)
         }
     }
