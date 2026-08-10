@@ -996,34 +996,32 @@ def generate_drawing_views_raw(step_path, views=None):
 STANDARD_VIEW_CONFIGS = {
     # 6 个基本视图
     #
-    # GLB 导出时 RWGltf_CafWriter 做了 Z-up → Y-up 变换(绕X轴旋转-90°):
-    #   GLB +X = STEP +X,  GLB +Y = STEP -Z,  GLB +Z = STEP +Y
+    # 经实测确认: GLB 导出未做坐标变换, GLB 与 STEP 坐标系一致(Z-up)
+    #   GLB bbox: X=300, Y=338, Z=1626(长轴)
+    #   STEP bbox: X=350, Y=348, Z=1731.5(长轴)
+    #   圆柱轴线沿 +Z 方向
     #
-    # 模型实际放置: 圆柱轴线沿 GLB +Z(= STEP +Y), 截面沿 GLB X/Y(= STEP X/Z)
-    # 从图4初始视角看,圆柱轴线指向屏幕前方(GLB +Z方向)
+    # _project_shape 的 view_dir 是视线方向(投影线方向), 与 viewer 的 view_dir 一致:
+    #   viewer front: eye=+Z → view_dir=-Z(从 +Z 看向原点)
+    #   drawing_engine front: dir=-Z(视线方向 -Z, 投影到 X-Y 平面)
     #
-    # viewer setCameraView → 视图方向(GLB) → 逆变换 → 投影方向(STEP):
-    #   front: eye=+Z → view_dir=-Z_glb → -Y_step  (圆形端面,300×300)
-    #   back:  eye=-Z → view_dir=+Z_glb → +Y_step  (电机端面,300×300)
-    #   left:  eye=-X → view_dir=+X_glb → +X_step  (侧面,电机在左)
-    #   right: eye=+X → view_dir=-X_glb → -X_step  (侧面,电机在右)
-    #   top:   eye=+Y → view_dir=-Y_glb → +Z_step  (俯视侧面)
-    #   bottom:eye=-Y → view_dir=+Y_glb → -Z_step  (仰视侧面)
-    #
-    # 验证(模型 cylinder 轴线沿 STEP Y, 截面沿 X/Z ~300mm):
-    #   前视(-Y_step): 投影到 X-Z 平面 → 圆形端面 300×300 ✓
-    #   上视(+Z_step): 投影到 X-Y 平面 → 侧面轮廓 1626×300 ✓
-    #   右视(-X_step): 投影到 Y-Z 平面 → 侧面轮廓 1626×300 ✓
-    "front":    {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "前视",  "group": "standard"},
-    "back":     {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "后视",  "group": "standard"},
-    "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 0, 1),  "label": "左视",  "group": "standard"},
-    "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 0, 1),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, -1, 0), "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "下视",  "group": "standard"},
-    # 3 个轴测视图(GLB 方向逆变换到 STEP)
-    "isometric":      {"dir": gp_Dir(1, -1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
-    "dimetric_left":  {"dir": gp_Dir(-1, -1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
-    "dimetric_right": {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
+    # viewer setCameraView → view_dir → drawing_engine dir:
+    #   front: eye=+Z → view_dir=-Z → dir=-Z  (圆形端面 300×338)
+    #   back:  eye=-Z → view_dir=+Z → dir=+Z  (圆形端面,另一侧)
+    #   left:  eye=-X → view_dir=+X → dir=+X  (侧面,长轴水平)
+    #   right: eye=+X → view_dir=-X → dir=-X  (侧面,长轴水平)
+    #   top:   eye=+Y → view_dir=-Y → dir=-Y  (俯视侧面)
+    #   bottom:eye=-Y → view_dir=+Y → dir=+Y  (仰视侧面)
+    "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
+    "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
+    "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
+    "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
+    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "上视",  "group": "standard"},
+    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, -1), "label": "下视",  "group": "standard"},
+    # 3 个轴测视图
+    "isometric":      {"dir": gp_Dir(-1, -1, -1),  "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
+    "dimetric_left":  {"dir": gp_Dir(1, -1, -0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
+    "dimetric_right": {"dir": gp_Dir(-1, -1, -0.5),"up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
 }
 
 
