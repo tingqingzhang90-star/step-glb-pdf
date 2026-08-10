@@ -995,19 +995,22 @@ def generate_drawing_views_raw(step_path, views=None):
 # up:  视图上方向(控制视图旋转)
 STANDARD_VIEW_CONFIGS = {
     # 6 个基本视图
-    # 模型 cylinder 长轴沿 Z(1731.5mm),X/Y 为截面方向(350/348mm)
-    # SolidWorks 前视显示圆形端面 → 沿 Z 轴方向投影
-    # SolidWorks 右/左视显示水平圆柱侧面 → 沿 X 轴方向投影
-    "front":    {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
-    "back":     {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
-    "left":     {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 0, 1),  "label": "左视",  "group": "standard"},
-    "right":    {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 0, 1),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
+    # GLB 导出时 RWGltf_CafWriter 做了 Z-up → Y-up 变换
+    # viewer.html 使用 Y-up 坐标系(Three.js/o3dv 标准)
+    # 以下方向与 viewer.html setCameraView 保持一致:
+    #   front: eye=+Z(up:Y) → 显示 X-Y 平面(侧面轮廓,长轴水平)
+    #   top:   eye=+Y(up:-Z) → 显示 X-Z 平面(端面)
+    #   right: eye=+X(up:Y) → 显示 Y-Z 平面(侧面轮廓)
+    "front":    {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
+    "back":     {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
+    "left":     {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
+    "right":    {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
+    "top":      {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, -1), "label": "上视",  "group": "standard"},
+    "bottom":   {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
     # 3 个轴测视图
-    "isometric":      {"dir": gp_Dir(1, -1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
-    "dimetric_left":  {"dir": gp_Dir(-1, -1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
-    "dimetric_right": {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
+    "isometric":      {"dir": gp_Dir(1, 1, 1),    "up": gp_Dir(0, 0, 1), "label": "等轴测",       "group": "isometric"},
+    "dimetric_left":  {"dir": gp_Dir(-1, 1, 0.5), "up": gp_Dir(0, 0, 1), "label": "左右二等角",   "group": "isometric"},
+    "dimetric_right": {"dir": gp_Dir(1, 1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "上下二等角",   "group": "isometric"},
 }
 
 
