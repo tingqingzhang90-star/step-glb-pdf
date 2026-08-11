@@ -136,8 +136,8 @@ def find_cylinder_end_faces(shape):
             adaptor = BRepAdaptor_Surface(face)
             surf_type = adaptor.GetType()
 
-            # GeomAbs_Cylinder = 2
-            if surf_type == 2:
+            # GeomAbs_SurfaceType 枚举: Plane=0, Cylinder=1, Cone=2, Sphere=3, Torus=4
+            if surf_type == 1:  # GeomAbs_Cylinder
                 cyl = adaptor.Cylinder()
                 radius = float(cyl.Radius())
                 axis = cyl.Axis()
@@ -150,8 +150,8 @@ def find_cylinder_end_faces(shape):
                     "axis_loc": [float(loc.X()), float(loc.Y()), float(loc.Z())]
                 })
 
-            # GeomAbs_Plane = 1
-            elif surf_type == 1:
+            # GeomAbs_Plane = 0
+            elif surf_type == 0:
                 pln = adaptor.Plane()
                 normal = pln.Axis().Direction()
                 loc = pln.Location()
@@ -327,7 +327,7 @@ def find_mounting_holes(shape, axis_dir, radius_min=3.0, radius_max=30.0):
         face = topods.Face(explorer.Current())
         try:
             adaptor = BRepAdaptor_Surface(face)
-            if adaptor.GetType() == 2:  # GeomAbs_Cylinder
+            if adaptor.GetType() == 1:  # GeomAbs_Cylinder
                 cyl = adaptor.Cylinder()
                 r = float(cyl.Radius())
                 if radius_min < r < radius_max:

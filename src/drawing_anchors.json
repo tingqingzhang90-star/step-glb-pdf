@@ -11,9 +11,9 @@
         "name": "stroke_start"
       },
       "point3d": [
-        0,
-        0,
-        0
+        205.95,
+        229.57,
+        535.76
       ],
       "views": [
         "front",
@@ -30,9 +30,9 @@
         "name": "stroke_end"
       },
       "point3d": [
-        100,
-        0,
-        0
+        205.95,
+        229.57,
+        95.76
       ],
       "views": [
         "front",
@@ -49,15 +49,17 @@
         "name": "main_axis"
       },
       "direction3d": [
-        1,
-        0,
-        0
+        -0.0,
+        -0.0,
+        -1.0
       ],
       "views": [
         "front",
         "left",
         "top"
-      ]
+      ],
+      "radius": 122.5,
+      "length": 440.0
     },
     {
       "id": "motor.body",
