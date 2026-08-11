@@ -98,46 +98,8 @@ def read_shape_cached(step_path):
 
 
 def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
-    """对 shape 执行投影,返回 (visible_edges, hidden_edges)
-
-    直接遍历所有拓扑边投影到 2D 平面(线框模式),不使用 HLR 隐藏线消除。
-    HLR 算法(HLRBRep_Algo/PolyAlgo)在处理装配体时会丢失边导致断裂/空白,
-    线框模式投影所有边,确保视图完整。
-
-    Args:
-        shape: TopoDS_Shape - 3D 形状
-        view_dir: gp_Dir - 视图方向(投影方向)
-        up_dir: gp_Dir - 上方向(控制视图旋转角度)
-        show_hidden: bool - 兼容参数(线框模式无隐藏线概念)
-
-    Returns:
-        (visible_segments, hidden_segments)
-    """
-    if up_dir is None:
-        if abs(view_dir.Z()) < 0.9:
-            up_dir = gp_Dir(0, 0, 1)
-        else:
-            up_dir = gp_Dir(0, 1, 0)
-
-    # 计算 XDir = N × up (屏幕右方向), YDir = up (屏幕上方向)
-    x_dir = gp_Dir(
-        view_dir.Y() * up_dir.Z() - view_dir.Z() * up_dir.Y(),
-        view_dir.Z() * up_dir.X() - view_dir.X() * up_dir.Z(),
-        view_dir.X() * up_dir.Y() - view_dir.Y() * up_dir.X()
-    )
-
-    # 遍历所有边,直接投影到 2D
-    visible_segments = []
-    explorer = TopExp_Explorer(shape, TopAbs_EDGE)
-    while explorer.More():
-        edge = topods.Edge(explorer.Current())
-        segs = _edge_to_2d_segments(edge, x_dir, up_dir)
-        for s in segs:
-            s["edge_class"] = "visible"
-        visible_segments.extend(segs)
-        explorer.Next()
-
-    return visible_segments, []
+    """兼容入口:切到 HLR 工业图路线"""
+    return _project_shape_poly(shape, view_dir, up_dir=up_dir, show_hidden=show_hidden)
 
 
 def _edge_to_2d_segments(edge, x_dir, up_dir, deflection=0.5):
@@ -237,22 +199,9 @@ def _discretize_curve(adaptor, x_dir, up_dir, deflection=0.5):
 
 
 def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
-    """对 shape 执行 HLR 投影(多边形离散算法,快速版)
+    """对 shape 执行精确 HLR 投影,返回工业工程图边线。
 
-    使用 HLRBRep_PolyAlgo(基于三角化的离散隐藏线消除算法)。
-    相比 HLRBRep_Algo 精确算法,速度提升 10-20 倍,结果为多段线而非精确几何,
-    对于工程图视图完全够用。
-
-    前置条件:shape 必须已三角化(BRepMesh_IncrementalMesh)
-
-    Args:
-        shape: TopoDS_Shape - 3D 形状(必须已三角化)
-        view_dir: gp_Dir - 视图方向(投影方向)
-        up_dir: gp_Dir - 上方向(控制视图旋转角度)
-        show_hidden: bool - 是否生成隐藏边(虚线)
-
-    Returns:
-        (visible_segments, hidden_segments)
+    使用 HLRBRep_Algo 做隐藏线消除,默认只输出可见边、相切边和外轮廓边。
     """
     if up_dir is None:
         if abs(view_dir.Z()) < 0.9:
@@ -260,8 +209,6 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
         else:
             up_dir = gp_Dir(0, 1, 0)
 
-    # gp_Ax2 的 V 参数是 XDirection(屏幕右), 不是屏幕上方向, 需转换
-    # XDir = N × up (这样 YDir = N × XDir = up)
     origin = gp_Pnt(0, 0, 0)
     x_dir = gp_Dir(
         view_dir.Y() * up_dir.Z() - view_dir.Z() * up_dir.Y(),
@@ -270,26 +217,25 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     )
     ax2 = gp_Ax2(origin, view_dir, x_dir)
 
-    # 使用多边形离散 HLR 算法(速度快 10-20 倍)
-    hlr = HLRBRep_PolyAlgo()
-    hlr.Load(shape)
+    hlr = HLRBRep_Algo()
+    hlr.Add(shape)
     hlr.Projector(HLRAlgo_Projector(ax2))
     hlr.Update()
+    hlr.Hide()
 
-    # 提取可见和隐藏边
-    # PolyHLRToShape 默认构造函数不接受参数,需先创建再 Update
-    hlr_to_shape = HLRBRep_PolyHLRToShape()
-    hlr_to_shape.Update(hlr)
+    hlr_to_shape = HLRBRep_HLRToShape(hlr)
 
-    # 可见边(实线)
-    visible_shape = hlr_to_shape.VCompound()
-    visible_segments = _extract_2d_segments(visible_shape)
+    visible_segments = []
+    visible_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineVCompound()))
+    visible_segments.extend(_extract_2d_segments(hlr_to_shape.VCompound()))
+    visible_segments.extend(_extract_2d_segments(hlr_to_shape.Rg1LineVCompound()))
+    visible_segments = _filter_short_segments(visible_segments, min_length=2.0)
 
-    # 隐藏边(虚线)
     hidden_segments = []
     if show_hidden:
-        hidden_shape = hlr_to_shape.HCompound()
-        hidden_segments = _extract_2d_segments(hidden_shape)
+        hidden_segments.extend(_extract_2d_segments(hlr_to_shape.HCompound()))
+        hidden_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineHCompound()))
+        hidden_segments = _filter_short_segments(hidden_segments, min_length=2.0)
 
     return visible_segments, hidden_segments
 
@@ -392,6 +338,41 @@ def _project_to_image(shape, view_name,
         "height": image_size[1],
         "view_name": view_name
     }
+
+
+def _segment_length(seg):
+    """计算线段/圆/多段线的长度(模型单位: mm)"""
+    if seg["type"] == "line":
+        return math.hypot(seg["x2"] - seg["x1"], seg["y2"] - seg["y1"])
+    if seg["type"] == "circle":
+        return 2.0 * math.pi * seg["r"]
+    if seg["type"] == "polyline":
+        pts = seg.get("points") or []
+        if len(pts) < 2:
+            return 0.0
+        total = 0.0
+        for i in range(1, len(pts)):
+            x1, y1 = pts[i - 1]
+            x2, y2 = pts[i]
+            total += math.hypot(x2 - x1, y2 - y1)
+        return total
+    return 0.0
+
+
+def _filter_short_segments(segments, min_length=2.0):
+    """过滤短边,减少螺纹/倒角/碎片线对工程图的干扰"""
+    if not segments:
+        return segments
+
+    kept = []
+    for seg in segments:
+        if seg.get("type") == "circle":
+            if seg.get("r", 0.0) * 2.0 >= min_length:
+                kept.append(seg)
+            continue
+        if _segment_length(seg) >= min_length:
+            kept.append(seg)
+    return kept
 
 
 def _mark_outline_edges(visible_segments, outline_segments, tol=0.5):
@@ -820,7 +801,7 @@ def generate_drawing_views_fast(step_path, views=None, target_width=400, target_
     t0 = time.time()
 
     if views is None:
-        views = ["front", "top", "left"]
+        views = ["front", "back", "left", "right", "top", "bottom"]
 
     # 读取 shape(使用 BRep 缓存,比 STEP 快 14 倍)
     shape = read_shape_cached(step_path)
@@ -854,7 +835,9 @@ def generate_drawing_views_fast(step_path, views=None, target_width=400, target_
             continue
         cfg = view_configs[view_name]
         t2 = time.time()
-        visible, hidden = _project_shape(shape, cfg["dir"], cfg["up"])
+        visible, hidden = _project_shape_poly(shape, cfg["dir"], cfg["up"], show_hidden=False)
+        visible = _filter_short_segments(visible, min_length=2.0)
+        hidden = _filter_short_segments(hidden, min_length=2.0)
         t_proj = time.time() - t2
 
         norm_visible, norm_hidden, view_bbox = _normalize_view(
@@ -1530,9 +1513,9 @@ def generate_view_by_name(step_path, view_name, target_width=400, target_height=
     shape = read_shape_cached(step_path)
 
     from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-    BRepMesh_IncrementalMesh(shape, 2.0, False, 2.0, True)
+    BRepMesh_IncrementalMesh(shape, 0.5, False, 0.5, True)
 
-    visible, hidden = _project_shape(
+    visible, hidden = _project_shape_poly(
         shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
     )
 
