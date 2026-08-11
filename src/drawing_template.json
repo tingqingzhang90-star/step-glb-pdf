@@ -1,9 +1,41 @@
 {
-  "name": "液压缸工程图模板",
-  "sheet": {"size": "A3", "width": 420, "height": 297},
+  "name": "250系列液压缸工程图模板",
+  "template_id": "250-E-H3K2",
+  "version": 1,
+  "sheet": {
+    "size": "A3",
+    "width": 420,
+    "height": 297
+  },
+  "anchor_profile": "250-series-default",
   "views": [
-    {"id": "front", "type": "front", "x": 80, "y": 200, "scale": "auto", "target_width": 180, "target_height": 120},
-    {"id": "top",   "type": "top",   "x": 80, "y": 50,  "scale": "auto", "target_width": 180, "target_height": 100}
+    {
+      "id": "front",
+      "type": "front",
+      "x": 80,
+      "y": 180,
+      "scale": "auto",
+      "target_width": 180,
+      "target_height": 120
+    },
+    {
+      "id": "top",
+      "type": "top",
+      "x": 80,
+      "y": 40,
+      "scale": "auto",
+      "target_width": 180,
+      "target_height": 100
+    },
+    {
+      "id": "left",
+      "type": "left",
+      "x": 230,
+      "y": 180,
+      "scale": "auto",
+      "target_width": 150,
+      "target_height": 120
+    }
   ],
   "dimensions": [
     {
@@ -13,7 +45,7 @@
       "orientation": "horizontal",
       "edge1_ref": {"method": "bbox_x_min"},
       "edge2_ref": {"method": "bbox_x_max"},
-      "offset": -25,
+      "offset": 30,
       "label": "总长"
     },
     {
@@ -23,37 +55,44 @@
       "orientation": "vertical",
       "edge1_ref": {"method": "bbox_y_min"},
       "edge2_ref": {"method": "bbox_y_max"},
-      "offset": 25,
+      "offset": 30,
       "label": "总高"
     },
     {
       "id": "dim_bore",
-      "type": "hole",
+      "type": "diameter",
       "view": "front",
       "circle_ref": {"method": "largest_circle"},
-      "leader": {"dx": 30, "dy": -20}
+      "label": "直径"
     },
     {
-      "id": "dim_top_length",
+      "id": "dim_stroke",
       "type": "linear",
-      "view": "top",
+      "view": "left",
       "orientation": "horizontal",
-      "edge1_ref": {"method": "bbox_x_min"},
-      "edge2_ref": {"method": "bbox_x_max"},
-      "offset": -20,
-      "label": "总长"
+      "from_anchor": "cylinder.front_end",
+      "to_anchor": "cylinder.back_end",
+      "offset": 24,
+      "label": "行程"
+    },
+    {
+      "id": "motor_text",
+      "type": "text",
+      "view": "right",
+      "condition": "has_motor",
+      "text": "电机尺寸按 {{motor_code}}"
     }
   ],
   "title_block": {
     "fields": [
-      {"name": "图样名称", "value": "{{series}}液压缸", "x": 290, "y": 20},
-      {"name": "型号", "value": "{{model_code}}", "x": 290, "y": 35},
-      {"name": "比例", "value": "1:{{scale}}", "x": 370, "y": 20},
-      {"name": "日期", "value": "{{date}}", "x": 370, "y": 35}
+      {"name": "图样名称", "value": "{{series}}液压缸", "x": 280, "y": 20},
+      {"name": "型号", "value": "{{model_code}}", "x": 280, "y": 35},
+      {"name": "比例", "value": "1:{{scale}}", "x": 350, "y": 20},
+      {"name": "日期", "value": "{{date}}", "x": 350, "y": 35}
     ]
   },
   "bom_table": {
-    "position": {"x": 290, "y": 150},
+    "position": {"x": 300, "y": 200},
     "columns": ["序号", "名称", "数量", "备注"]
   }
 }

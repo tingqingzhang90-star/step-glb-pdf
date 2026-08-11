@@ -711,11 +711,15 @@ def api_drawing_data(model_code):
         with _build_lock:
             views_data = drawing_engine.generate_drawing_views_raw(step_path)
             template = drawing_template.load_default_template()
+            anchors = drawing_template.load_default_anchors()
+            views_data["anchors"] = anchors
             drawing_data = drawing_template.apply_template(views_data, template, params)
 
         return jsonify({
             "ok": True,
             "drawing": drawing_data,
+            "template": template,
+            "anchors": anchors,
             "elapsed": views_data["elapsed"],
             "model_bbox": views_data["model_bbox"],
             "unmatched": drawing_data.get("unmatched", [])

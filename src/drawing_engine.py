@@ -98,125 +98,142 @@ def read_shape_cached(step_path):
 
 
 def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
-    """对 shape 执行 HLR 投影,返回 (visible_edges, hidden_edges)
+    """对 shape 执行投影,返回 (visible_edges, hidden_edges)
 
-    模仿 FreeCAD TechDraw DrawViewPart.cpp 的实现:
-      1) 预处理: center(将 shape 包围盒中心移到原点,避免坐标过大)
-      2) HLR 投影: HLRBRep_Algo + HLRAlgo_Projector(gp_Ax2)
-      3) 边线分类: 分别提取 OutLineV/Rg1LineV/OutLineH(参考 FreeCAD)
-
-    边线类型(参考 FreeCAD TechDraw 和 OCC 文档):
-      - OutLineVCompound:  外轮廓可见边(主实线,工业图主体)
-      - Rg1LineVCompound:  G1连续边(光滑过渡边,细实线)
-      - VCompound:         所有可见边(含内部边,通常不用)
-      - OutLineHCompound:  外轮廓隐藏边(虚线)
-      - HCompound:         所有隐藏边(虚线)
+    直接遍历所有拓扑边投影到 2D 平面(线框模式),不使用 HLR 隐藏线消除。
+    HLR 算法(HLRBRep_Algo/PolyAlgo)在处理装配体时会丢失边导致断裂/空白,
+    线框模式投影所有边,确保视图完整。
 
     Args:
         shape: TopoDS_Shape - 3D 形状
         view_dir: gp_Dir - 视图方向(投影方向)
         up_dir: gp_Dir - 上方向(控制视图旋转角度)
-        show_hidden: bool - 是否生成隐藏边(虚线)
+        show_hidden: bool - 兼容参数(线框模式无隐藏线概念)
 
     Returns:
         (visible_segments, hidden_segments)
-        每个元素是 list of dict: {"type": "line"/"arc"/"circle", ...}
     """
     if up_dir is None:
-        # 默认上方向:与视图方向垂直,优先 Z 轴
         if abs(view_dir.Z()) < 0.9:
             up_dir = gp_Dir(0, 0, 1)
         else:
             up_dir = gp_Dir(0, 1, 0)
 
-    # === 1) 预处理: 将 shape 包围盒中心移到原点 ===
-    # 参考 FreeCAD DrawViewPart.cpp 的 center() 步骤
-    # 目的: 避免大坐标值导致浮点精度问题
-    from OCC.Core.Bnd import Bnd_Box
-    from OCC.Core.BRepBndLib import brepbndlib
-    from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
-    from OCC.Core.gp import gp_Trsf, gp_Vec
-
-    bbox = Bnd_Box()
-    brepbndlib.Add(shape, bbox)
-    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-    cx = (xmin + xmax) / 2.0
-    cy = (ymin + ymax) / 2.0
-    cz = (zmin + zmax) / 2.0
-
-    # 平移到原点(只在坐标较大时才平移,避免无谓开销)
-    if max(abs(cx), abs(cy), abs(cz)) > 1000:
-        trsf = gp_Trsf()
-        trsf.SetTranslation(gp_Vec(-cx, -cy, -cz))
-        shape = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
-
-    # === 2) HLR 投影(精确算法) ===
-    #
-    # gp_Ax2(origin, N, V) 中 V 是 XDirection(屏幕右/水平方向), 不是屏幕上方向!
-    # YDirection = N × V (屏幕上方向)
-    #
-    # 我们传入的 up_dir 是"屏幕上方向", 需要转换为 XDirection:
-    #   XDir = N × up  (这样 YDir = N × XDir = up)
-    #
-    # 验证 left 视图: N=(1,0,0), up=(0,1,0)
-    #   XDir = N × up = (0,0,1) → Z轴水平(长轴1626 ✓)
-    #   YDir = N × XDir = (0,1,0) → Y轴垂直 ✓
-    #
-    # 验证 front 视图: N=(0,0,-1), up=(0,1,0)
-    #   XDir = N × up = (1,0,0) → X轴水平(303 ✓)
-    #   YDir = N × XDir = (0,1,0) → Y轴垂直(338 ✓)
-    origin = gp_Pnt(0, 0, 0)
+    # 计算 XDir = N × up (屏幕右方向), YDir = up (屏幕上方向)
     x_dir = gp_Dir(
         view_dir.Y() * up_dir.Z() - view_dir.Z() * up_dir.Y(),
         view_dir.Z() * up_dir.X() - view_dir.X() * up_dir.Z(),
         view_dir.X() * up_dir.Y() - view_dir.Y() * up_dir.X()
     )
-    ax2 = gp_Ax2(origin, view_dir, x_dir)
 
-    # === 2) HLR 投影(多边形算法,装配体更鲁棒) ===
-    #
-    # HLRBRep_Algo 精确算法在处理装配体时经常丢失边(断裂/空白),
-    # 改用 HLRBRep_PolyAlgo 多边形算法,对装配体更鲁棒。
-    # 前置条件: shape 必须已三角化。
-    from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-    mesh = BRepMesh_IncrementalMesh(shape, 0.1, True)
-    mesh.Perform()
-
-    hlr = HLRBRep_PolyAlgo()
-    hlr.Load(shape)
-    hlr.Projector(HLRAlgo_Projector(ax2))
-    hlr.Update()
-
-    # === 3) 边线分类提取(参考 FreeCAD TechDraw DrawViewPart.cpp) ===
-    #
-    # PolyHLRToShape 默认构造函数不接受参数,需先创建再 Update。
-    hlr_to_shape = HLRBRep_PolyHLRToShape()
-    hlr_to_shape.Update(hlr)
-
-    # 3a) 主源: 所有可见边(装配体工程图必须用这个)
-    v_compound = hlr_to_shape.VCompound()
+    # 遍历所有边,直接投影到 2D
     visible_segments = []
-    if v_compound is not None and not v_compound.IsNull():
-        visible_segments = _extract_2d_segments(v_compound)
-        for s in visible_segments:
+    explorer = TopExp_Explorer(shape, TopAbs_EDGE)
+    while explorer.More():
+        edge = topods.Edge(explorer.Current())
+        segs = _edge_to_2d_segments(edge, x_dir, up_dir)
+        for s in segs:
             s["edge_class"] = "visible"
+        visible_segments.extend(segs)
+        explorer.Next()
 
-    # 3b) 标记外轮廓边(用于线宽区分,不额外添加边)
-    outline_v = hlr_to_shape.OutLineVCompound()
-    if outline_v is not None and not outline_v.IsNull():
-        outline_segs = _extract_2d_segments(outline_v)
-        _mark_outline_edges(visible_segments, outline_segs)
+    return visible_segments, []
 
-    # 3c) 隐藏边(虚线) - 默认不提取(性能优化)
-    hidden_segments = []
-    if show_hidden:
-        h_compound = hlr_to_shape.HCompound()
-        if h_compound is not None and not h_compound.IsNull():
-            hidden_segments = _extract_2d_segments(h_compound)
-            for s in hidden_segments:
-                s["edge_class"] = "hidden"
 
-    return visible_segments, hidden_segments
+def _edge_to_2d_segments(edge, x_dir, up_dir, deflection=0.5):
+    """将一条 3D 边投影为 2D 线段(沿 x_dir/up_dir 方向投影)
+
+    Args:
+        edge: TopoDS_Edge
+        x_dir: gp_Dir - 屏幕右方向(水平)
+        up_dir: gp_Dir - 屏幕上方向(垂直)
+        deflection: float - 曲线离散化精度(mm)
+
+    Returns:
+        list of dict: [{"type": "line", "x1", "y1", "x2", "y2"}, ...]
+    """
+    segments = []
+    try:
+        adaptor = BRepAdaptor_Curve(edge)
+        curve_type = adaptor.GetType()
+
+        # 直线
+        if curve_type == 0:  # GeomAbs_Line
+            start = adaptor.Value(adaptor.FirstParameter())
+            end = adaptor.Value(adaptor.LastParameter())
+            x1 = start.X() * x_dir.X() + start.Y() * x_dir.Y() + start.Z() * x_dir.Z()
+            y1 = start.X() * up_dir.X() + start.Y() * up_dir.Y() + start.Z() * up_dir.Z()
+            x2 = end.X() * x_dir.X() + end.Y() * x_dir.Y() + end.Z() * x_dir.Z()
+            y2 = end.X() * up_dir.X() + end.Y() * up_dir.Y() + end.Z() * up_dir.Z()
+            length = math.hypot(x2 - x1, y2 - y1)
+            if length < 0.001:
+                return segments
+            segments.append({"type": "line", "x1": float(x1), "y1": float(y1),
+                             "x2": float(x2), "y2": float(y2)})
+
+        # 圆
+        elif curve_type == 1:  # GeomAbs_Circle
+            circ = adaptor.Circle()
+            radius = float(circ.Radius())
+            center = circ.Location()
+            cx = center.X() * x_dir.X() + center.Y() * x_dir.Y() + center.Z() * x_dir.Z()
+            cy = center.X() * up_dir.X() + center.Y() * up_dir.Y() + center.Z() * up_dir.Z()
+            # 检查圆是否平行于投影面(法线与 view_dir 平行)
+            axis_dir = circ.Axis().Direction()
+            # view_dir = x_dir × up_dir
+            vd_x = x_dir.Y() * up_dir.Z() - x_dir.Z() * up_dir.Y()
+            vd_y = x_dir.Z() * up_dir.X() - x_dir.X() * up_dir.Z()
+            vd_z = x_dir.X() * up_dir.Y() - x_dir.Y() * up_dir.X()
+            dot = abs(axis_dir.X() * vd_x + axis_dir.Y() * vd_y + axis_dir.Z() * vd_z)
+            if dot > 0.99:  # 圆平行于投影面 → 投影为圆
+                segments.append({"type": "circle", "cx": float(cx), "cy": float(cy),
+                                 "r": radius})
+            else:  # 圆倾斜 → 离散化为多段线
+                segs = _discretize_curve(adaptor, x_dir, up_dir, deflection)
+                segments.extend(segs)
+
+        # 其他曲线(椭圆、样条等)→ 离散化为多段线
+        else:
+            segs = _discretize_curve(adaptor, x_dir, up_dir, deflection)
+            segments.extend(segs)
+
+    except Exception:
+        pass
+    return segments
+
+
+def _discretize_curve(adaptor, x_dir, up_dir, deflection=0.5):
+    """将曲线离散化为 2D 线段
+
+    Args:
+        adaptor: BRepAdaptor_Curve
+        x_dir, up_dir: gp_Dir - 投影方向
+        deflection: float - 离散化精度(mm)
+
+    Returns:
+        list of dict: [{"type": "line", "x1", "y1", "x2", "y2"}, ...]
+    """
+    segments = []
+    try:
+        sampler = GCPnts_QuasiUniformDeflection(adaptor, deflection)
+        if sampler.NbPoints() < 2:
+            return segments
+        prev_pt = sampler.Value(1)
+        prev_x = prev_pt.X() * x_dir.X() + prev_pt.Y() * x_dir.Y() + prev_pt.Z() * x_dir.Z()
+        prev_y = prev_pt.X() * up_dir.X() + prev_pt.Y() * up_dir.Y() + prev_pt.Z() * up_dir.Z()
+        for i in range(2, sampler.NbPoints() + 1):
+            pt = sampler.Value(i)
+            cur_x = pt.X() * x_dir.X() + pt.Y() * x_dir.Y() + pt.Z() * x_dir.Z()
+            cur_y = pt.X() * up_dir.X() + pt.Y() * up_dir.Y() + pt.Z() * up_dir.Z()
+            length = math.hypot(cur_x - prev_x, cur_y - prev_y)
+            if length >= 0.001:
+                segments.append({"type": "line",
+                                 "x1": float(prev_x), "y1": float(prev_y),
+                                 "x2": float(cur_x), "y2": float(cur_y)})
+            prev_x, prev_y = cur_x, cur_y
+    except Exception:
+        pass
+    return segments
 
 
 def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
@@ -803,7 +820,7 @@ def generate_drawing_views_fast(step_path, views=None, target_width=400, target_
     t0 = time.time()
 
     if views is None:
-        views = ["front", "top"]
+        views = ["front", "top", "left"]
 
     # 读取 shape(使用 BRep 缓存,比 STEP 快 14 倍)
     shape = read_shape_cached(step_path)
