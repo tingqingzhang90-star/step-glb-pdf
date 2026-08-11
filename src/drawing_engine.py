@@ -230,12 +230,14 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     visible_segments.extend(_extract_2d_segments(hlr_to_shape.VCompound()))
     visible_segments.extend(_extract_2d_segments(hlr_to_shape.Rg1LineVCompound()))
     visible_segments = _filter_short_segments(visible_segments, min_length=2.0)
+    visible_segments = _filter_long_segments(visible_segments, max_length=2500.0)
 
     hidden_segments = []
     if show_hidden:
         hidden_segments.extend(_extract_2d_segments(hlr_to_shape.HCompound()))
         hidden_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineHCompound()))
         hidden_segments = _filter_short_segments(hidden_segments, min_length=2.0)
+        hidden_segments = _filter_long_segments(hidden_segments, max_length=2500.0)
 
     return visible_segments, hidden_segments
 
@@ -375,6 +377,22 @@ def _filter_short_segments(segments, min_length=2.0):
     return kept
 
 
+def _filter_long_segments(segments, max_length=None):
+    """过滤异常长边,避免离群投影线把统一缩放比例拉坏"""
+    if not segments or not max_length:
+        return segments
+
+    kept = []
+    for seg in segments:
+        if seg.get("type") == "circle":
+            if seg.get("r", 0.0) * 2.0 <= max_length:
+                kept.append(seg)
+            continue
+        if _segment_length(seg) <= max_length:
+            kept.append(seg)
+    return kept
+
+
 def _mark_outline_edges(visible_segments, outline_segments, tol=0.5):
     """将 visible_segments 中与 outline 重合的边标记为 edge_class='outline'
 
@@ -409,10 +427,10 @@ def _mark_outline_edges(visible_segments, outline_segments, tol=0.5):
                 seg["edge_class"] = "outline"
 
 
-def _extract_2d_segments(shape):
+def _extract_2d_segments(shape, x_dir=None, up_dir=None):
     """将 HLR 投影后的 shape 转换为 2D 线段/圆弧数据
 
-    HLR 输出的边是 3D 的(在投影平面上),需要提取为 2D 坐标。
+    HLR 输出仍是 3D 边,必须按当前视图的屏幕 x/up 轴投影到 2D。
     """
     if shape is None or shape.IsNull():
         return []
@@ -422,13 +440,13 @@ def _extract_2d_segments(shape):
 
     while explorer.More():
         edge = topods.Edge(explorer.Current())
-        segments.extend(_edge_to_segments(edge))
+        segments.extend(_edge_to_segments(edge, x_dir=x_dir, up_dir=up_dir))
         explorer.Next()
 
     return segments
 
 
-def _edge_to_segments(edge):
+def _edge_to_segments(edge, x_dir=None, up_dir=None):
     """将一条边转换为 2D 线段/圆弧数据(含元数据)
 
     元数据 meta 用于模板边线匹配:
@@ -437,6 +455,14 @@ def _edge_to_segments(edge):
     """
     segments = []
 
+    def project_point(point):
+        if x_dir is None or up_dir is None:
+            return float(point.X()), float(point.Y())
+        return (
+            float(point.X() * x_dir.X() + point.Y() * x_dir.Y() + point.Z() * x_dir.Z()),
+            float(point.X() * up_dir.X() + point.Y() * up_dir.Y() + point.Z() * up_dir.Z())
+        )
+
     try:
         adaptor = BRepAdaptor_Curve(edge)
         curve_type = adaptor.GetType()
@@ -444,8 +470,8 @@ def _edge_to_segments(edge):
         if curve_type == 0:  # GeomAbs_Line
             start = adaptor.Value(adaptor.FirstParameter())
             end = adaptor.Value(adaptor.LastParameter())
-            x1, y1 = float(start.X()), float(start.Y())
-            x2, y2 = float(end.X()), float(end.Y())
+            x1, y1 = project_point(start)
+            x2, y2 = project_point(end)
             dx, dy = x2 - x1, y2 - y1
             length = math.hypot(dx, dy)
             if length < 0.001:
@@ -470,24 +496,25 @@ def _edge_to_segments(edge):
             circ = adaptor.Circle()
             center = circ.Location()
             radius = circ.Radius()
+            cx, cy = project_point(center)
             u1 = adaptor.FirstParameter()
             u2 = adaptor.LastParameter()
             if abs(u2 - u1 - 2 * math.pi) < 0.1:
                 segments.append({
                     "type": "circle",
-                    "cx": float(center.X()), "cy": float(center.Y()),
+                    "cx": cx, "cy": cy,
                     "r": float(radius),
                     "meta": {
                         "radius": round(float(radius), 2),
-                        "center": [round(float(center.X()), 2), round(float(center.Y()), 2)]
+                        "center": [round(cx, 2), round(cy, 2)]
                     }
                 })
             else:
-                pts = _discretize_curve(adaptor)
+                pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir)
                 if pts:
                     segments.append({"type": "polyline", "points": pts})
         else:
-            pts = _discretize_curve(adaptor)
+            pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir)
             if pts:
                 segments.append({"type": "polyline", "points": pts})
     except Exception:
@@ -496,16 +523,25 @@ def _edge_to_segments(edge):
     return segments
 
 
-def _discretize_curve(adaptor, deflection=0.1):
+def _discretize_curve(adaptor, deflection=0.1, x_dir=None, up_dir=None):
     """将曲线离散为 2D 点列表
 
     Args:
         adaptor: BRepAdaptor_Curve
         deflection: 离散精度(mm)
+        x_dir/up_dir: 当前视图屏幕轴,用于正确投影到 2D
 
     Returns:
         [[x1,y1], [x2,y2], ...] 或 None
     """
+    def project_point(point):
+        if x_dir is None or up_dir is None:
+            return float(point.X()), float(point.Y())
+        return [
+            float(point.X() * x_dir.X() + point.Y() * x_dir.Y() + point.Z() * x_dir.Z()),
+            float(point.X() * up_dir.X() + point.Y() * up_dir.Y() + point.Z() * up_dir.Z())
+        ]
+
     try:
         u1 = adaptor.FirstParameter()
         u2 = adaptor.LastParameter()
@@ -515,14 +551,14 @@ def _discretize_curve(adaptor, deflection=0.1):
         sampler = GCPnts_QuasiUniformDeflection(adaptor, deflection)
         if sampler.NbPoints() < 2:
             # 退化为直线
-            p1 = adaptor.Value(u1)
-            p2 = adaptor.Value(u2)
-            return [[float(p1.X()), float(p1.Y())], [float(p2.X()), float(p2.Y())]]
+            p1 = project_point(adaptor.Value(u1))
+            p2 = project_point(adaptor.Value(u2))
+            return [p1, p2]
 
         pts = []
         for i in range(1, sampler.NbPoints() + 1):
-            p = sampler.Value(i)
-            pts.append([float(p.X()), float(p.Y())])
+            p = project_point(sampler.Value(i))
+            pts.append(p)
         return pts
     except Exception:
         return None
@@ -1221,16 +1257,15 @@ def generate_all_standard_views(step_path, include_hidden=False,
     t_project = time.time() - t1
 
     # 计算统一缩放比例(所有视图比例一致)
-    all_raw = []
+    # 不同视图的 2D 坐标轴不同,不能把所有坐标混在一起算总 bbox;
+    # 正确做法是每个视图单独算 bbox,再取最大的视图尺寸作为统一比例基准。
+    max_2d_extent = 1.0
     for rv in raw_views.values():
-        all_raw.extend(rv["visible"])
-        all_raw.extend(rv["hidden"])
-
-    if all_raw:
-        min_x, min_y, max_x, max_y = _compute_bbox([all_raw])
-        max_2d_extent = max(max_x - min_x, max_y - min_y)
-    else:
-        max_2d_extent = 1.0
+        view_segs = rv["visible"] + rv["hidden"]
+        if not view_segs:
+            continue
+        min_x, min_y, max_x, max_y = _compute_bbox([view_segs])
+        max_2d_extent = max(max_2d_extent, max_x - min_x, max_y - min_y)
 
     margin = 10
     avail = min(canvas_width - 2 * margin, canvas_height - 2 * margin)
@@ -1426,17 +1461,14 @@ def _generate_all_standard_views_legacy(step_path, include_hidden=False,
         }
 
     # ===== 计算统一缩放比例 =====
-    # 基于所有视图的2D包围盒,取最大尺寸,确保所有视图比例一致
-    all_raw = []
+    # 不同视图的2D坐标轴不同,每个视图单独算 bbox 后取最大尺寸。
+    max_2d_extent = 1.0
     for rv in raw_views.values():
-        all_raw.extend(rv["visible"])
-        all_raw.extend(rv["hidden"])
-
-    if all_raw:
-        min_x, min_y, max_x, max_y = _compute_bbox([all_raw])
-        max_2d_extent = max(max_x - min_x, max_y - min_y)
-    else:
-        max_2d_extent = 1.0
+        view_segs = rv["visible"] + rv["hidden"]
+        if not view_segs:
+            continue
+        min_x, min_y, max_x, max_y = _compute_bbox([view_segs])
+        max_2d_extent = max(max_2d_extent, max_x - min_x, max_y - min_y)
 
     # 统一缩放:基于最大2D尺寸,缩放到画布可用区域
     margin = 10

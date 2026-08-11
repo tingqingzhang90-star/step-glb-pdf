@@ -465,6 +465,23 @@ def apply_template(views_data, template, params=None):
     anchor_map = {a.get("id"): a for a in anchors if a.get("id")}
 
     # 1. 布局视图: 计算每个视图的偏移和缩放
+    #
+    # 注意:
+    #   当多个视图都配置为 scale=auto 时,不能让每个视图单独按自己的 bbox 放大,
+    #   否则细长视图会被放得过大,导致线条杂糅; 这里改为整张图共用一个自动比例。
+    auto_scale_values = []
+    for view_def in template.get("views", []):
+        view_type = view_def["type"]
+        if view_type not in raw_views or view_def.get("scale") != "auto":
+            continue
+        bbox = raw_views[view_type]["bbox"]
+        target_w = view_def.get("target_width", 200)
+        target_h = view_def.get("target_height", 150)
+        if bbox["width"] > 0 and bbox["height"] > 0:
+            auto_scale_values.append(min(target_w / bbox["width"], target_h / bbox["height"]))
+
+    shared_auto_scale = min(auto_scale_values) if auto_scale_values else 1.0
+
     for view_def in template.get("views", []):
         view_id = view_def["id"]
         view_type = view_def["type"]
@@ -475,20 +492,17 @@ def apply_template(views_data, template, params=None):
         raw_view = raw_views[view_type]
         bbox = raw_view["bbox"]
 
-        # 计算缩放比例(auto = 适应视图区域)
+        # 计算缩放比例(auto = 整张图共用同一比例)
         target_w = view_def.get("target_width", 200)
         target_h = view_def.get("target_height", 150)
 
         if view_def.get("scale") == "auto":
-            if bbox["width"] > 0 and bbox["height"] > 0:
-                scale = min(target_w / bbox["width"], target_h / bbox["height"])
-            else:
-                scale = 1.0
+            scale = shared_auto_scale
         else:
             try:
                 scale = float(view_def["scale"])
             except (ValueError, TypeError):
-                scale = 1.0
+                scale = shared_auto_scale
 
         offset_x = view_def["x"] - bbox["min_x"] * scale
         offset_y = view_def["y"] - bbox["min_y"] * scale
