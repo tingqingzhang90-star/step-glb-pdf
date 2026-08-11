@@ -6,48 +6,131 @@
       "id": "cylinder.front_end",
       "type": "plane",
       "label": "缸筒前端面",
-      "source": {"kind": "parameter", "name": "stroke_start"},
-      "point3d": [0, 0, 0],
-      "views": ["front", "left", "top"]
+      "source": {
+        "kind": "parameter",
+        "name": "stroke_start"
+      },
+      "point3d": [
+        0,
+        0,
+        0
+      ],
+      "views": [
+        "front",
+        "left",
+        "top"
+      ]
     },
     {
       "id": "cylinder.back_end",
       "type": "plane",
       "label": "缸筒后端面",
-      "source": {"kind": "parameter", "name": "stroke_end"},
-      "point3d": [100, 0, 0],
-      "views": ["front", "left", "top"]
+      "source": {
+        "kind": "parameter",
+        "name": "stroke_end"
+      },
+      "point3d": [
+        100,
+        0,
+        0
+      ],
+      "views": [
+        "front",
+        "left",
+        "top"
+      ]
     },
     {
       "id": "cylinder.axis",
       "type": "axis",
       "label": "缸体中心轴",
-      "source": {"kind": "geometry", "name": "main_axis"},
-      "direction3d": [1, 0, 0],
-      "views": ["front", "left", "top"]
+      "source": {
+        "kind": "geometry",
+        "name": "main_axis"
+      },
+      "direction3d": [
+        1,
+        0,
+        0
+      ],
+      "views": [
+        "front",
+        "left",
+        "top"
+      ]
     },
     {
       "id": "motor.body",
       "type": "box",
       "label": "电机包络",
-      "source": {"kind": "part", "name": "motor"},
-      "views": ["right", "front"]
+      "source": {
+        "kind": "part",
+        "name": "motor"
+      },
+      "views": [
+        "right",
+        "front"
+      ],
+      "point3d": [
+        205.95,
+        265.32,
+        -567.24
+      ],
+      "bbox_min": [
+        82.85,
+        117.97,
+        -898.24
+      ],
+      "bbox_max": [
+        329.05,
+        412.67,
+        -236.24
+      ],
+      "size": [
+        246.2,
+        294.7,
+        662.0
+      ]
     },
     {
       "id": "mounting.hole_1",
       "type": "point",
       "label": "安装孔1",
-      "source": {"kind": "geometry", "name": "mount_hole_1"},
-      "point3d": [20, 30, 0],
-      "views": ["front", "top"]
+      "source": {
+        "kind": "geometry",
+        "name": "mount_hole_1"
+      },
+      "point3d": [
+        20,
+        30,
+        0
+      ],
+      "views": [
+        "front",
+        "top"
+      ]
     },
     {
       "id": "mounting.hole_2",
       "type": "point",
       "label": "安装孔2",
-      "source": {"kind": "geometry", "name": "mount_hole_2"},
-      "point3d": [80, 30, 0],
-      "views": ["front", "top"]
+      "source": {
+        "kind": "geometry",
+        "name": "mount_hole_2"
+      },
+      "point3d": [
+        80,
+        30,
+        0
+      ],
+      "views": [
+        "front",
+        "top"
+      ]
     }
-  ]
+  ],
+  "last_updated": {
+    "model_code": "250-E-H3K2-L100-D11",
+    "source": "auto_extracted"
+  }
 }
