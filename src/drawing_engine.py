@@ -28,7 +28,7 @@ from OCC.Core.TopoDS import TopoDS_Shape, topods
 from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopAbs import TopAbs_EDGE, TopAbs_FACE
 from OCC.Core.BRep import BRep_Tool
-from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Trsf, gp_Lin, gp_Pln
+from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Ax3, gp_Trsf, gp_Lin, gp_Pln
 from OCC.Core.HLRBRep import (HLRBRep_Algo, HLRBRep_HLRToShape,
                               HLRBRep_PolyAlgo, HLRBRep_PolyHLRToShape)
 from OCC.Core.HLRAlgo import HLRAlgo_Projector
@@ -97,9 +97,11 @@ def read_shape_cached(step_path):
     return shape
 
 
-def _project_shape(shape, view_dir, up_dir=None, show_hidden=False):
+def _project_shape(shape, view_dir, up_dir=None, show_hidden=False,
+                   max_extent=None):
     """兼容入口:切到 HLR 工业图路线"""
-    return _project_shape_poly(shape, view_dir, up_dir=up_dir, show_hidden=show_hidden)
+    return _project_shape_poly(shape, view_dir, up_dir=up_dir,
+                               show_hidden=show_hidden, max_extent=max_extent)
 
 
 def _edge_to_2d_segments(edge, x_dir, up_dir, deflection=0.5):
@@ -198,10 +200,85 @@ def _discretize_curve(adaptor, x_dir, up_dir, deflection=0.5):
     return segments
 
 
-def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
+def _compute_view_bounds_2d(shape, ax2, margin=1.0):
+    """用与 HLR Projector 相同的变换,把模型 3D 包围盒 8 角点投影到
+    视图平面,得到该视图合法的 2D 坐标范围。
+
+    真实几何边的投影不可能超出这个范围;超出的边一定是 HLR 剪影
+    (OutLine)计算的数值伪影,可安全丢弃。
+
+    Returns:
+        (xmin, ymin, xmax, ymax) 含 margin 的合法范围, 失败时 None
+    """
+    try:
+        from OCC.Core.Bnd import Bnd_Box
+        from OCC.Core.BRepBndLib import brepbndlib
+        box = Bnd_Box()
+        brepbndlib.Add(shape, box)
+        if box.IsVoid():
+            return None
+        xmin, ymin, zmin, xmax, ymax, zmax = box.Get()
+
+        # HLR Projector 内部的变换: 世界坐标 -> ax2 局部坐标
+        trsf = gp_Trsf()
+        trsf.SetTransformation(gp_Ax3(ax2))
+
+        xs, ys = [], []
+        for cx in (xmin, xmax):
+            for cy in (ymin, ymax):
+                for cz in (zmin, zmax):
+                    p = gp_Pnt(cx, cy, cz)
+                    p.Transform(trsf)
+                    xs.append(p.X())
+                    ys.append(p.Y())
+        return (min(xs) - margin, min(ys) - margin,
+                max(xs) + margin, max(ys) + margin)
+    except Exception:
+        return None
+
+
+def _drop_out_of_bounds_segments(segments, bounds):
+    """丢弃超出视图合法 2D 范围的边(HLR 剪影数值伪影)。
+
+    真实几何边永远落在模型包围盒的投影范围内,任何越界边都是
+    HLRBRep_Algo 对装配体 BSpline 面求剪影线时产生的退化曲线。
+    """
+    if not segments or bounds is None:
+        return segments
+    bx0, by0, bx1, by1 = bounds
+
+    def in_bounds(x, y):
+        return bx0 <= x <= bx1 and by0 <= y <= by1
+
+    kept = []
+    for seg in segments:
+        t = seg.get("type")
+        if t == "line":
+            if in_bounds(seg["x1"], seg["y1"]) and in_bounds(seg["x2"], seg["y2"]):
+                kept.append(seg)
+        elif t == "circle":
+            cx, cy, r = seg["cx"], seg["cy"], seg["r"]
+            if (bx0 <= cx - r and cx + r <= bx1 and
+                    by0 <= cy - r and cy + r <= by1):
+                kept.append(seg)
+        elif t == "polyline":
+            pts = seg.get("points") or []
+            if pts and all(in_bounds(p[0], p[1]) for p in pts):
+                kept.append(seg)
+        else:
+            kept.append(seg)
+    return kept
+
+
+def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False,
+                        max_extent=None):
     """对 shape 执行精确 HLR 投影,返回工业工程图边线。
 
     使用 HLRBRep_Algo 做隐藏线消除,默认只输出可见边、相切边和外轮廓边。
+
+    HLR 对装配体求外轮廓(剪影)线时,多零件 BSpline 面的剪影求交存在
+    数值缺陷,会产生远超模型尺寸的退化曲线(逐 solid 单独投影则不会)。
+    这里用模型包围盒投影出的合法 2D 范围做物理判据,精确剔除这类伪影。
     """
     if up_dir is None:
         if abs(view_dir.Z()) < 0.9:
@@ -217,6 +294,9 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     )
     ax2 = gp_Ax2(origin, view_dir, x_dir)
 
+    # 计算该视图的合法 2D 范围(模型 bbox 8 角点投影)
+    bounds = _compute_view_bounds_2d(shape, ax2, margin=1.0)
+
     hlr = HLRBRep_Algo()
     hlr.Add(shape)
     hlr.Projector(HLRAlgo_Projector(ax2))
@@ -226,18 +306,19 @@ def _project_shape_poly(shape, view_dir, up_dir=None, show_hidden=False):
     hlr_to_shape = HLRBRep_HLRToShape(hlr)
 
     visible_segments = []
-    visible_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineVCompound()))
-    visible_segments.extend(_extract_2d_segments(hlr_to_shape.VCompound()))
-    visible_segments.extend(_extract_2d_segments(hlr_to_shape.Rg1LineVCompound()))
+    visible_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineVCompound(), max_extent=max_extent))
+    visible_segments.extend(_extract_2d_segments(hlr_to_shape.VCompound(), max_extent=max_extent))
+    visible_segments.extend(_extract_2d_segments(hlr_to_shape.Rg1LineVCompound(), max_extent=max_extent))
     visible_segments = _filter_short_segments(visible_segments, min_length=2.0)
-    visible_segments = _filter_long_segments(visible_segments, max_length=2500.0)
+    # 用包围盒投影范围剔除 HLR 剪影退化边(装配体 BSpline 外轮廓数值伪影)
+    visible_segments = _drop_out_of_bounds_segments(visible_segments, bounds)
 
     hidden_segments = []
     if show_hidden:
-        hidden_segments.extend(_extract_2d_segments(hlr_to_shape.HCompound()))
-        hidden_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineHCompound()))
+        hidden_segments.extend(_extract_2d_segments(hlr_to_shape.HCompound(), max_extent=max_extent))
+        hidden_segments.extend(_extract_2d_segments(hlr_to_shape.OutLineHCompound(), max_extent=max_extent))
         hidden_segments = _filter_short_segments(hidden_segments, min_length=2.0)
-        hidden_segments = _filter_long_segments(hidden_segments, max_length=2500.0)
+        hidden_segments = _drop_out_of_bounds_segments(hidden_segments, bounds)
 
     return visible_segments, hidden_segments
 
@@ -427,7 +508,7 @@ def _mark_outline_edges(visible_segments, outline_segments, tol=0.5):
                 seg["edge_class"] = "outline"
 
 
-def _extract_2d_segments(shape, x_dir=None, up_dir=None):
+def _extract_2d_segments(shape, x_dir=None, up_dir=None, max_extent=None):
     """将 HLR 投影后的 shape 转换为 2D 线段/圆弧数据
 
     HLR 输出仍是 3D 边,必须按当前视图的屏幕 x/up 轴投影到 2D。
@@ -440,13 +521,14 @@ def _extract_2d_segments(shape, x_dir=None, up_dir=None):
 
     while explorer.More():
         edge = topods.Edge(explorer.Current())
-        segments.extend(_edge_to_segments(edge, x_dir=x_dir, up_dir=up_dir))
+        segments.extend(_edge_to_segments(edge, x_dir=x_dir, up_dir=up_dir,
+                                          max_extent=max_extent))
         explorer.Next()
 
     return segments
 
 
-def _edge_to_segments(edge, x_dir=None, up_dir=None):
+def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
     """将一条边转换为 2D 线段/圆弧数据(含元数据)
 
     元数据 meta 用于模板边线匹配:
@@ -510,11 +592,13 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None):
                     }
                 })
             else:
-                pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir)
+                pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
+                                        max_extent=max_extent)
                 if pts:
                     segments.append({"type": "polyline", "points": pts})
         else:
-            pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir)
+            pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
+                                    max_extent=max_extent)
             if pts:
                 segments.append({"type": "polyline", "points": pts})
     except Exception:
@@ -523,13 +607,15 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None):
     return segments
 
 
-def _discretize_curve(adaptor, deflection=0.1, x_dir=None, up_dir=None):
+def _discretize_curve(adaptor, deflection=0.1, x_dir=None, up_dir=None,
+                      max_extent=None):
     """将曲线离散为 2D 点列表
 
     Args:
         adaptor: BRepAdaptor_Curve
         deflection: 离散精度(mm)
         x_dir/up_dir: 当前视图屏幕轴,用于正确投影到 2D
+        max_extent: 模型最大尺寸(mm),用于检测 HLR 数值异常
 
     Returns:
         [[x1,y1], [x2,y2], ...] 或 None
@@ -559,6 +645,15 @@ def _discretize_curve(adaptor, deflection=0.1, x_dir=None, up_dir=None):
         for i in range(1, sampler.NbPoints() + 1):
             p = project_point(sampler.Value(i))
             pts.append(p)
+
+        # 检测 HLR 数值异常:采样点跨度远超模型尺寸时丢弃
+        if max_extent and len(pts) >= 2:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            span = max(max(xs) - min(xs), max(ys) - min(ys))
+            if span > max_extent * 1.5:
+                return None
+
         return pts
     except Exception:
         return None
@@ -1236,6 +1331,11 @@ def generate_all_standard_views(step_path, include_hidden=False,
         "height": round(float(ymax - ymin), 2),
         "depth": round(float(zmax - zmin), 2)
     }
+    max_extent = max(
+        float(xmax - xmin),
+        float(ymax - ymin),
+        float(zmax - zmin)
+    )
 
     # 第一遍: 投影所有视图,收集原始2D坐标
     t1 = time.time()
@@ -1244,7 +1344,8 @@ def generate_all_standard_views(step_path, include_hidden=False,
         t2 = time.time()
         # 使用精确算法 + OutLineVCompound(外轮廓边,工业图标准)
         visible, hidden = _project_shape(
-            shape, cfg["dir"], cfg["up"], show_hidden=include_hidden
+            shape, cfg["dir"], cfg["up"],
+            show_hidden=include_hidden, max_extent=max_extent
         )
         t_proj = time.time() - t2
         raw_views[view_name] = {
