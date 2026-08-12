@@ -245,7 +245,7 @@
           </div>
           <div class="prop-row stacked">
             <span class="prop-label">比例</span>
-            <el-input-number v-model="selectedView.scale" :min="0.1" :max="5" :step="0.1" size="small" class="prop-input" />
+            <el-input-number :model-value="selectedView.scale" :min="0.1" :max="5" :step="0.1" size="small" class="prop-input" @update:model-value="onViewScaleChange" />
           </div>
           <div class="prop-row">
             <span class="prop-label">位置</span>
@@ -635,15 +635,31 @@ function clearPlacedViews() {
   selectedViewId.value = null
 }
 
+function zoomViewAroundCenter(view, newScale) {
+  const bbox = view.contentBBox
+  const cx = bbox.x + bbox.width / 2
+  const cy = bbox.y + bbox.height / 2
+  const oldScale = view.scale
+  view.x = view.x + cx * (oldScale - newScale)
+  view.y = view.y + cy * (oldScale - newScale)
+  view.scale = newScale
+}
+
+function onViewScaleChange(newScale) {
+  const view = placedViews.value.find(v => v.id === selectedViewId.value)
+  if (!view) return
+  zoomViewAroundCenter(view, Math.max(0.1, Math.min(5, newScale)))
+}
+
 function zoomCanvas(factor) {
   for (const v of placedViews.value) {
-    v.scale = Math.max(0.1, Math.min(5, v.scale * factor))
+    zoomViewAroundCenter(v, Math.max(0.1, Math.min(5, v.scale * factor)))
   }
 }
 
 function resetCanvas() {
   for (const v of placedViews.value) {
-    v.scale = 1
+    zoomViewAroundCenter(v, 1)
   }
 }
 
