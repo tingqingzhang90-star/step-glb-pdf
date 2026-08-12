@@ -48,6 +48,11 @@
         "kind": "geometry",
         "name": "main_axis"
       },
+      "point3d": [
+        205.95,
+        229.57,
+        315.76
+      ],
       "direction3d": [
         -0.0,
         -0.0,

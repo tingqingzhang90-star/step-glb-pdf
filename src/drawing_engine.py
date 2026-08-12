@@ -1096,12 +1096,9 @@ def generate_drawing_views_raw(step_path, views=None):
         "depth": round(float(zmax - zmin), 2)
     }
 
-    view_configs = {
-        "front": {"dir": gp_Dir(0, -1, 0), "up": gp_Dir(0, 0, 1), "label": "主视图"},
-        "top":   {"dir": gp_Dir(0, 0, -1), "up": gp_Dir(0, 1, 0), "label": "俯视图"},
-        "left":  {"dir": gp_Dir(-1, 0, 0), "up": gp_Dir(0, 0, 1), "label": "侧视图"},
-        "iso":   {"dir": gp_Dir(1, -1, 1), "up": gp_Dir(0, 0, 1), "label": "轴测视图"},
-    }
+    # 使用与 generate_all_standard_views 相同的 STANDARD_VIEW_CONFIGS,
+    # 确保 HLR 视图方向与 viewer.html 和锚点投影轴一致
+    view_configs = STANDARD_VIEW_CONFIGS
 
     result_views = {}
     for view_name in views:

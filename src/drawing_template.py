@@ -99,10 +99,11 @@ def _get_builtin_template():
             },
             {
                 "id": "dim_bore",
-                "type": "hole",
-                "view": "front",
-                "circle_ref": {"method": "largest_circle"},
-                "leader": {"dx": 25, "dy": -20}
+                "type": "diameter",
+                "view": "left",
+                "from_anchor": "cylinder.axis",
+                "offset": 25,
+                "label": "缸径"
             },
             {
                 "id": "dim_stroke",
@@ -183,6 +184,80 @@ def _get_builtin_anchors():
 
 
 # ==================== 边线匹配引擎 ====================
+
+def _fit_circles_from_polylines(segments, tolerance=0.05):
+    """从 polyline 段中检测近似圆,返回拟合出的 circle 段列表
+
+    HLR 会把圆弧输出为离散 polyline,导致 largest_circle 等匹配失效。
+    此函数对每条 polyline 做圆拟合检测:
+      1. 计算点集质心作为候选圆心
+      2. 检查所有点到质心距离的变异系数 < tolerance
+      3. 检查点数 >= 8(圆弧至少需要多点才可靠拟合)
+      4. 检查点集角度跨度 >= 270°(接近完整圆)
+
+    Args:
+        segments: 边线列表
+        tolerance: 距离变异系数阈值(默认 5%)
+
+    Returns:
+        list: 拟合出的 circle 段 [{"type":"circle","cx","cy","r"}, ...]
+    """
+    circles = []
+    for seg in segments:
+        if seg.get("type") != "polyline":
+            continue
+        pts = seg.get("points", [])
+        if len(pts) < 8:
+            continue
+
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        cx = sum(xs) / len(xs)
+        cy = sum(ys) / len(ys)
+
+        # 计算各点到质心距离
+        dists = [math.hypot(p[0] - cx, p[1] - cy) for p in pts]
+        avg_r = sum(dists) / len(dists)
+        if avg_r < 1.0:
+            continue
+
+        # 变异系数 = 标准差 / 均值
+        variance = sum((d - avg_r) ** 2 for d in dists) / len(dists)
+        cv = (variance ** 0.5) / avg_r
+        if cv > tolerance:
+            continue
+
+        # 检查角度跨度(接近完整圆)
+        import math as m
+        angles = sorted(m.atan2(p[1] - cy, p[0] - cx) for p in pts)
+        max_gap = 0
+        for i in range(len(angles)):
+            gap = angles[(i + 1) % len(angles)] - angles[i]
+            if gap < 0:
+                gap += 2 * m.pi
+            max_gap = max(max_gap, gap)
+        angle_span = 2 * m.pi - max_gap  # 总跨度
+
+        if angle_span < m.radians(270):
+            continue
+
+        circles.append({
+            "type": "circle",
+            "cx": round(cx, 2),
+            "cy": round(cy, 2),
+            "r": round(avg_r, 2)
+        })
+
+    return circles
+
+
+def _segments_with_fitted_circles(segments):
+    """在 segments 中补充拟合出的圆(不修改原列表)"""
+    fitted = _fit_circles_from_polylines(segments)
+    if fitted:
+        return segments + fitted
+    return segments
+
 
 def _find_edge_by_method(segments, method, **kwargs):
     """根据匹配方法找到对应的边线
@@ -542,7 +617,7 @@ def apply_template(views_data, template, params=None):
             continue
 
         view_data = result["views"][view_key]
-        segments = view_data["visible"]
+        segments = _segments_with_fitted_circles(view_data["visible"])
         scale = view_data["scale"]
         offset = view_data["offset"]
 
@@ -678,6 +753,33 @@ def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, para
         return calc
 
     elif dim_type == "diameter":
+        # 优先使用锚点(cylinder.axis 含 radius 字段)
+        if dim_def.get("from_anchor"):
+            anchor = anchor_map.get(dim_def["from_anchor"])
+            if anchor and anchor.get("radius"):
+                radius = float(anchor["radius"])
+                # 锚点 3D → 2D 投影得到圆心屏幕坐标
+                center_2d = _anchor_to_2d_point(anchor, view_type)
+                if center_2d:
+                    calc = {
+                        "value": round(radius * 2, 1),
+                        "center": center_2d,
+                        "text": f"Ø{radius * 2:.0f}",
+                    }
+                    calc["center_screen"] = to_screen(*calc["center"])
+                    # 引线终点: 从圆心向右上偏移
+                    off = dim_def.get("offset", 25)
+                    calc["leader_end"] = [
+                        round(calc["center_screen"][0] + off, 2),
+                        round(calc["center_screen"][1] - off * 0.7, 2)
+                    ]
+                    calc["id"] = dim_def["id"]
+                    calc["type"] = "diameter"
+                    calc["view"] = dim_def.get("view", "")
+                    calc["label"] = dim_def.get("label", "")
+                    return calc
+
+        # 回退: 从视图边线匹配圆
         circle = _match_edge(segments, dim_def.get("circle_ref"))
         if not circle:
             return None
@@ -690,6 +792,7 @@ def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, para
         calc["id"] = dim_def["id"]
         calc["type"] = "diameter"
         calc["view"] = dim_def.get("view", "")
+        calc["label"] = dim_def.get("label", "")
         return calc
 
     elif dim_type == "radius":
@@ -712,16 +815,22 @@ def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, para
     return None
 
 
-# 视图投影轴配置(与 drawing_engine.generate_drawing_views_raw 的 view_configs 一致)
+# 视图投影轴配置(与 drawing_engine.STANDARD_VIEW_CONFIGS 一致)
 # x_dir: 屏幕右方向(模型坐标), up_dir: 屏幕上方向(模型坐标)
-# 计算方式: x_dir = view_dir × up_dir (与 _project_shape 一致)
+# 计算方式: x_dir = view_dir × up_dir (与 HLR Projector 的 gp_Ax2 一致)
 _VIEW_PROJECTION_AXES = {
-    # front: dir=(0,-1,0), up=(0,0,1) → x_dir = dir×up = (-1,0,0)
-    "front": {"x_dir": (-1, 0, 0), "up_dir": (0, 0, 1)},
-    # top: dir=(0,0,-1), up=(0,1,0) → x_dir = dir×up = (1,0,0)
-    "top":   {"x_dir": (1, 0, 0),  "up_dir": (0, 1, 0)},
-    # left: dir=(-1,0,0), up=(0,0,1) → x_dir = dir×up = (0,1,0)
-    "left":  {"x_dir": (0, 1, 0),  "up_dir": (0, 0, 1)},
+    # front: dir=(0,0,1), up=(0,1,0) → x_dir=(-1,0,0), screen: x=-px, y=py
+    "front":  {"x_dir": (-1, 0, 0), "up_dir": (0, 1, 0)},
+    # back: dir=(0,0,-1), up=(0,1,0) → x_dir=(1,0,0), screen: x=px, y=py
+    "back":   {"x_dir": (1, 0, 0),  "up_dir": (0, 1, 0)},
+    # left: dir=(1,0,0), up=(0,1,0) → x_dir=(0,0,1), screen: x=pz, y=py
+    "left":   {"x_dir": (0, 0, 1),  "up_dir": (0, 1, 0)},
+    # right: dir=(-1,0,0), up=(0,1,0) → x_dir=(0,0,-1), screen: x=-pz, y=py
+    "right":  {"x_dir": (0, 0, -1), "up_dir": (0, 1, 0)},
+    # top: dir=(0,-1,0), up=(0,0,-1) → x_dir=(1,0,0), screen: x=px, y=-pz
+    "top":    {"x_dir": (1, 0, 0),  "up_dir": (0, 0, -1)},
+    # bottom: dir=(0,1,0), up=(0,0,1) → x_dir=(1,0,0), screen: x=px, y=pz
+    "bottom": {"x_dir": (1, 0, 0),  "up_dir": (0, 0, 1)},
 }
 
 
@@ -809,3 +918,293 @@ def _resolve_template_string(template_str, params):
     for key, value in params.items():
         result = result.replace(f"{{{{{key}}}}}", str(value))
     return result
+
+
+# ==================== SVG 渲染 ====================
+
+def render_engineering_svg(template_result, params=None):
+    """将 apply_template 的结果渲染为完整工程图 SVG
+
+    生成 A3 图框 + 视图边线 + 标注(尺寸线/引线/文本) + 标题栏。
+
+    Args:
+        template_result: apply_template() 的返回值
+        params: 参数 dict(用于标题栏变量替换)
+
+    Returns:
+        str: 完整 SVG 字符串
+    """
+    if params is None:
+        params = {}
+
+    sheet = template_result.get("sheet", {"width": 420, "height": 297})
+    sw = sheet.get("width", 420)
+    sh = sheet.get("height", 297)
+
+    svg_parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{sw * 2}" height="{sh * 2}" '
+        f'viewBox="0 0 {sw} {sh}" '
+        f'style="background:#fff;border:1px solid #ccc;">',
+        f'<rect x="0" y="0" width="{sw}" height="{sh}" fill="white"/>',
+        # 图框边线
+        f'<rect x="10" y="10" width="{sw - 20}" height="{sh - 20}" '
+        f'fill="none" stroke="#333" stroke-width="0.8"/>',
+    ]
+
+    # 1. 渲染视图边线
+    for view_id, vdata in template_result.get("views", {}).items():
+        scale = vdata.get("scale", 1.0)
+        ox, oy = vdata.get("offset", [0, 0])
+        visible = vdata.get("visible", [])
+        hidden = vdata.get("hidden", [])
+
+        # 视图标签
+        svg_parts.append(
+            f'<text x="{ox + 5}" y="{oy - 5}" '
+            f'font-size="3.5" font-family="sans-serif" fill="#666">'
+            f'{vdata.get("label", view_id)}</text>'
+        )
+
+        # 可见边
+        for seg in visible:
+            svg_parts.append(_segment_to_svg(seg, scale, ox, oy,
+                                              stroke="#333", width=0.4))
+        # 隐藏边(虚线)
+        for seg in hidden:
+            svg_parts.append(_segment_to_svg(seg, scale, ox, oy,
+                                              stroke="#999", width=0.3,
+                                              dash="1,1"))
+
+    # 2. 渲染标注
+    for dim in template_result.get("dimensions", []):
+        svg_parts.append(_dimension_to_svg(dim))
+
+    # 3. 标题栏
+    title_block = template_result.get("title_block", {})
+    if title_block.get("fields"):
+        # 标题栏外框
+        svg_parts.append(
+            f'<rect x="{sw - 110}" y="{sh - 45}" width="100" height="35" '
+            f'fill="none" stroke="#333" stroke-width="0.5"/>'
+        )
+        for field in title_block["fields"]:
+            fx, fy = field.get("x", 0), field.get("y", 0)
+            svg_parts.append(
+                f'<text x="{fx}" y="{fy}" font-size="2.5" '
+                f'font-family="sans-serif" fill="#333">'
+                f'{field.get("name", "")}: {field.get("value", "")}</text>'
+            )
+
+    svg_parts.append('</svg>')
+    return '\n'.join(svg_parts)
+
+
+def _segment_to_svg(seg, scale, ox, oy, stroke="#333", width=0.4, dash=None):
+    """将单条边线转换为 SVG 元素(应用缩放+偏移)"""
+    def tx(x):
+        return round(x * scale + ox, 2)
+
+    def ty(y):
+        return round(y * scale + oy, 2)
+
+    dash_attr = f' stroke-dasharray="{dash}"' if dash else ''
+    t = seg.get("type", "")
+
+    if t == "line":
+        return (f'<line x1="{tx(seg["x1"])}" y1="{ty(seg["y1"])}" '
+                f'x2="{tx(seg["x2"])}" y2="{ty(seg["y2"])}" '
+                f'stroke="{stroke}" stroke-width="{width}"{dash_attr}/>')
+    elif t == "circle":
+        return (f'<circle cx="{tx(seg["cx"])}" cy="{ty(seg["cy"])}" '
+                f'r="{round(seg["r"] * scale, 2)}" '
+                f'stroke="{stroke}" stroke-width="{width}" '
+                f'fill="none"{dash_attr}/>')
+    elif t == "polyline":
+        pts = seg.get("points", [])
+        if len(pts) < 2:
+            return ""
+        pts_str = " ".join(f"{tx(p[0])},{ty(p[1])}" for p in pts)
+        return (f'<polyline points="{pts_str}" stroke="{stroke}" '
+                f'stroke-width="{width}" fill="none"{dash_attr}/>')
+    return ""
+
+
+def _dimension_to_svg(dim):
+    """将标注转换为 SVG 元素(尺寸线/引线/文本)"""
+    dt = dim.get("type", "")
+
+    if dt == "linear":
+        p1 = dim.get("p1_screen")
+        p2 = dim.get("p2_screen")
+        if not p1 or not p2:
+            return ""
+        orient = dim.get("orientation", "horizontal")
+        offset = dim.get("offset", 20)
+
+        if orient == "horizontal":
+            # 水平尺寸线: 两端在 p1/p2 下方 offset 处
+            oy_val = max(p1[1], p2[1]) + offset
+            parts = [
+                # 引线
+                f'<line x1="{p1[0]}" y1="{p1[1]}" x2="{p1[0]}" y2="{oy_val}" '
+                f'stroke="#666" stroke-width="0.3" stroke-dasharray="1,1"/>',
+                f'<line x1="{p2[0]}" y1="{p2[1]}" x2="{p2[0]}" y2="{oy_val}" '
+                f'stroke="#666" stroke-width="0.3" stroke-dasharray="1,1"/>',
+                # 尺寸线
+                f'<line x1="{p1[0]}" y1="{oy_val}" x2="{p2[0]}" y2="{oy_val}" '
+                f'stroke="#1565C0" stroke-width="0.5"/>',
+                # 箭头(简单三角)
+                _arrow_svg(p1[0], oy_val, "right"),
+                _arrow_svg(p2[0], oy_val, "left"),
+                # 文本
+                f'<text x="{(p1[0] + p2[0]) / 2}" y="{oy_val - 1.5}" '
+                f'font-size="3" font-family="sans-serif" fill="#1565C0" '
+                f'text-anchor="middle">{dim.get("text", "")}</text>',
+            ]
+        elif orient == "vertical":
+            ox_val = max(p1[0], p2[0]) + offset
+            parts = [
+                f'<line x1="{p1[0]}" y1="{p1[1]}" x2="{ox_val}" y2="{p1[1]}" '
+                f'stroke="#666" stroke-width="0.3" stroke-dasharray="1,1"/>',
+                f'<line x1="{p2[0]}" y1="{p2[1]}" x2="{ox_val}" y2="{p2[1]}" '
+                f'stroke="#666" stroke-width="0.3" stroke-dasharray="1,1"/>',
+                f'<line x1="{ox_val}" y1="{p1[1]}" x2="{ox_val}" y2="{p2[1]}" '
+                f'stroke="#1565C0" stroke-width="0.5"/>',
+                _arrow_svg(ox_val, p1[1], "down"),
+                _arrow_svg(ox_val, p2[1], "up"),
+                f'<text x="{ox_val + 2}" y="{(p1[1] + p2[1]) / 2}" '
+                f'font-size="3" font-family="sans-serif" fill="#1565C0" '
+                f'text-anchor="middle">{dim.get("text", "")}</text>',
+            ]
+        else:
+            parts = [
+                f'<line x1="{p1[0]}" y1="{p1[1]}" x2="{p2[0]}" y2="{p2[1]}" '
+                f'stroke="#1565C0" stroke-width="0.5"/>',
+                f'<text x="{(p1[0] + p2[0]) / 2}" y="{(p1[1] + p2[1]) / 2 - 1.5}" '
+                f'font-size="3" font-family="sans-serif" fill="#1565C0" '
+                f'text-anchor="middle">{dim.get("text", "")}</text>',
+            ]
+
+        if dim.get("label"):
+            parts.append(
+                f'<text x="{(p1[0] + p2[0]) / 2}" y="{max(p1[1], p2[1]) + 5}" '
+                f'font-size="2.5" font-family="sans-serif" fill="#999" '
+                f'text-anchor="middle">({dim["label"]})</text>'
+            )
+        return '\n'.join(parts)
+
+    elif dt in ("hole", "diameter"):
+        center = dim.get("center_screen")
+        leader_end = dim.get("leader_end")
+        if not center:
+            return ""
+        parts = []
+        if leader_end:
+            parts.append(
+                f'<line x1="{center[0]}" y1="{center[1]}" '
+                f'x2="{leader_end[0]}" y2="{leader_end[1]}" '
+                f'stroke="#1565C0" stroke-width="0.4"/>'
+            )
+            parts.append(
+                f'<text x="{leader_end[0] + 1}" y="{leader_end[1]}" '
+                f'font-size="3" font-family="sans-serif" fill="#1565C0">'
+                f'{dim.get("text", "")}</text>'
+            )
+        else:
+            parts.append(
+                f'<text x="{center[0]}" y="{center[1] - 2}" '
+                f'font-size="3" font-family="sans-serif" fill="#1565C0" '
+                f'text-anchor="middle">{dim.get("text", "")}</text>'
+            )
+        return '\n'.join(parts)
+
+    elif dt == "text":
+        pos = dim.get("position", {"x": 0, "y": 0})
+        return (
+            f'<text x="{pos.get("x", 0)}" y="{pos.get("y", 0)}" '
+            f'font-size="3" font-family="sans-serif" fill="#333">'
+            f'{dim.get("text", "")}</text>'
+        )
+
+    return ""
+
+
+def _arrow_svg(x, y, direction):
+    """生成箭头 SVG(三角形)"""
+    s = 1.5  # 箭头大小
+    if direction == "right":
+        pts = f"{x},{y} {x+s},{y-s/2} {x+s},{y+s/2}"
+    elif direction == "left":
+        pts = f"{x},{y} {x-s},{y-s/2} {x-s},{y+s/2}"
+    elif direction == "up":
+        pts = f"{x},{y} {x-s/2},{y-s} {x+s/2},{y-s}"
+    elif direction == "down":
+        pts = f"{x},{y} {x-s/2},{y+s} {x+s/2},{y+s}"
+    else:
+        return ""
+    return f'<polygon points="{pts}" fill="#1565C0"/>'
+
+
+# ==================== 端到端集成入口 ====================
+
+def generate_drawing(step_path, template_path=None, anchors_path=None,
+                     params=None, views=None):
+    """端到端: STEP → HLR 视图 → 锚点投影 → 标注 → SVG 工程图
+
+    Args:
+        step_path: STEP 文件路径
+        template_path: 模板 JSON 路径(默认加载内置模板)
+        anchors_path: 锚点 JSON 路径(默认加载内置锚点)
+        params: 参数 dict(model_code, series, date, scale 等)
+        views: 视图列表(默认 ["front", "top", "left"])
+
+    Returns:
+        {
+            "svg": str,           # 完整 SVG 工程图
+            "template_result": dict,  # 模板应用结果(含标注数据)
+            "elapsed": float
+        }
+    """
+    import time as _time
+    t0 = _time.time()
+
+    if params is None:
+        params = {}
+
+    # 延迟导入 drawing_engine 避免循环依赖
+    import drawing_engine
+
+    if views is None:
+        views = ["front", "top", "left"]
+
+    # 1. 生成视图(模型坐标空间)
+    views_raw = drawing_engine.generate_drawing_views_raw(step_path, views=views)
+
+    # 2. 加载模板和锚点
+    if template_path:
+        template = load_template(template_path)
+    else:
+        template = load_default_template()
+
+    if anchors_path:
+        anchors = load_anchors(anchors_path)
+    else:
+        anchors = load_default_anchors()
+
+    # 合并锚点到 views_data
+    views_data = dict(views_raw)
+    views_data["anchors"] = anchors
+
+    # 3. 应用模板(标注计算)
+    template_result = apply_template(views_data, template, params)
+
+    # 4. 渲染 SVG
+    svg = render_engineering_svg(template_result, params)
+
+    elapsed = _time.time() - t0
+    return {
+        "svg": svg,
+        "template_result": template_result,
+        "elapsed": round(elapsed, 3)
+    }

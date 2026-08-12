@@ -61,9 +61,10 @@
     {
       "id": "dim_bore",
       "type": "diameter",
-      "view": "front",
-      "circle_ref": {"method": "largest_circle"},
-      "label": "直径"
+      "view": "left",
+      "from_anchor": "cylinder.axis",
+      "offset": 25,
+      "label": "缸径"
     },
     {
       "id": "dim_stroke",
