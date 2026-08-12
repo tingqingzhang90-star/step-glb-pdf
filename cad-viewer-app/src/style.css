@@ -1,6 +1,13 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body, #app { height: 100%; width: 100%; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; }
 
+body.palette-pointer-dragging,
+body.palette-pointer-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
 .app-container { display: flex; flex-direction: column; height: 100%; }
 
 .toolbar {

@@ -59,10 +59,8 @@
                 v-for="vw in standardViews"
                 :key="vw.name"
                 class="view-item"
-                draggable="true"
                 :title="`点击或拖拽放置「${vw.label}」`"
-                @dragstart="onPaletteDragStart($event, vw)"
-                @click="onPaletteClick(vw)"
+                @pointerdown="onPalettePointerDown($event, vw)"
               >
                 <div class="view-thumbnail" v-html="vw.thumbnail"></div>
                 <span class="view-label">{{ vw.label }}</span>
@@ -77,10 +75,8 @@
                 v-for="vw in isometricViews"
                 :key="vw.name"
                 class="view-item"
-                draggable="true"
                 :title="`点击或拖拽放置「${vw.label}」`"
-                @dragstart="onPaletteDragStart($event, vw)"
-                @click="onPaletteClick(vw)"
+                @pointerdown="onPalettePointerDown($event, vw)"
               >
                 <div class="view-thumbnail" v-html="vw.thumbnail"></div>
                 <span class="view-label">{{ vw.label }}</span>
@@ -99,8 +95,6 @@
             :width="sheetWidth"
             :height="sheetHeight"
             :viewBox="`0 0 ${sheetWidth} ${sheetHeight}`"
-            @dragover.prevent
-            @drop="onSheetDrop"
             @mousedown="onSheetMouseDown"
           >
             <rect x="20" y="20" :width="sheetWidth - 40" :height="sheetHeight - 40" fill="#ffffff" stroke="#999" stroke-width="1" />
@@ -179,9 +173,52 @@
               </g>
             </g>
 
-            <g v-if="draggingFromPalette && dragPreviewPos" :transform="`translate(${dragPreviewPos.x}, ${dragPreviewPos.y})`" opacity="0.5">
-              <rect x="0" y="0" width="120" height="90" fill="#fff" stroke="#409eff" stroke-dasharray="3,3" />
-              <text x="60" y="50" text-anchor="middle" font-size="11" fill="#409eff">{{ draggingView.label }}</text>
+            <g
+              v-if="draggingFromPalette && draggingView && dragPreviewPos"
+              :transform="`translate(${dragPreviewPos.x}, ${dragPreviewPos.y}) scale(${dragPreviewPos.scale})`"
+              class="palette-drag-preview"
+            >
+              <rect
+                :x="dragPreviewPos.bbox.x - 4"
+                :y="dragPreviewPos.bbox.y - 4"
+                :width="dragPreviewPos.bbox.width + 8"
+                :height="dragPreviewPos.bbox.height + 8"
+                fill="rgba(64, 158, 255, 0.06)"
+                stroke="#409eff"
+                stroke-width="2"
+                stroke-dasharray="4,2"
+                vector-effect="non-scaling-stroke"
+              />
+              <template v-for="(seg, i) in draggingView.edges || []" :key="`preview-${i}`">
+                <line
+                  v-if="seg && seg.type === 'line'"
+                  :x1="seg.x1"
+                  :y1="seg.y1"
+                  :x2="seg.x2"
+                  :y2="seg.y2"
+                  stroke="#409eff"
+                  stroke-width="1"
+                  vector-effect="non-scaling-stroke"
+                />
+                <circle
+                  v-else-if="seg && seg.type === 'circle'"
+                  :cx="seg.cx"
+                  :cy="seg.cy"
+                  :r="seg.r"
+                  fill="none"
+                  stroke="#409eff"
+                  stroke-width="1"
+                  vector-effect="non-scaling-stroke"
+                />
+                <polyline
+                  v-else-if="seg && seg.type === 'polyline'"
+                  :points="polylinePoints(seg.points)"
+                  fill="none"
+                  stroke="#409eff"
+                  stroke-width="1"
+                  vector-effect="non-scaling-stroke"
+                />
+              </template>
             </g>
           </svg>
 
@@ -269,6 +306,9 @@ const draggingFromPalette = ref(false)
 const draggingView = ref(null)
 const dragPreviewPos = ref(null)
 
+let palettePointerStart = null
+let pendingPalettePointer = null
+let paletteAnimationFrame = 0
 let movingView = null
 let moveStartPos = null
 
@@ -310,11 +350,18 @@ onMounted(async () => {
   await loadModelList()
   window.addEventListener('mousemove', onGlobalMouseMove)
   window.addEventListener('mouseup', onGlobalMouseUp)
+  window.addEventListener('pointermove', onPalettePointerMove)
+  window.addEventListener('pointerup', onPalettePointerUp)
+  window.addEventListener('pointercancel', resetPaletteDrag)
 })
 
 onUnmounted(() => {
   window.removeEventListener('mousemove', onGlobalMouseMove)
   window.removeEventListener('mouseup', onGlobalMouseUp)
+  window.removeEventListener('pointermove', onPalettePointerMove)
+  window.removeEventListener('pointerup', onPalettePointerUp)
+  window.removeEventListener('pointercancel', resetPaletteDrag)
+  if (paletteAnimationFrame) cancelAnimationFrame(paletteAnimationFrame)
 })
 
 async function loadModelList() {
@@ -372,35 +419,106 @@ async function loadViewPalette() {
   }
 }
 
-function onPaletteDragStart(event, view) {
-  draggingFromPalette.value = true
+function isPointerOverSheet(event) {
+  const svg = svgRef.value
+  if (!svg) return false
+  const rect = svg.getBoundingClientRect()
+  return event.clientX >= rect.left && event.clientX <= rect.right
+    && event.clientY >= rect.top && event.clientY <= rect.bottom
+}
+
+function onPalettePointerDown(event, view) {
+  if (event.button !== 0) return
+  event.preventDefault()
   draggingView.value = view
-  event.dataTransfer.effectAllowed = 'copy'
-  event.dataTransfer.setData('text/plain', view.name)
+  palettePointerStart = { x: event.clientX, y: event.clientY }
+  pendingPalettePointer = event
+}
+
+function updatePalettePreview() {
+  paletteAnimationFrame = 0
+  const event = pendingPalettePointer
+  pendingPalettePointer = null
+  if (!event || !draggingView.value) return
+
+  if (!draggingFromPalette.value) {
+    const dx = event.clientX - palettePointerStart.x
+    const dy = event.clientY - palettePointerStart.y
+    if (Math.hypot(dx, dy) < 4) return
+    draggingFromPalette.value = true
+    document.body.classList.add('palette-pointer-dragging')
+  }
+
+  if (!isPointerOverSheet(event)) {
+    dragPreviewPos.value = null
+    return
+  }
+  const point = getSvgPoint(event)
+  if (point) dragPreviewPos.value = getCenteredViewPlacement(draggingView.value, point)
+}
+
+function onPalettePointerMove(event) {
+  if (!draggingView.value || !palettePointerStart) return
+  event.preventDefault()
+  pendingPalettePointer = event
+  if (!paletteAnimationFrame) {
+    paletteAnimationFrame = requestAnimationFrame(updatePalettePreview)
+  }
+}
+
+function onPalettePointerUp(event) {
+  if (!draggingView.value || !palettePointerStart) return
+  const view = draggingView.value
+  const wasDragging = draggingFromPalette.value
+
+  if (wasDragging && isPointerOverSheet(event)) {
+    const point = getSvgPoint(event)
+    if (point) {
+      const placement = getCenteredViewPlacement(view, point)
+      placeView(view, placement.x, placement.y, placement.scale)
+    }
+  } else if (!wasDragging) {
+    onPaletteClick(view)
+  }
+  resetPaletteDrag()
+}
+
+function getSvgPoint(event) {
+  const svg = svgRef.value
+  if (!svg) return null
+  const ctm = svg.getScreenCTM()
+  if (!ctm) return null
+  const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(ctm.inverse())
+  return { x: point.x, y: point.y }
+}
+
+function getCenteredViewPlacement(view, point, scale = getInitialViewScale(view)) {
+  const bbox = computeContentBBox(view)
+  return {
+    x: point.x - (bbox.x + bbox.width / 2) * scale,
+    y: point.y - (bbox.y + bbox.height / 2) * scale,
+    scale,
+    bbox
+  }
 }
 
 function onPaletteClick(view) {
-  const scale = getInitialViewScale(view)
-  const bbox = computeContentBBox(view)
-  placeView(view, sheetWidth.value / 2 - bbox.width * scale / 2, sheetHeight.value / 2 - bbox.height * scale / 2, scale)
+  const placement = getCenteredViewPlacement(view, {
+    x: sheetWidth.value / 2,
+    y: sheetHeight.value / 2
+  })
+  placeView(view, placement.x, placement.y, placement.scale)
 }
 
-function onSheetDrop(event) {
-  event.preventDefault()
-  if (!draggingFromPalette.value || !draggingView.value) return
-
-  const svg = svgRef.value
-  if (!svg) return
-  const rect = svg.getBoundingClientRect()
-  const x = (event.clientX - rect.left) / rect.width * sheetWidth.value
-  const y = (event.clientY - rect.top) / rect.height * sheetHeight.value
-  const scale = getInitialViewScale(draggingView.value)
-  const bbox = computeContentBBox(draggingView.value)
-
-  placeView(draggingView.value, x - bbox.width * scale / 2, y - bbox.height * scale / 2, scale)
+function resetPaletteDrag() {
+  if (paletteAnimationFrame) cancelAnimationFrame(paletteAnimationFrame)
+  paletteAnimationFrame = 0
+  pendingPalettePointer = null
+  palettePointerStart = null
   draggingFromPalette.value = false
   draggingView.value = null
   dragPreviewPos.value = null
+  document.body.classList.remove('palette-pointer-dragging')
 }
 
 function normalizeViewBBox(view) {
@@ -469,8 +587,8 @@ function placeView(view, x, y, scale = 1) {
     hiddenEdges,
     bbox,
     contentBBox,
-    x: Math.max(0, x),
-    y: Math.max(0, y),
+    x,
+    y,
     scale
   }
   placedViews.value.push(newView)
@@ -659,6 +777,8 @@ function polylinePoints(points) {
 
 .view-item {
   cursor: grab;
+  touch-action: none;
+  user-select: none;
   border: 1px solid #ebeef5;
   border-radius: 4px;
   padding: 4px;
@@ -742,6 +862,11 @@ function polylinePoints(points) {
 
 .placed-view.selected {
   filter: drop-shadow(0 0 4px rgba(64, 158, 255, 0.3));
+}
+
+.palette-drag-preview {
+  pointer-events: none;
+  opacity: 0.58;
 }
 
 .empty-state {
