@@ -94,11 +94,21 @@ function resolveOptionalPeerDeps() {
     '@mlightcad/cad-svg-plugin/register': ['registerLazySvgPlugin']
   }
 
+  function normalizeDepPath(depPath) {
+    for (const key of Object.keys(EXPORTS)) {
+      if (depPath === key || depPath.startsWith(key + ':')) {
+        return key
+      }
+    }
+    return depPath
+  }
+
   // 生成空 ESM 模块代码
   function buildEmptyModule(depPath) {
+    const normalizedDepPath = normalizeDepPath(depPath)
     // .css → 空 CSS
-    if (depPath.includes('.css')) return ''
-    const names = EXPORTS[depPath]
+    if (normalizedDepPath.includes('.css')) return ''
+    const names = EXPORTS[normalizedDepPath]
     if (!names) return ''
     // 生成 const + export 声明，函数返回 undefined / null
     const lines = names.map(
@@ -141,6 +151,14 @@ function resolveOptionalPeerDeps() {
 
 export default defineConfig({
   plugins: [vue(), createPatchDataModelPlugin(), resolveOptionalPeerDeps()],
+  resolve: {
+    alias: {
+      '@mlightcad/data-model': SHIM_PATH
+    }
+  },
+  build: {
+    cssMinify: false
+  },
   server: {
     port: 5173,
     proxy: {

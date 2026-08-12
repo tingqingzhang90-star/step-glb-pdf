@@ -1,0 +1,80 @@
+{
+  "source_file": "YRJ250-H2K4-E.SLDDRW",
+  "extracted_at": "2026-08-12 13:55:55",
+  "sheets": [
+    {
+      "name": "图纸2",
+      "views": [
+        {
+          "name": "工程图视图1",
+          "orientation": "*前视",
+          "scale": 0.1,
+          "referenced_doc": "250直连装配体.SLDASM",
+          "referenced_model_name": "E:\\分享代码\\step__glb_pdf\\图库项目\\250直连\\250直连装配体.SLDASM",
+          "position_mm": [
+            106.956,
+            216.699
+          ],
+          "outline_mm": [
+            77.516,
+            193.066,
+            136.396,
+            240.044
+          ],
+          "sheet_name": "图纸2",
+          "view_type": 7,
+          "dimensions": [],
+          "notes": []
+        },
+        {
+          "name": "工程图视图2",
+          "orientation": "",
+          "scale": 0.1,
+          "referenced_doc": "250直连装配体.SLDASM",
+          "referenced_model_name": "E:\\分享代码\\step__glb_pdf\\图库项目\\250直连\\250直连装配体.SLDASM",
+          "position_mm": [
+            288.328,
+            216.699
+          ],
+          "outline_mm": [
+            189.588,
+            193.066,
+            387.068,
+            240.044
+          ],
+          "sheet_name": "图纸2",
+          "view_type": 4,
+          "dimensions": [],
+          "notes": []
+        },
+        {
+          "name": "工程图视图3",
+          "orientation": "",
+          "scale": 0.1,
+          "referenced_doc": "250直连装配体.SLDASM",
+          "referenced_model_name": "E:\\分享代码\\step__glb_pdf\\图库项目\\250直连\\250直连装配体.SLDASM",
+          "position_mm": [
+            288.328,
+            126.595
+          ],
+          "outline_mm": [
+            189.588,
+            97.155,
+            387.068,
+            156.035
+          ],
+          "sheet_name": "图纸2",
+          "view_type": 4,
+          "dimensions": [],
+          "notes": []
+        }
+      ],
+      "paper_size_code": 8.0,
+      "scale": "1:10",
+      "first_angle_projection": true,
+      "width_mm": 420.0,
+      "height_mm": 297.0
+    }
+  ],
+  "elapsed_s": 5.94
+}

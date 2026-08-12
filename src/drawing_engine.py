@@ -21,6 +21,7 @@ import os
 import json
 import time
 import math
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 from OCC.Core.STEPControl import STEPControl_Reader
 from OCC.Core.IFSelect import IFSelect_RetDone
@@ -1269,6 +1270,24 @@ def _segments_to_svg(segments, hidden_segments=None, width=120, height=90,
     return "".join(parts)
 
 
+def _project_standard_view_worker(args):
+    step_path, view_name, include_hidden, max_extent = args
+    cfg = STANDARD_VIEW_CONFIGS[view_name]
+    shape = read_shape_cached(step_path)
+    t0 = time.time()
+    visible, hidden = _project_shape(
+        shape, cfg["dir"], cfg["up"],
+        show_hidden=include_hidden, max_extent=max_extent
+    )
+    return view_name, {
+        "visible": visible,
+        "hidden": hidden,
+        "label": cfg["label"],
+        "group": cfg["group"],
+        "project_time": round(time.time() - t0, 3)
+    }
+
+
 def generate_all_standard_views(step_path, include_hidden=False,
                                 thumb_width=200, thumb_height=150,
                                 canvas_width=400, canvas_height=300):
@@ -1334,24 +1353,58 @@ def generate_all_standard_views(step_path, include_hidden=False,
         float(zmax - zmin)
     )
 
-    # 第一遍: 投影所有视图,收集原始2D坐标
+    # 第一遍: 并行投影所有视图,收集原始2D坐标
     t1 = time.time()
+
+    view_names = list(STANDARD_VIEW_CONFIGS.keys())
     raw_views = {}
-    for view_name, cfg in STANDARD_VIEW_CONFIGS.items():
-        t2 = time.time()
-        # 使用精确算法 + OutLineVCompound(外轮廓边,工业图标准)
-        visible, hidden = _project_shape(
-            shape, cfg["dir"], cfg["up"],
-            show_hidden=include_hidden, max_extent=max_extent
-        )
-        t_proj = time.time() - t2
-        raw_views[view_name] = {
-            "visible": visible,
-            "hidden": hidden,
-            "label": cfg["label"],
-            "group": cfg["group"],
-            "project_time": round(t_proj, 3)
-        }
+    parallel_error = None
+    parallel_mode = "process"
+    max_workers = min(9, len(view_names), max(1, (os.cpu_count() or 4)))
+    worker_args = [(step_path, view_name, include_hidden, max_extent) for view_name in view_names]
+
+    try:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_project_standard_view_worker, args) for args in worker_args]
+            for future in as_completed(futures):
+                view_name, view_data = future.result()
+                raw_views[view_name] = view_data
+    except Exception as exc:
+        parallel_error = f"process: {exc}"
+        raw_views = {}
+        parallel_mode = "thread"
+
+        def project_one_view(view_name):
+            cfg = STANDARD_VIEW_CONFIGS[view_name]
+            t2 = time.time()
+            visible, hidden = _project_shape(
+                shape, cfg["dir"], cfg["up"],
+                show_hidden=include_hidden, max_extent=max_extent
+            )
+            return view_name, {
+                "visible": visible,
+                "hidden": hidden,
+                "label": cfg["label"],
+                "group": cfg["group"],
+                "project_time": round(time.time() - t2, 3)
+            }
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(project_one_view, view_name) for view_name in view_names]
+                for future in as_completed(futures):
+                    view_name, view_data = future.result()
+                    raw_views[view_name] = view_data
+        except Exception as thread_exc:
+            parallel_error = f"{parallel_error}; thread: {thread_exc}"
+            raw_views = {}
+            parallel_mode = "serial"
+            for view_name in view_names:
+                view_name, view_data = project_one_view(view_name)
+                raw_views[view_name] = view_data
+
+    # 保持输出顺序稳定
+    raw_views = {name: raw_views[name] for name in STANDARD_VIEW_CONFIGS if name in raw_views}
     t_project = time.time() - t1
 
     # 计算统一缩放比例(所有视图比例一致)
@@ -1415,6 +1468,9 @@ def generate_all_standard_views(step_path, include_hidden=False,
         "timing": {
             "read": round(t_read, 3),
             "project": round(t_project, 3),
+            "parallel_mode": parallel_mode,
+            "parallel_workers": max_workers,
+            "parallel_fallback": parallel_error,
             "total": round(elapsed, 3)
         }
     }

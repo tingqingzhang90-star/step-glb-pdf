@@ -19,6 +19,7 @@
 7. [微信小程序 WebView 集成](#7-微信小程序-webview-集成)
 8. [性能预算与时间分析](#8-性能预算与时间分析)
 9. [分阶段实施路线](#9-分阶段实施路线)
+10. [自研工程图编辑器方案](#10-自研工程图编辑器方案)
 
 ---
 
@@ -696,6 +697,142 @@ async function generateDrawing(params) {
 > **下一步行动建议**
 >
 > 不要再继续在当前 HLR 上反复修补，直接进入第一阶段：搭建 pythonocc-core Worker 原型，输入 STEP 文件输出 6 个 SVG 视图，验证视图质量和生成速度。这是整个方案的可行性验证基础。
+
+---
+
+## 10 自研工程图编辑器方案
+
+### 10.1 方案定位
+
+本项目后续不再以 SolidWorks `.SLDDRW` 标注提取作为主线。`.SLDDRW` 仅保留为模板参考样本，不作为工程图能力的核心数据源。
+
+主线改为：
+
+- 模型参数驱动视图生成
+- 语义锚点驱动标注绑定
+- 自研工程图文档驱动前端编辑
+- 模型变化后自动重建视图并重绑标注
+
+### 10.2 目标
+
+构建一套自研工程图编辑器，达到以下效果：
+
+- 自动生成标准视图
+- 在图纸上拖拽、摆放、缩放视图
+- 手工添加线性、直径、半径、角度标注
+- 支持文字、中心线、标题栏、表格
+- 模型系列变化后自动更新视图
+- 标注尽量保持语义关联，不随视图漂移
+
+### 10.3 核心原则
+
+1. 视图只负责显示，不负责标注求值。
+2. 标注不绑定屏幕坐标，绑定语义锚点与几何指纹。
+3. 同系列产品优先复用模板，不依赖外部工程图反向提取。
+4. 标注失配时可提示用户修复，不做静默错误映射。
+
+### 10.4 数据结构
+
+#### DrawingTemplate
+
+描述某一系列图纸的布局规则、默认视图、默认标注和适用条件。
+
+```json
+{
+  "template_id": "250-E-H3K2",
+  "name": "250系列液压缸模板",
+  "sheet": { "size": "A3", "width": 420, "height": 297 },
+  "apply_rules": { "series": "250", "mount": "H3K2" },
+  "views": [],
+  "annotations": [],
+  "title_block": {}
+}
+```
+
+#### DrawingDocument
+
+描述当前用户正在编辑的工程图实例。
+
+```json
+{
+  "document_id": "doc_001",
+  "template_id": "250-E-H3K2",
+  "model_id": "250-E-H3K2-L100-D11",
+  "sheet": {},
+  "views": [],
+  "annotations": [],
+  "revision": 1
+}
+```
+
+#### AnnotationBinding
+
+描述标注如何绑定到模型几何或语义锚点。
+
+```json
+{
+  "id": "dim_total_length",
+  "type": "linear",
+  "view_id": "front",
+  "binding": {
+    "from_anchor": "cylinder.front_end",
+    "to_anchor": "cylinder.back_end",
+    "geometry_fingerprint": {}
+  },
+  "presentation": {
+    "offset": 30,
+    "text_pos": [120, 240]
+  }
+}
+```
+
+### 10.5 前后端模块划分
+
+#### 后端
+
+- 模型参数解析
+- 视图生成
+- 语义锚点计算
+- 几何指纹匹配
+- 标注重绑定
+- SVG / JSON 导出
+
+#### 前端
+
+- 图纸画布
+- 视图调色板
+- 标注工具栏
+- 属性面板
+- 文档保存与加载
+
+### 10.6 与现有代码的关系
+
+可复用的内容：
+
+- [drawing_engine.py](file:///e:/分享代码/step__glb_pdf/src/drawing_engine.py)
+- [drawing_template.py](file:///e:/分享代码/step__glb_pdf/src/drawing_template.py)
+- [App.vue](file:///e:/分享代码/step__glb_pdf/cad-viewer-app/src/App.vue)
+- [server.py](file:///e:/分享代码/step__glb_pdf/src/server.py#L755-L785)
+
+不再作为主线的内容：
+
+- SolidWorks `.SLDDRW` 标注提取
+- COM 逆向工程图数据
+
+### 10.7 实施顺序
+
+1. 固化工程图 JSON 数据结构
+2. 在 `cad-viewer-app` 中拆分工程图编辑器组件
+3. 接入模型视图生成与图纸画布
+4. 接入标注创建与保存
+5. 接入锚点绑定与重绑定
+6. 支持系列模板复用
+
+### 10.8 近期决策
+
+- `.SLDDRW` 标注提取停止投入
+- 仅保留模板参考样本
+- 主线全部转向自研工程图编辑器
 
 ---
 
