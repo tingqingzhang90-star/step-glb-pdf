@@ -854,6 +854,8 @@ function polylinePoints(points) {
   background: #fff;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .placed-view {
