@@ -193,11 +193,10 @@
 
             <!-- 标注命中层（仅标注工具激活时） -->
             <g v-if="activeTool" class="dim-hit-layer" pointer-events="stroke">
-              <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${pv.scale})`" :class="['dim-hit-view', { 'dim-view-hidden': activeTool === 'diameter' }]">
+              <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${pv.scale})`">
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
-                  <line v-if="seg.type === 'line'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
-                  <circle v-else-if="seg.type === 'circle'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
-                  <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                 </template>
               </g>
             </g>
@@ -243,7 +242,7 @@
 
             <!-- 已放置标注 -->
             <g class="dimensions-layer" pointer-events="stroke">
-              <g v-for="dim in dimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" @mousedown.stop @click.stop="selectDim(dim.id)">
+              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="selectDim(dim.id)">
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-ext-line" />
@@ -451,6 +450,11 @@ const placedViewNames = computed(() =>
   new Set(placedViews.value.map(v => v.name))
 )
 
+const renderedDimensions = computed(() => dimensions.value
+  .map(renderDimension)
+  .filter(Boolean)
+)
+
 const drawingDocumentPreview = computed(() => JSON.stringify({
   sheet: {
     size: 'A0',
@@ -466,7 +470,16 @@ const drawingDocumentPreview = computed(() => JSON.stringify({
     y: Math.round(v.y),
     scale: Number(v.scale.toFixed(2))
   })),
-  annotations: []
+  annotations: dimensions.value.map(dim => ({
+    id: dim.id,
+    type: dim.type,
+    text: dim.text,
+    refs: dim.refs,
+    offset: dim.offset ?? null,
+    radius: dim.radius ?? null,
+    side: dim.side ?? null,
+    leaderAngle: dim.leaderAngle ?? null
+  }))
 }, null, 2))
 
 onMounted(async () => {
@@ -826,13 +839,7 @@ function onSvgMouseMove(event) {
     const seg = getEdgeByRef(viewId, idx, type)
     const view = placedViews.value.find(v => v.id === viewId)
     if (seg && view) {
-      const hover = {
-        seg,
-        viewId,
-        idx,
-        type,
-        transform: `translate(${view.x}, ${view.y}) scale(${view.scale})`
-      }
+      const hover = makeEdgeRef(view, idx, type, seg)
       // 引用不同则更新（避免重复 set）
       const cur = dimHoveredEdge.value
       if (!cur || cur.viewId !== viewId || cur.idx !== idx || cur.type !== type) {
@@ -848,6 +855,10 @@ function onSvgMouseMove(event) {
 }
 
 function onGlobalMouseMove(event) {
+  if (dimDragging.value) {
+    updateDimDrag(event)
+    return
+  }
   if (!movingView) return
   const dx = event.clientX - moveStartPos.x
   const dy = event.clientY - moveStartPos.y
@@ -870,15 +881,26 @@ function onGlobalMouseMove(event) {
 
 function deleteSelectedView() {
   if (!selectedViewId.value) return
-  placedViews.value = placedViews.value.filter(v => v.id !== selectedViewId.value)
+  const deletedViewId = selectedViewId.value
+  placedViews.value = placedViews.value.filter(v => v.id !== deletedViewId)
+  dimensions.value = dimensions.value.filter(dim => !dimensionUsesView(dim, deletedViewId))
   selectedViewId.value = null
+  selectedDimId.value = null
+  dimHoveredEdge.value = null
+  dimFirstEdge.value = null
+  dimPreview.value = null
 }
 
 function clearPlacedViews() {
   placedViews.value = []
+  dimensions.value = []
   selectedViewId.value = null
+  selectedDimId.value = null
   globalScale.value = null
   alignmentGuides.value = []
+  dimHoveredEdge.value = null
+  dimFirstEdge.value = null
+  dimPreview.value = null
 }
 
 function zoomViewAroundCenter(view, newScale) {
@@ -960,6 +982,39 @@ function getSheetPoint(view, lx, ly) {
   return { x: view.x + lx * view.scale, y: view.y + ly * view.scale }
 }
 
+function getSvgMousePoint(event) {
+  const svg = svgRef.value
+  if (!svg) return null
+  const ctm = svg.getScreenCTM()
+  if (!ctm) return null
+  const pt = new DOMPoint(event.clientX, event.clientY).matrixTransform(ctm.inverse())
+  return { x: pt.x, y: pt.y }
+}
+
+function makeEdgeRef(view, idx, type, seg = null) {
+  const edge = seg || getEdgeByRef(view.id, idx, type)
+  if (!view || !edge) return null
+  return {
+    seg: edge,
+    view,
+    viewId: view.id,
+    idx,
+    type,
+    transform: `translate(${view.x}, ${view.y}) scale(${view.scale})`
+  }
+}
+
+function resolveDimRef(ref) {
+  if (!ref) return null
+  const view = placedViews.value.find(v => v.id === ref.viewId)
+  if (!view) return null
+  return makeEdgeRef(view, ref.idx, ref.type)
+}
+
+function dimensionUsesView(dim, viewId) {
+  return (dim.refs || []).some(ref => ref.viewId === viewId)
+}
+
 /** 箭头三角形（图纸坐标） */
 function computeArrowTip(end, dir, size) {
   const perp = { x: -dir.y, y: dir.x }
@@ -981,11 +1036,13 @@ function onDimEdgeSelect(hitEl) {
   if (!seg) return
   const view = placedViews.value.find(v => v.id === viewId)
   if (!view) return
+  const edgeRef = makeEdgeRef(view, idx, type, seg)
+  if (!edgeRef) return
 
   if (activeTool.value === 'diameter') {
     // 直径：点击即放置（圆边线）
     if (seg.type === 'circle') {
-      placeDiameterDim(view, idx, type, seg)
+      placeDiameterDim(edgeRef, dimPreview.value?.leaderAngle)
     }
     return
   }
@@ -993,21 +1050,21 @@ function onDimEdgeSelect(hitEl) {
   if (activeTool.value === 'linear') {
     // 线性：点击边线1 → 点击边线2（平行）或再点击同一位置放置
     if (!dimFirstEdge.value) {
-      dimFirstEdge.value = { seg, viewId, idx, type, view }
+      dimFirstEdge.value = edgeRef
       return
     }
     // 已有第一边线
     const first = dimFirstEdge.value
     if (first.viewId === viewId && first.idx === idx && first.type === type) {
       // 同一根边线 → 单边对齐标注
-      placeLinearDimSingle(first.view, first.idx, first.type, first.seg)
+      placeLinearDimSingle(first, dimPreview.value?.offset)
       dimFirstEdge.value = null
       dimPreview.value = null
       return
     }
     // 平行检测
     if (isParallel(first.seg, seg)) {
-      placeLinearDimParallel(first.view, first.idx, first.type, first.seg, view, idx, type, seg)
+      placeLinearDimParallel(first, edgeRef, dimPreview.value?.offset)
       dimFirstEdge.value = null
       dimPreview.value = null
       return
@@ -1020,7 +1077,7 @@ function onDimEdgeSelect(hitEl) {
   if (activeTool.value === 'angle') {
     // 角度：点击边线1 → 点击边线2（不平行）
     if (!dimFirstEdge.value) {
-      dimFirstEdge.value = { seg, viewId, idx, type, view }
+      dimFirstEdge.value = edgeRef
       return
     }
     const first = dimFirstEdge.value
@@ -1032,7 +1089,7 @@ function onDimEdgeSelect(hitEl) {
       return
     }
     // 放置角度
-    placeAngleDim(first.view, first.idx, first.type, first.seg, view, idx, type, seg)
+    placeAngleDim(first, edgeRef, dimPreview.value?.radius)
     dimFirstEdge.value = null
     dimPreview.value = null
   }
@@ -1041,12 +1098,8 @@ function onDimEdgeSelect(hitEl) {
 /** 预览更新（跟随鼠标） */
 function updateDimPreviewAt(event) {
   if (!activeTool.value) return
-  const svg = svgRef.value
-  if (!svg) return
-  const ctm = svg.getScreenCTM()
-  if (!ctm) return
-  const pt = new DOMPoint(event.clientX, event.clientY).matrixTransform(ctm.inverse())
-  const mousePos = { x: pt.x, y: pt.y }
+  const mousePos = getSvgMousePoint(event)
+  if (!mousePos) return
 
   if (activeTool.value === 'linear') {
     // 如果有第一边线，边线类型需要按鼠标位置预览
@@ -1124,166 +1177,173 @@ function closestPointOnLine(px, py, x1, y1, x2, y2) {
   return { x: x1 + t * dx, y: y1 + t * dy, t }
 }
 
-// ===== 线性标注构建 =====
-
-function buildLinearSinglePreview(edgeRef, mousePos) {
-  const { seg, view } = edgeRef
-  if (seg.type !== 'line' || !view) return null
-  const s = view.scale
-  // 图纸坐标端点
-  const p1 = getSheetPoint(view, seg.x1, seg.y1)
-  const p2 = getSheetPoint(view, seg.x2, seg.y2)
-  const dx = p2.x - p1.x, dy = p2.y - p1.y
+function lineBasis(p1, p2) {
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
   const len = Math.hypot(dx, dy)
   if (len < 0.5) return null
-  const nx = dx / len, ny = dy / len
-  const px = -ny, py = nx  // 垂直方向
-  // 鼠标到边线中点的垂直偏移
-  const midX = (p1.x + p2.x) / 2
-  const midY = (p1.y + p2.y) / 2
-  const off = (mousePos.x - midX) * px + (mousePos.y - midY) * py
-  const offset = Math.max(20, Math.abs(off)) * (off >= 0 ? 1 : -1)
-  const extEnd1 = { x: p1.x + px * offset, y: p1.y + py * offset }
-  const extEnd2 = { x: p2.x + px * offset, y: p2.y + py * offset }
-  // 箭头
-  const dimDir = { x: nx, y: ny }
-  const arrow1 = computeArrowTip(extEnd1, dimDir)
-  const arrow2 = computeArrowTip(extEnd2, { x: -nx, y: -ny })
-  // 文本
-  const mmVal = seg.meta && seg.meta.length ? seg.meta.length : 0
-  const textMid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 }
+  const unit = { x: dx / len, y: dy / len }
+  return { unit, perp: { x: -unit.y, y: unit.x }, len }
+}
+
+function offsetPoint(point, dir, distance) {
+  return { x: point.x + dir.x * distance, y: point.y + dir.y * distance }
+}
+
+function signedDistanceToLine(point, linePoint, normal) {
+  return (point.x - linePoint.x) * normal.x + (point.y - linePoint.y) * normal.y
+}
+
+// ===== 线性标注构建 =====
+
+function edgeRefData(edgeRef) {
+  return { viewId: edgeRef.viewId, idx: edgeRef.idx, type: edgeRef.type }
+}
+
+function formatMm(value) {
+  return `${Number(value || 0).toFixed(1).replace(/\.0$/, '')}mm`
+}
+
+function formatDeg(value) {
+  return `${Number(value || 0).toFixed(1).replace(/\.0$/, '')}°`
+}
+
+function getViewMmScale(view) {
+  return view.bbox && view.bbox.scale ? view.bbox.scale : 1
+}
+
+function buildLinearSinglePreview(edgeRef, mousePos) {
+  const offset = getLinearOffsetFromMouse(edgeRef, mousePos)
+  return buildLinearSingleGeometry(edgeRef, offset)
+}
+
+function getLinearOffsetFromMouse(edgeRef, mousePos) {
+  const { seg, view } = edgeRef
+  if (seg.type !== 'line' || !view || !mousePos) return 50
+  const p1 = getSheetPoint(view, seg.x1, seg.y1)
+  const p2 = getSheetPoint(view, seg.x2, seg.y2)
+  const dir = lineBasis(p1, p2)
+  if (!dir) return 50
+  const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+  const raw = (mousePos.x - mid.x) * dir.perp.x + (mousePos.y - mid.y) * dir.perp.y
+  return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+}
+
+function buildLinearSingleGeometry(edgeRef, offset = 50) {
+  const { seg, view } = edgeRef
+  if (seg.type !== 'line' || !view) return null
+  const p1 = getSheetPoint(view, seg.x1, seg.y1)
+  const p2 = getSheetPoint(view, seg.x2, seg.y2)
+  const dir = lineBasis(p1, p2)
+  if (!dir) return null
+  const extEnd1 = offsetPoint(p1, dir.perp, offset)
+  const extEnd2 = offsetPoint(p2, dir.perp, offset)
+  const mmVal = seg.meta && seg.meta.length ? seg.meta.length : Math.hypot(p2.x - p1.x, p2.y - p1.y) / (view.scale * getViewMmScale(view))
   return {
     type: 'linear',
-    ext1: p1, ext1End: extEnd1,
-    ext2: p2, ext2End: extEnd2,
-    dimStart: extEnd1, dimEnd: extEnd2,
-    arrow1, arrow2,
-    textPos: textMid,
-    text: `${mmVal > 0 ? mmVal.toFixed(1).replace(/\.0$/, '') : '0'}mm`
+    mode: 'single',
+    refs: [edgeRefData(edgeRef)],
+    offset,
+    ext1: p1,
+    ext1End: extEnd1,
+    ext2: p2,
+    ext2End: extEnd2,
+    dimStart: extEnd1,
+    dimEnd: extEnd2,
+    arrow1: computeArrowTip(extEnd1, dir.unit),
+    arrow2: computeArrowTip(extEnd2, { x: -dir.unit.x, y: -dir.unit.y }),
+    textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 },
+    text: formatMm(mmVal)
   }
 }
 
 function buildLinearParallelPreview(edgeRef1, edgeRef2, mousePos) {
+  const offset = getParallelOffsetFromMouse(edgeRef1, mousePos)
+  return buildLinearParallelGeometry(edgeRef1, edgeRef2, offset)
+}
+
+function getParallelOffsetFromMouse(edgeRef, mousePos) {
+  const { seg, view } = edgeRef
+  if (seg.type !== 'line' || !view || !mousePos) return 50
+  const p1 = getSheetPoint(view, seg.x1, seg.y1)
+  const p2 = getSheetPoint(view, seg.x2, seg.y2)
+  const dir = lineBasis(p1, p2)
+  if (!dir) return 50
+  const raw = signedDistanceToLine(mousePos, p1, dir.unit)
+  return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+}
+
+function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50) {
+  if (!edgeRef1 || !edgeRef2) return null
   const { seg: seg1, view: view1 } = edgeRef1
   const { seg: seg2, view: view2 } = edgeRef2
   if (seg1.type !== 'line' || seg2.type !== 'line') return null
-  // 计算两个线段在图纸坐标中的端点
   const p1 = getSheetPoint(view1, seg1.x1, seg1.y1)
   const p2 = getSheetPoint(view1, seg1.x2, seg1.y2)
   const q1 = getSheetPoint(view2, seg2.x1, seg2.y1)
   const q2 = getSheetPoint(view2, seg2.x2, seg2.y2)
-  // 方向向量
-  const dx = p2.x - p1.x, dy = p2.y - p1.y
-  const len = Math.hypot(dx, dy)
-  if (len < 0.5) return null
-  const nx = dx / len, ny = dy / len
-  const px = -ny, py = nx
-  // 最近端点对
-  const d11 = Math.hypot(q1.x - p1.x, q1.y - p1.y)
-  const d12 = Math.hypot(q2.x - p1.x, q2.y - p1.y)
-  const d21 = Math.hypot(q1.x - p2.x, q1.y - p2.y)
-  const d22 = Math.hypot(q2.x - p2.x, q2.y - p2.y)
-  let a1, a2, b1, b2
-  const minD = Math.min(d11, d12, d21, d22)
-  if (minD === d11 || minD === d12) { a1 = p1; a2 = p2; b1 = q1; b2 = q2 } else { a1 = p1; a2 = p2; b1 = q1; b2 = q2 }
-  // 投影到垂直方向确定偏移
-  const off = (mousePos.x - a1.x) * px + (mousePos.y - a1.y) * py
-  const offset = Math.max(20, Math.abs(off)) * (off >= 0 ? 1 : -1)
-  // 构建 dim line
-  const dimP1 = { x: a1.x + px * offset, y: a1.y + py * offset }
-  const dimP2 = { x: a1.x + px * offset + nx * Math.hypot(b1.x - a1.x, b1.y - a1.y), y: a1.y + py * offset + ny * Math.hypot(b1.x - a1.x, b1.y - a1.y) }
-  // 简化：用边的端点投影构建
-  const ext1End = { x: a1.x + px * offset, y: a1.y + py * offset }
-  const ext2End = { x: b1.x + px * offset, y: b1.y + py * offset }
-  const dimDir = { x: b1.x - a1.x, y: b1.y - a1.y }
-  const dLen = Math.hypot(dimDir.x, dimDir.y)
-  if (dLen < 0.5) return null
-  const dn = { x: dimDir.x / dLen, y: dimDir.y / dLen }
-  const arrow1 = computeArrowTip(ext1End, dn)
-  const arrow2 = computeArrowTip(ext2End, { x: -dn.x, y: -dn.y })
-  const textMid = { x: (ext1End.x + ext2End.x) / 2, y: (ext1End.y + ext2End.y) / 2 - 10 }
-  // 间距 mm
-  const mmPerPx = view1.bbox && view1.bbox.scale ? view1.bbox.scale : 1
-  const distMm = Math.abs(offset) / mmPerPx
+  const basis = lineBasis(p1, p2)
+  if (!basis) return null
+  let normal = basis.perp
+  let distance = signedDistanceToLine(q1, p1, normal)
+  if (distance < 0) {
+    normal = { x: -normal.x, y: -normal.y }
+    distance = -distance
+  }
+  if (distance < 0.5) return null
+  const start = closestPointOnLine(q1.x, q1.y, p1.x, p1.y, p2.x, p2.y)
+  const end = offsetPoint(start, normal, distance)
+  const dimBase = offsetPoint(start, basis.unit, offset)
+  const dimEnd = offsetPoint(dimBase, normal, distance)
+  const ext1End = dimBase
+  const ext2End = dimEnd
+  const mmVal = distance / (view1.scale * getViewMmScale(view1))
   return {
     type: 'linear',
-    ext1: a1, ext1End,
-    ext2: b1, ext2End,
-    dimStart: ext1End, dimEnd: ext2End,
-    arrow1, arrow2,
-    textPos: textMid,
-    text: `${distMm.toFixed(1).replace(/\.0$/, '')}mm`
+    mode: 'parallel',
+    refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
+    offset,
+    ext1: start,
+    ext1End,
+    ext2: end,
+    ext2End,
+    dimStart: ext1End,
+    dimEnd: ext2End,
+    arrow1: computeArrowTip(ext1End, normal),
+    arrow2: computeArrowTip(ext2End, { x: -normal.x, y: -normal.y }),
+    textPos: { x: (ext1End.x + ext2End.x) / 2 + basis.unit.x * 10, y: (ext1End.y + ext2End.y) / 2 + basis.unit.y * 10 },
+    text: formatMm(mmVal)
   }
 }
 
 /** 放置单边线性标注 */
-function placeLinearDimSingle(view, idx, type, seg) {
-  if (!seg.meta || !seg.meta.length) {
-    ElMessage.warning('该边线缺少长度元数据')
-    return
-  }
-  const mmVal = seg.meta.length
-  // 用预览的数据构建最终标注（图纸坐标转视图局部）
-  const pv = placedViews.value.find(v => v.id === view.id)
-  if (!pv) return
-  const p1 = getSheetPoint(pv, seg.x1, seg.y1)
-  const p2 = getSheetPoint(pv, seg.x2, seg.y2)
-  const dx = p2.x - p1.x, dy = p2.y - p1.y
-  const len = Math.hypot(dx, dy)
-  if (len < 0.5) return
-  const nx = dx / len, ny = dy / len
-  const px = -ny, py = nx
-  const offset = 50 // 固定偏移
-  const extEnd1 = { x: p1.x + px * offset, y: p1.y + py * offset }
-  const extEnd2 = { x: p2.x + px * offset, y: p2.y + py * offset }
-  const dimDir = { x: nx, y: ny }
-  const arrow1 = computeArrowTip(extEnd1, dimDir)
-  const arrow2 = computeArrowTip(extEnd2, { x: -nx, y: -ny })
-  const textMid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 }
+function placeLinearDimSingle(edgeRef, offset = 50) {
+  const geometry = buildLinearSingleGeometry(edgeRef, offset)
+  if (!geometry) return
   const id = `dim_${++dimIdCounter}`
   dimensions.value.push({
-    id, type: 'linear',
-    ext1: p1, ext1End,
-    ext2: p2, ext2End,
-    dimStart: extEnd1, dimEnd: extEnd2,
-    arrow1, arrow2,
-    textPos: textMid,
-    text: `${mmVal.toFixed(1).replace(/\.0$/, '')}mm`
+    id,
+    type: 'linear',
+    mode: 'single',
+    refs: [edgeRefData(edgeRef)],
+    offset: geometry.offset,
+    text: geometry.text
   })
   selectedDimId.value = id
 }
 
 /** 放置平行线间距标注 */
-function placeLinearDimParallel(view1, idx1, type1, seg1, view2, idx2, type2, seg2) {
-  // 简化：用当前预览数据
-  const pv1 = placedViews.value.find(v => v.id === view1.id)
-  const pv2 = placedViews.value.find(v => v.id === view2.id)
-  if (!pv1 || !pv2) return
-  const p1 = getSheetPoint(pv1, seg1.x1, seg1.y1)
-  const q1 = getSheetPoint(pv2, seg2.x1, seg2.y1)
-  const dx = p1.x - q1.x, dy = p1.y - q1.y
-  const dist = Math.hypot(dx, dy)
-  const mmPerPx = pv1.bbox && pv1.bbox.scale ? pv1.bbox.scale : 1
-  const distMm = dist / mmPerPx
-  const offset = 50
-  const extEnd1 = { x: p1.x + (dx / dist) * offset, y: p1.y + (dy / dist) * offset }
-  const extEnd2 = { x: q1.x + (dx / dist) * offset, y: q1.y + (dy / dist) * offset }
-  const dimDir = { x: q1.x - p1.x, y: q1.y - p1.y }
-  const dLen = Math.hypot(dimDir.x, dimDir.y)
-  if (dLen < 0.5) return
-  const dn = { x: dimDir.x / dLen, y: dimDir.y / dLen }
-  const arrow1 = computeArrowTip(extEnd1, dn)
-  const arrow2 = computeArrowTip(extEnd2, { x: -dn.x, y: -dn.y })
-  const textMid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 }
+function placeLinearDimParallel(edgeRef1, edgeRef2, offset = 50) {
+  const geometry = buildLinearParallelGeometry(edgeRef1, edgeRef2, offset)
+  if (!geometry) return
   const id = `dim_${++dimIdCounter}`
   dimensions.value.push({
-    id, type: 'linear',
-    ext1: p1, ext1End,
-    ext2: q1, ext2End,
-    dimStart: extEnd1, dimEnd: extEnd2,
-    arrow1, arrow2,
-    textPos: textMid,
-    text: `${distMm.toFixed(1).replace(/\.0$/, '')}mm`
+    id,
+    type: 'linear',
+    mode: 'parallel',
+    refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
+    offset: geometry.offset,
+    text: geometry.text
   })
   selectedDimId.value = id
 }
@@ -1292,55 +1352,61 @@ function placeLinearDimParallel(view1, idx1, type1, seg1, view2, idx2, type2, se
 
 function buildDiameterPreview(edgeRef, mousePos) {
   const { seg, view } = edgeRef
+  if (seg.type !== 'circle' || !view || !mousePos) return null
+  const cx = view.x + seg.cx * view.scale
+  const cy = view.y + seg.cy * view.scale
+  const angle = Math.atan2(mousePos.y - cy, mousePos.x - cx)
+  return buildDiameterGeometry(edgeRef, angle)
+}
+
+function placeDiameterDim(edgeRef, leaderAngle = -Math.PI / 4) {
+  const geometry = buildDiameterGeometry(edgeRef, leaderAngle)
+  if (!geometry) return
+  const id = `dim_${++dimIdCounter}`
+  dimensions.value.push({
+    id,
+    type: 'diameter',
+    refs: [edgeRefData(edgeRef)],
+    leaderAngle: geometry.leaderAngle,
+    text: geometry.text
+  })
+  selectedDimId.value = id
+}
+
+function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4) {
+  if (!edgeRef) return null
+  const { seg, view } = edgeRef
   if (seg.type !== 'circle' || !view) return null
   const cx = view.x + seg.cx * view.scale
   const cy = view.y + seg.cy * view.scale
   const r = seg.r * view.scale
-  const mmVal = seg.meta && seg.meta.radius ? seg.meta.radius * 2 : 0
-  // 引线从圆心指向鼠标位置，箭头在圆边缘
-  const dx = mousePos.x - cx, dy = mousePos.y - cy
-  const d = Math.hypot(dx, dy)
-  if (d < 0.5) return null
-  const nx = dx / d, ny = dy / d
-  const edgePt = { x: cx + nx * r, y: cy + ny * r }
-  const textPos = { x: cx + nx * (r + 20), y: cy + ny * (r + 20) }
-  const arrow = computeArrowTip(edgePt, { x: nx, y: ny })
+  const dir = { x: Math.cos(angle), y: Math.sin(angle) }
+  const edgePt = { x: cx + dir.x * r, y: cy + dir.y * r }
+  const textPos = { x: cx + dir.x * (r + 30), y: cy + dir.y * (r + 30) }
+  const mmVal = seg.meta && seg.meta.radius ? seg.meta.radius * 2 : (seg.r * 2) / getViewMmScale(view)
   return {
     type: 'diameter',
+    refs: [edgeRefData(edgeRef)],
+    leaderAngle: angle,
     leaderStart: textPos,
     leaderEnd: edgePt,
-    arrow,
+    arrow: computeArrowTip(edgePt, dir),
     textPos,
-    text: `ø${mmVal.toFixed(1).replace(/\.0$/, '')}mm`
+    text: `ø${formatMm(mmVal)}`
   }
-}
-
-function placeDiameterDim(view, idx, type, seg) {
-  const pv = placedViews.value.find(v => v.id === view.id)
-  if (!pv || !seg.meta || !seg.meta.radius) return
-  const mmVal = seg.meta.radius * 2
-  const cx = pv.x + seg.cx * pv.scale
-  const cy = pv.y + seg.cy * pv.scale
-  const r = seg.r * pv.scale
-  // 默认向右上方
-  const textPos = { x: cx + r + 30, y: cy - r - 10 }
-  const edgePt = { x: cx + r, y: cy }
-  const arrow = computeArrowTip(edgePt, { x: 1, y: 0 })
-  const id = `dim_${++dimIdCounter}`
-  dimensions.value.push({
-    id, type: 'diameter',
-    leaderStart: textPos,
-    leaderEnd: edgePt,
-    arrow,
-    textPos,
-    text: `ø${mmVal.toFixed(1).replace(/\.0$/, '')}mm`
-  })
-  selectedDimId.value = id
 }
 
 // ===== 角度标注 =====
 
 function buildAnglePreview(edgeRef1, edgeRef2, mousePos) {
+  const base = buildAngleGeometry(edgeRef1, edgeRef2, 40)
+  if (!base || !mousePos) return base
+  const radius = Math.max(15, Math.min(200, Math.hypot(mousePos.x - base.inter.x, mousePos.y - base.inter.y)))
+  return buildAngleGeometry(edgeRef1, edgeRef2, radius)
+}
+
+function buildAngleGeometry(edgeRef1, edgeRef2, radius = 40) {
+  if (!edgeRef1 || !edgeRef2) return null
   const { seg: seg1, view: view1 } = edgeRef1
   const { seg: seg2, view: view2 } = edgeRef2
   if (seg1.type !== 'line' || seg2.type !== 'line') return null
@@ -1348,91 +1414,61 @@ function buildAnglePreview(edgeRef1, edgeRef2, mousePos) {
   const p2 = getSheetPoint(view1, seg1.x2, seg1.y2)
   const q1 = getSheetPoint(view2, seg2.x1, seg2.y1)
   const q2 = getSheetPoint(view2, seg2.x2, seg2.y2)
-  // 求交点
   const inter = lineIntersection(p1, p2, q1, q2)
   if (!inter) return null
-  const dx1 = p1.x - inter.x, dy1 = p1.y - inter.y
-  const dx2 = q1.x - inter.x, dy2 = q1.y - inter.y
-  const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2)
-  if (len1 < 0.5 || len2 < 0.5) return null
-  const a1 = Math.atan2(dy1, dx1)
-  const a2 = Math.atan2(dy2, dx2)
-  let startAngle = Math.min(a1, a2), endAngle = Math.max(a1, a2)
+  const dir1 = lineBasis(inter, farthestEndpointFrom(inter, p1, p2))
+  const dir2 = lineBasis(inter, farthestEndpointFrom(inter, q1, q2))
+  if (!dir1 || !dir2) return null
+  let startAngle = Math.atan2(dir1.unit.y, dir1.unit.x)
+  let endAngle = Math.atan2(dir2.unit.y, dir2.unit.x)
+  while (endAngle < startAngle) endAngle += Math.PI * 2
   if (endAngle - startAngle > Math.PI) {
-    const tmp = startAngle; startAngle = endAngle; endAngle = tmp + Math.PI * 2
+    const temp = startAngle
+    startAngle = endAngle
+    endAngle = temp + Math.PI * 2
   }
-  // 弧半径：鼠标距离
-  const arcR = Math.hypot(mousePos.x - inter.x, mousePos.y - inter.y)
-  const radius = Math.max(15, Math.min(200, arcR))
-  // 夹角（度）
-  const angleDeg = Math.abs((endAngle - startAngle) * 180 / Math.PI)
-  const finalAngle = angleDeg > 180 ? 360 - angleDeg : angleDeg
-  // 构建弧线 path
-  const arcPath = buildArcPath(inter.x, inter.y, radius, startAngle, endAngle)
-  // 箭头在弧线两端
-  const arrowAng1 = startAngle + (endAngle - startAngle) * 0.05
-  const arrowAng2 = endAngle - (endAngle - startAngle) * 0.05
+  const sweep = endAngle - startAngle
+  const angle = Math.min(sweep, Math.PI * 2 - sweep)
+  const arrowAng1 = startAngle + sweep * 0.05
+  const arrowAng2 = endAngle - sweep * 0.05
   const arrowP1 = { x: inter.x + Math.cos(arrowAng1) * radius, y: inter.y + Math.sin(arrowAng1) * radius }
   const arrowP2 = { x: inter.x + Math.cos(arrowAng2) * radius, y: inter.y + Math.sin(arrowAng2) * radius }
-  // 弧线切线方向
   const tan1 = { x: -Math.sin(arrowAng1), y: Math.cos(arrowAng1) }
   const tan2 = { x: -Math.sin(arrowAng2), y: Math.cos(arrowAng2) }
-  const arrow1 = computeArrowTip(arrowP1, tan1, 6)
-  const arrow2 = computeArrowTip(arrowP2, { x: -tan2.x, y: -tan2.y }, 6)
-  // 文本在弧心
-  const midAngle = (startAngle + endAngle) / 2
-  const textPos = { x: inter.x + Math.cos(midAngle) * (radius + 18), y: inter.y + Math.sin(midAngle) * (radius + 18) }
+  const midAngle = startAngle + sweep / 2
   return {
     type: 'angle',
-    arcPath,
-    arrow1, arrow2,
-    textPos,
-    text: `${finalAngle.toFixed(1).replace(/\.0$/, '')}°`
+    refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
+    inter,
+    radius,
+    startAngle,
+    endAngle,
+    arcPath: buildArcPath(inter.x, inter.y, radius, startAngle, endAngle),
+    arrow1: computeArrowTip(arrowP1, tan1, 6),
+    arrow2: computeArrowTip(arrowP2, { x: -tan2.x, y: -tan2.y }, 6),
+    textPos: { x: inter.x + Math.cos(midAngle) * (radius + 18), y: inter.y + Math.sin(midAngle) * (radius + 18) },
+    text: formatDeg(angle * 180 / Math.PI)
   }
 }
 
-function placeAngleDim(view1, idx1, type1, seg1, view2, idx2, type2, seg2) {
-  const pv1 = placedViews.value.find(v => v.id === view1.id)
-  const pv2 = placedViews.value.find(v => v.id === view2.id)
-  if (!pv1 || !pv2) return
-  const p1 = getSheetPoint(pv1, seg1.x1, seg1.y1)
-  const p2 = getSheetPoint(pv1, seg1.x2, seg1.y2)
-  const q1 = getSheetPoint(pv2, seg2.x1, seg2.y1)
-  const q2 = getSheetPoint(pv2, seg2.x2, seg2.y2)
-  const inter = lineIntersection(p1, p2, q1, q2)
-  if (!inter) return
-  const dx1 = p1.x - inter.x, dy1 = p1.y - inter.y
-  const dx2 = q1.x - inter.x, dy2 = q1.y - inter.y
-  const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2)
-  if (len1 < 0.5 || len2 < 0.5) return
-  const a1 = Math.atan2(dy1, dx1)
-  const a2 = Math.atan2(dy2, dx2)
-  let startAngle = Math.min(a1, a2), endAngle = Math.max(a1, a2)
-  if (endAngle - startAngle > Math.PI) {
-    const tmp = startAngle; startAngle = endAngle; endAngle = tmp + Math.PI * 2
-  }
-  const angleDeg = Math.abs((endAngle - startAngle) * 180 / Math.PI)
-  const finalAngle = angleDeg > 180 ? 360 - angleDeg : angleDeg
-  const radius = 40
-  const arcPath = buildArcPath(inter.x, inter.y, radius, startAngle, endAngle)
-  const arrowAng1 = startAngle + (endAngle - startAngle) * 0.05
-  const arrowAng2 = endAngle - (endAngle - startAngle) * 0.05
-  const arrowP1 = { x: inter.x + Math.cos(arrowAng1) * radius, y: inter.y + Math.sin(arrowAng1) * radius }
-  const arrowP2 = { x: inter.x + Math.cos(arrowAng2) * radius, y: inter.y + Math.sin(arrowAng2) * radius }
-  const tan1 = { x: -Math.sin(arrowAng1), y: Math.cos(arrowAng1) }
-  const tan2 = { x: -Math.sin(arrowAng2), y: Math.cos(arrowAng2) }
-  const arrow1 = computeArrowTip(arrowP1, tan1, 6)
-  const arrow2 = computeArrowTip(arrowP2, { x: -tan2.x, y: -tan2.y }, 6)
-  const midAngle = (startAngle + endAngle) / 2
-  const textPos = { x: inter.x + Math.cos(midAngle) * (radius + 18), y: inter.y + Math.sin(midAngle) * (radius + 18) }
+function placeAngleDim(edgeRef1, edgeRef2, radius = 40) {
+  const geometry = buildAngleGeometry(edgeRef1, edgeRef2, radius)
+  if (!geometry) return
   const id = `dim_${++dimIdCounter}`
   dimensions.value.push({
-    id, type: 'angle',
-    arcPath, arrow1, arrow2,
-    textPos,
-    text: `${finalAngle.toFixed(1).replace(/\.0$/, '')}°`
+    id,
+    type: 'angle',
+    refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
+    radius: geometry.radius,
+    text: geometry.text
   })
   selectedDimId.value = id
+}
+
+function farthestEndpointFrom(point, a, b) {
+  const distanceA = Math.hypot(a.x - point.x, a.y - point.y)
+  const distanceB = Math.hypot(b.x - point.x, b.y - point.y)
+  return distanceA >= distanceB ? a : b
 }
 
 /** 两条直线交点 */
@@ -1454,6 +1490,60 @@ function buildArcPath(cx, cy, r, startAngle, endAngle) {
     pts.push(`${cx + Math.cos(t) * r},${cy + Math.sin(t) * r}`)
   }
   return `M${pts[0]} L${pts.slice(1).join(' L')}`
+}
+
+function renderDimension(dim) {
+  if (!dim?.refs?.length) return null
+
+  let geometry = null
+  if (dim.type === 'linear') {
+    const first = resolveDimRef(dim.refs[0])
+    if (!first) return null
+    geometry = dim.mode === 'parallel'
+      ? buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+      : buildLinearSingleGeometry(first, dim.offset)
+  } else if (dim.type === 'diameter') {
+    geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle)
+  } else if (dim.type === 'angle') {
+    geometry = buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
+  }
+
+  return geometry ? { ...geometry, id: dim.id } : null
+}
+
+function onDimMouseDown(event, dim) {
+  if (activeTool.value) return
+  const mousePos = getSvgMousePoint(event)
+  if (!mousePos) return
+  selectDim(dim.id)
+  dimDragging.value = { id: dim.id, type: dim.type }
+}
+
+function updateDimDrag(event) {
+  const drag = dimDragging.value
+  const dim = dimensions.value.find(item => item.id === drag?.id)
+  const mousePos = getSvgMousePoint(event)
+  if (!drag || !dim || !mousePos) return
+
+  if (dim.type === 'linear') {
+    const first = resolveDimRef(dim.refs[0])
+    if (!first) return
+    dim.offset = dim.mode === 'parallel'
+      ? getParallelOffsetFromMouse(first, mousePos)
+      : getLinearOffsetFromMouse(first, mousePos)
+  } else if (dim.type === 'diameter') {
+    const ref = resolveDimRef(dim.refs[0])
+    if (!ref) return
+    const center = getSheetPoint(ref.view, ref.seg.cx, ref.seg.cy)
+    dim.leaderAngle = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
+  } else if (dim.type === 'angle') {
+    const first = resolveDimRef(dim.refs[0])
+    const second = resolveDimRef(dim.refs[1])
+    if (!first || !second) return
+    const geometry = buildAngleGeometry(first, second, 40)
+    if (!geometry) return
+    dim.radius = Math.max(15, Math.min(200, Math.hypot(mousePos.x - geometry.inter.x, mousePos.y - geometry.inter.y)))
+  }
 }
 
 /** 标注选中/删除 */
