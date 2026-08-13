@@ -593,10 +593,22 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
                     }
                 })
             else:
+                # 圆弧(HLR 切割后非完整 2π)→离散为 polyline,
+                # 但保留 CAD 真实圆心/半径(mm)供前端直径/半径标注精确取值
                 pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
                                         max_extent=max_extent)
                 if pts:
-                    segments.append({"type": "polyline", "points": pts})
+                    segments.append({
+                        "type": "polyline",
+                        "points": pts,
+                        "meta": {
+                            "curve": "circle",
+                            "radius": round(float(radius), 4),
+                            "center": [round(cx, 4), round(cy, 4)],
+                            "arc_start": round(float(u1), 4),
+                            "arc_end": round(float(u2), 4)
+                        }
+                    })
         else:
             pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
                                     max_extent=max_extent)
@@ -761,7 +773,17 @@ def _normalize_view(segments, hidden_segments, target_width=400, target_height=3
             return seg
         # 保留元数据(实际 mm 值,不随缩放变化)和边线分类(外轮廓/可见/隐藏)
         if "meta" in seg:
-            result["meta"] = seg["meta"]
+            meta = dict(seg["meta"])
+            result["meta"] = meta
+            # 圆弧/圆:将 CAD 圆心转换到归一化像素坐标,并补充像素半径,
+            # 供前端直径/半径标注直接取用(真实半径保留为 mm 值)
+            if isinstance(meta, dict) and meta.get("curve") == "circle":
+                if isinstance(meta.get("center"), (list, tuple)) and len(meta["center"]) == 2:
+                    mc_x, mc_y = meta["center"]
+                    meta["center"] = [round(mc_x * scale + offset_x, 4),
+                                      round(mc_y * scale + offset_y, 4)]
+                if "radius" in meta:
+                    meta["radius_px"] = round(meta["radius"] * scale, 4)
         if "edge_class" in seg:
             result["edge_class"] = seg["edge_class"]
         return result

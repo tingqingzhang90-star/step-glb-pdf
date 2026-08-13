@@ -197,12 +197,12 @@
               <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${pv.scale})`">
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
-                  <polyline v-else-if="seg.type === 'polyline' && activeTool !== 'diameter'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                   <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                 </template>
                 <template v-for="(seg, i) in pv.hiddenEdges" :key="`dvh-h-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
-                  <polyline v-else-if="seg.type === 'polyline' && activeTool !== 'diameter'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
+                  <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                 </template>
               </g>
@@ -992,6 +992,115 @@ function toLineSeg(seg) {
   return null
 }
 
+/** 三点定圆：由 polyline 上三个采样点求圆心与半径（仅作为退化兜底） */
+function fitCircleFromPoints(pts) {
+  if (!pts || pts.length < 3) return null
+  const n = pts.length
+  // 均匀取三个点，尽量分散
+  const a = pts[0]
+  const b = pts[Math.floor(n / 3)]
+  const c = pts[Math.floor((2 * n) / 3)]
+  const ax = a[0], ay = a[1]
+  const bx = b[0], by = b[1]
+  const cx = c[0], cy = c[1]
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+  if (Math.abs(d) < 1e-6) return null
+  const a2 = ax * ax + ay * ay
+  const b2 = bx * bx + by * by
+  const c2 = cx * cx + cy * cy
+  const ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+  const uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+  const r = Math.hypot(ax - ux, ay - uy)
+  if (r < 0.01) return null
+  return { cx: ux, cy: uy, r }
+}
+
+/**
+ * Kasa 最小二乘圆拟合：最小化各点到拟合圆半径差的平方和。
+ * 用于后端未携带圆几何元数据时的工业级兜底（利用全部采样点而非三点）。
+ * 返回 {cx, cy, r, maxDev}
+ */
+function fitCircleLeastSquares(pts) {
+  if (!pts || pts.length < 4) return fitCircleFromPoints(pts)
+  let u = 0, v = 0
+  const n = pts.length
+  for (const p of pts) {
+    u += p[0]
+    v += p[1]
+  }
+  u /= n
+  v /= n
+  // 中心化，构造线性方程组 Sum{ (ui*u + vi*v + w) * [ui, vi, 1] } = 0 (Kasa)
+  let suu = 0, suv = 0, svv = 0, su = 0, sv = 0, sf = 0
+  for (const p of pts) {
+    const ui = p[0] - u
+    const vi = p[1] - v
+    const fi = ui * ui + vi * vi
+    suu += ui * ui
+    suv += ui * vi
+    svv += vi * vi
+    su += ui
+    sv += vi
+  }
+  // 简化：中心化后 su/sv≈0，按 Kasa 直接解 2x2
+  const denom = suu * svv - suv * suv
+  if (Math.abs(denom) < 1e-9) return fitCircleFromPoints(pts)
+  let sumUiF = 0, sumViF = 0
+  for (const p of pts) {
+    const ui = p[0] - u
+    const vi = p[1] - v
+    const fi = ui * ui + vi * vi
+    sumUiF += ui * fi
+    sumViF += vi * fi
+  }
+  const cu = (svv * sumUiF - suv * sumViF) / (2 * denom)
+  const cv = (suu * sumViF - suv * sumUiF) / (2 * denom)
+  const cx = cu + u
+  const cy = cv + v
+  let r2 = 0
+  for (const p of pts) {
+    r2 += (p[0] - cx) * (p[0] - cx) + (p[1] - cy) * (p[1] - cy)
+  }
+  const r = Math.sqrt(r2 / n)
+  if (!isFinite(r) || r < 0.01) return null
+  // 校验：所有点相对拟合圆的最大偏差（用于拒绝曲线边被误认成圆）
+  let maxDev = 0
+  for (const p of pts) {
+    const dist = Math.abs(Math.hypot(p[0] - cx, p[1] - cy) - r)
+    if (dist > maxDev) maxDev = dist
+  }
+  if (maxDev > Math.max(r * 0.10, 0.8)) return null
+  return { cx, cy, r, maxDev }
+}
+
+/**
+ * 将 circle/polyline 规整为可标注的圆（工业级精度）：
+ *   - circle：直接使用其圆心/半径
+ *   - polyline 且携带后端 CAD 元数据(curve='circle')：优先使用真实圆心/半径（mm）
+ *   - 其余 polyline：Kasa 最小二乘拟合兜底
+ * 返回 {cx, cy, r, meta}
+ */
+function toCircle(seg) {
+  if (!seg) return null
+  if (seg.type === 'circle') {
+    return { cx: seg.cx, cy: seg.cy, r: seg.r, meta: seg.meta }
+  }
+  if (seg.type === 'polyline' && seg.points && seg.points.length >= 3) {
+    // 首选后端 CAD 元数据：真实圆心(像素)与半径(px/mm)
+    const meta = seg.meta
+    if (meta && meta.curve === 'circle' && Array.isArray(meta.center) && meta.center.length === 2) {
+      if (typeof meta.radius_px === 'number' && meta.radius_px > 0) {
+        return { cx: meta.center[0], cy: meta.center[1], r: meta.radius_px, meta }
+      }
+    }
+    // 兜底：最小二乘拟合
+    const fit = fitCircleLeastSquares(seg.points)
+    if (!fit) return null
+    return { cx: fit.cx, cy: fit.cy, r: fit.r, meta: seg.meta }
+  }
+  return null
+}
+
 // ===== 标注工具核心函数 =====
 
 /** 工具切换 */
@@ -1082,8 +1191,8 @@ function onDimEdgeSelect(hitEl) {
   if (!edgeRef) return
 
   if (activeTool.value === 'diameter') {
-    // 直径：点击即放置（圆边线）
-    if (seg.type === 'circle') {
+    // 直径：点击即放置（圆/圆弧/孔，circle 或可拟合的 polyline）
+    if (toCircle(seg)) {
       placeDiameterDim(edgeRef, dimPreview.value?.leaderAngle)
     }
     return
@@ -1174,8 +1283,8 @@ function updateDimPreviewAt(event) {
   }
 
   if (activeTool.value === 'diameter') {
-    // 直径预览：跟随光标
-    if (dimHoveredEdge.value && dimHoveredEdge.value.seg.type === 'circle') {
+    // 直径预览：跟随光标（circle 或可拟合为圆的 polyline）
+    if (dimHoveredEdge.value && toCircle(dimHoveredEdge.value.seg)) {
       dimPreview.value = buildDiameterPreview(dimHoveredEdge.value, mousePos)
     }
     return
@@ -1409,9 +1518,10 @@ function placeLinearDimParallel(edgeRef1, edgeRef2, offset = 50) {
 
 function buildDiameterPreview(edgeRef, mousePos) {
   const { seg, view } = edgeRef
-  if (seg.type !== 'circle' || !view || !mousePos) return null
-  const cx = view.x + seg.cx * view.scale
-  const cy = view.y + seg.cy * view.scale
+  const circ = toCircle(seg)
+  if (!circ || !view || !mousePos) return null
+  const cx = view.x + circ.cx * view.scale
+  const cy = view.y + circ.cy * view.scale
   const angle = Math.atan2(mousePos.y - cy, mousePos.x - cx)
   return buildDiameterGeometry(edgeRef, angle)
 }
@@ -1434,14 +1544,15 @@ function placeDiameterDim(edgeRef, leaderAngle = -Math.PI / 4) {
 function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4) {
   if (!edgeRef) return null
   const { seg, view } = edgeRef
-  if (seg.type !== 'circle' || !view) return null
-  const cx = view.x + seg.cx * view.scale
-  const cy = view.y + seg.cy * view.scale
-  const r = seg.r * view.scale
+  const circ = toCircle(seg)
+  if (!circ || !view) return null
+  const cx = view.x + circ.cx * view.scale
+  const cy = view.y + circ.cy * view.scale
+  const r = circ.r * view.scale
   const dir = { x: Math.cos(angle), y: Math.sin(angle) }
   const edgePt = { x: cx + dir.x * r, y: cy + dir.y * r }
   const textPos = { x: cx + dir.x * (r + 30), y: cy + dir.y * (r + 30) }
-  const mmVal = seg.meta && seg.meta.radius ? seg.meta.radius * 2 : (seg.r * 2) / getViewMmScale(view)
+  const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
   return {
     type: 'diameter',
     refs: [edgeRefData(edgeRef)],
@@ -1595,7 +1706,9 @@ function updateDimDrag(event) {
   } else if (dim.type === 'diameter') {
     const ref = resolveDimRef(dim.refs[0])
     if (!ref) return
-    const center = getSheetPoint(ref.view, ref.seg.cx, ref.seg.cy)
+    const circ = toCircle(ref.seg)
+    if (!circ) return
+    const center = getSheetPoint(ref.view, circ.cx, circ.cy)
     dim.leaderAngle = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
   } else if (dim.type === 'angle') {
     const first = resolveDimRef(dim.refs[0])
