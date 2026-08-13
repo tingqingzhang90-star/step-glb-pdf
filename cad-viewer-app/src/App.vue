@@ -58,9 +58,9 @@
               <div
                 v-for="vw in standardViews"
                 :key="vw.name"
-                class="view-item"
-                :title="`点击或拖拽放置「${vw.label}」`"
-                @pointerdown="onPalettePointerDown($event, vw)"
+                :class="['view-item', { 'is-placed': placedViewNames.has(vw.name) }]"
+                :title="placedViewNames.has(vw.name) ? `「${vw.label}」已放置` : `点击或拖拽放置「${vw.label}」`"
+                @pointerdown="!placedViewNames.has(vw.name) && onPalettePointerDown($event, vw)"
               >
                 <div class="view-thumbnail" v-html="vw.thumbnail"></div>
                 <span class="view-label">{{ vw.label }}</span>
@@ -74,9 +74,9 @@
               <div
                 v-for="vw in isometricViews"
                 :key="vw.name"
-                class="view-item"
-                :title="`点击或拖拽放置「${vw.label}」`"
-                @pointerdown="onPalettePointerDown($event, vw)"
+                :class="['view-item', { 'is-placed': placedViewNames.has(vw.name) }]"
+                :title="placedViewNames.has(vw.name) ? `「${vw.label}」已放置` : `点击或拖拽放置「${vw.label}」`"
+                @pointerdown="!placedViewNames.has(vw.name) && onPalettePointerDown($event, vw)"
               >
                 <div class="view-thumbnail" v-html="vw.thumbnail"></div>
                 <span class="view-label">{{ vw.label }}</span>
@@ -104,6 +104,24 @@
             <text x="1040" y="715" font-size="18" fill="#303133">产品工程图</text>
             <text x="936" y="755" font-size="12" fill="#606266">型号</text>
             <text x="1016" y="755" font-size="12" fill="#303133">{{ selectedModel || '-' }}</text>
+
+            <!-- 对齐引导线（仅拖拽时显示） -->
+            <g v-if="alignmentGuides.length > 0" class="alignment-guides" pointer-events="none">
+              <template v-for="(guide, i) in alignmentGuides" :key="`guide-${i}`">
+                <line
+                  v-if="guide.type === 'vertical'"
+                  :x1="guide.pos" y1="20" :x2="guide.pos" :y2="sheetHeight - 20"
+                  stroke="#409eff" stroke-width="1" stroke-dasharray="6,3"
+                  vector-effect="non-scaling-stroke" opacity="0.7"
+                />
+                <line
+                  v-else
+                  x1="20" :y1="guide.pos" :x2="sheetWidth - 20" :y2="guide.pos"
+                  stroke="#409eff" stroke-width="1" stroke-dasharray="6,3"
+                  vector-effect="non-scaling-stroke" opacity="0.7"
+                />
+              </template>
+            </g>
 
             <g
               v-for="pv in placedViews"
@@ -244,7 +262,7 @@
             <span class="prop-value">{{ selectedView.edges?.length || 0 }}</span>
           </div>
           <div class="prop-row stacked">
-            <span class="prop-label">比例</span>
+            <span class="prop-label">全局比例</span>
             <el-input-number :model-value="selectedView.scale" :min="0.1" :max="5" :step="0.1" size="small" class="prop-input" @update:model-value="onViewScaleChange" />
           </div>
           <div class="prop-row">
@@ -312,6 +330,19 @@ let paletteAnimationFrame = 0
 let movingView = null
 let moveStartPos = null
 
+// ===== 对齐分组（基于投影轴平行关系） =====
+// 垂直对齐组：水平轴平行于 X 轴 → 拖拽时 X 中心对齐
+const VERTICAL_ALIGN_GROUP_X = new Set(['front', 'back', 'top', 'bottom'])
+// 垂直对齐组：水平轴平行于 Z 轴 → 拖拽时 X 中心对齐（缸体长轴方向）
+const VERTICAL_ALIGN_GROUP_Z = new Set(['left', 'right', 'left_top'])
+// 水平对齐组：垂直轴平行于 Y 轴 → 拖拽时 Y 中心对齐
+const HORIZONTAL_ALIGN_GROUP_Y = new Set(['front', 'back', 'left', 'right'])
+
+const ALIGN_SNAP_THRESHOLD = 8  // 吸附阈值（SVG 坐标 px）
+
+const alignmentGuides = ref([])
+const globalScale = ref(null)
+
 const standardViews = computed(() =>
   Object.entries(paletteViews.value)
     .filter(([_, v]) => v.group === 'standard')
@@ -326,6 +357,10 @@ const isometricViews = computed(() =>
 
 const selectedView = computed(() =>
   placedViews.value.find(v => v.id === selectedViewId.value)
+)
+
+const placedViewNames = computed(() =>
+  new Set(placedViews.value.map(v => v.name))
 )
 
 const drawingDocumentPreview = computed(() => JSON.stringify({
@@ -454,7 +489,7 @@ function updatePalettePreview() {
     return
   }
   const point = getSvgPoint(event)
-  if (point) dragPreviewPos.value = getCenteredViewPlacement(draggingView.value, point)
+  if (point) dragPreviewPos.value = getCenteredViewPlacement(draggingView.value, point, globalScale.value ?? getInitialViewScale(draggingView.value))
 }
 
 function onPalettePointerMove(event) {
@@ -472,10 +507,15 @@ function onPalettePointerUp(event) {
   const wasDragging = draggingFromPalette.value
 
   if (wasDragging && isPointerOverSheet(event)) {
-    const point = getSvgPoint(event)
-    if (point) {
-      const placement = getCenteredViewPlacement(view, point)
-      placeView(view, placement.x, placement.y, placement.scale)
+    // 唯一性检查：拖拽放置前
+    if (!placedViews.value.some(pv => pv.name === view.name)) {
+      const point = getSvgPoint(event)
+      if (point) {
+        const placement = getCenteredViewPlacement(view, point, globalScale.value ?? getInitialViewScale(view))
+        placeView(view, placement.x, placement.y, placement.scale)
+      }
+    } else {
+      ElMessage.warning(`「${view.label}」已存在于图纸中`)
     }
   } else if (!wasDragging) {
     onPaletteClick(view)
@@ -503,10 +543,14 @@ function getCenteredViewPlacement(view, point, scale = getInitialViewScale(view)
 }
 
 function onPaletteClick(view) {
+  // 首次放置时初始化全局缩放
+  if (globalScale.value == null) {
+    globalScale.value = getInitialViewScale(view)
+  }
   const placement = getCenteredViewPlacement(view, {
     x: sheetWidth.value / 2,
     y: sheetHeight.value / 2
-  })
+  }, globalScale.value)
   placeView(view, placement.x, placement.y, placement.scale)
 }
 
@@ -573,7 +617,58 @@ function computeContentBBox(view) {
   }
 }
 
-function placeView(view, x, y, scale = 1) {
+// ===== 对齐检测辅助函数 =====
+function getViewCenterInSheet(pv) {
+  return {
+    x: pv.x + (pv.contentBBox.x + pv.contentBBox.width / 2) * pv.scale,
+    y: pv.y + (pv.contentBBox.y + pv.contentBBox.height / 2) * pv.scale
+  }
+}
+
+function detectAlignment(centerX, centerY, skipId) {
+  const guides = []
+  let snapDx = 0, snapDy = 0
+  let bestDistX = Infinity, bestDistY = Infinity
+
+  for (const pv of placedViews.value) {
+    if (pv.id === skipId) continue
+    const otherCenter = getViewCenterInSheet(pv)
+
+    // 垂直对齐线（X 中心对齐）— 同属垂直对齐组的视图
+    if (VERTICAL_ALIGN_GROUP_X.has(pv.name) || VERTICAL_ALIGN_GROUP_Z.has(pv.name)) {
+      const dist = Math.abs(centerX - otherCenter.x)
+      if (dist < ALIGN_SNAP_THRESHOLD && dist < bestDistX) {
+        bestDistX = dist
+        snapDx = otherCenter.x - centerX
+        guides.push({ type: 'vertical', pos: otherCenter.x })
+      }
+    }
+
+    // 水平对齐线（Y 中心对齐）— 同属水平对齐组的视图
+    if (HORIZONTAL_ALIGN_GROUP_Y.has(pv.name)) {
+      const dist = Math.abs(centerY - otherCenter.y)
+      if (dist < ALIGN_SNAP_THRESHOLD && dist < bestDistY) {
+        bestDistY = dist
+        snapDy = otherCenter.y - centerY
+        guides.push({ type: 'horizontal', pos: otherCenter.y })
+      }
+    }
+  }
+
+  return { guides, snapDx, snapDy }
+}
+
+function placeView(view, x, y, scale) {
+  // 唯一性约束：同一视图只能放置一次
+  if (placedViews.value.some(pv => pv.name === view.name)) {
+    ElMessage.warning(`「${view.label}」已存在于图纸中`)
+    return
+  }
+  // 始终使用全局缩放比例（首次放置时自动计算）
+  if (globalScale.value == null) {
+    globalScale.value = getInitialViewScale(view)
+  }
+  scale = globalScale.value
   const bbox = normalizeViewBBox(view)
   const edges = (view.edges || []).filter(s => s && s.type)
   const hiddenEdges = (view.hidden_edges || []).filter(s => s && s.type)
@@ -615,13 +710,27 @@ function onGlobalMouseMove(event) {
   if (!movingView) return
   const dx = event.clientX - moveStartPos.x
   const dy = event.clientY - moveStartPos.y
-  movingView.x = moveStartPos.vx + dx
-  movingView.y = moveStartPos.vy + dy
+  let newX = moveStartPos.vx + dx
+  let newY = moveStartPos.vy + dy
+
+  // 计算当前视图中心并检测对齐
+  const center = {
+    x: newX + (movingView.contentBBox.x + movingView.contentBBox.width / 2) * movingView.scale,
+    y: newY + (movingView.contentBBox.y + movingView.contentBBox.height / 2) * movingView.scale
+  }
+  const alignment = detectAlignment(center.x, center.y, movingView.id)
+  newX += alignment.snapDx
+  newY += alignment.snapDy
+  alignmentGuides.value = alignment.guides
+
+  movingView.x = newX
+  movingView.y = newY
 }
 
 function onGlobalMouseUp() {
   movingView = null
   moveStartPos = null
+  alignmentGuides.value = []
 }
 
 function deleteSelectedView() {
@@ -633,6 +742,8 @@ function deleteSelectedView() {
 function clearPlacedViews() {
   placedViews.value = []
   selectedViewId.value = null
+  globalScale.value = null
+  alignmentGuides.value = []
 }
 
 function zoomViewAroundCenter(view, newScale) {
@@ -646,20 +757,36 @@ function zoomViewAroundCenter(view, newScale) {
 }
 
 function onViewScaleChange(newScale) {
-  const view = placedViews.value.find(v => v.id === selectedViewId.value)
-  if (!view) return
-  zoomViewAroundCenter(view, Math.max(0.1, Math.min(5, newScale)))
+  // 全局缩放：修改所有视图的比例
+  const clamped = Math.max(0.1, Math.min(5, newScale))
+  globalScale.value = clamped
+  for (const v of placedViews.value) {
+    zoomViewAroundCenter(v, clamped)
+  }
 }
 
 function zoomCanvas(factor) {
+  const newScale = Math.max(0.1, Math.min(5, (globalScale.value || 1) * factor))
+  globalScale.value = newScale
   for (const v of placedViews.value) {
-    zoomViewAroundCenter(v, Math.max(0.1, Math.min(5, v.scale * factor)))
+    zoomViewAroundCenter(v, newScale)
   }
 }
 
 function resetCanvas() {
+  // 计算适应所有已放置视图的统一缩放
+  if (placedViews.value.length === 0) return
+  let maxExtent = 0
   for (const v of placedViews.value) {
-    zoomViewAroundCenter(v, 1)
+    const extent = Math.max(v.contentBBox.width, v.contentBBox.height)
+    maxExtent = Math.max(maxExtent, extent)
+  }
+  if (maxExtent < 0.01) return
+  const targetLongEdge = Math.min(sheetWidth.value * 0.6, sheetHeight.value * 0.6)
+  const newScale = Math.max(0.1, Math.min(5, targetLongEdge / maxExtent))
+  globalScale.value = newScale
+  for (const v of placedViews.value) {
+    zoomViewAroundCenter(v, newScale)
   }
 }
 
@@ -811,6 +938,18 @@ function polylinePoints(points) {
 
 .view-item:active {
   cursor: grabbing;
+}
+
+.view-item.is-placed {
+  opacity: 0.35;
+  cursor: not-allowed;
+  pointer-events: none;
+  border-color: #dcdfe6;
+  background: #f5f7fa;
+}
+
+.view-item.is-placed .view-label {
+  color: #c0c4cc;
 }
 
 .view-thumbnail {
