@@ -25,6 +25,7 @@
           <el-button size="small" :type="activeTool === 'diameter' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('diameter')">直径</el-button>
           <el-button size="small" :type="activeTool === 'angle' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('angle')">角度</el-button>
         </el-button-group>
+        <el-color-picker v-model="dimensionColor" size="small" :predefine="dimensionColorPresets" aria-label="标注颜色" />
         <el-divider direction="vertical" />
         <el-button size="small" :icon="Delete" :disabled="placedViews.length === 0" @click="clearPlacedViews">清空</el-button>
       </div>
@@ -195,8 +196,14 @@
             <g v-if="activeTool" class="dim-hit-layer" pointer-events="stroke">
               <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${pv.scale})`">
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
-                  <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
-                  <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <polyline v-else-if="seg.type === 'polyline' && activeTool !== 'diameter'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                </template>
+                <template v-for="(seg, i) in pv.hiddenEdges" :key="`dvh-h-${i}`">
+                  <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
+                  <polyline v-else-if="seg.type === 'polyline' && activeTool !== 'diameter'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
+                  <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                 </template>
               </g>
             </g>
@@ -218,7 +225,7 @@
             </g>
 
             <!-- 标注预览 -->
-            <g v-if="dimPreview" class="dim-preview" pointer-events="none">
+            <g v-if="dimPreview" class="dim-preview" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
               <template v-if="dimPreview.type === 'linear'">
                 <line :x1="dimPreview.ext1.x" :y1="dimPreview.ext1.y" :x2="dimPreview.ext1End.x" :y2="dimPreview.ext1End.y" class="dim-ext-line" />
                 <line :x1="dimPreview.ext2.x" :y1="dimPreview.ext2.y" :x2="dimPreview.ext2End.x" :y2="dimPreview.ext2End.y" class="dim-ext-line" />
@@ -242,7 +249,7 @@
 
             <!-- 已放置标注 -->
             <g class="dimensions-layer" pointer-events="stroke">
-              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="selectDim(dim.id)">
+              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="selectDim(dim.id)">
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-ext-line" />
@@ -425,6 +432,8 @@ const activeTool = ref(null)  // null | 'linear' | 'diameter' | 'angle'
 const dimHoveredEdge = ref(null)  // { seg, transform, viewId, idx, type }
 const dimFirstEdge = ref(null)    // 第一选中边线
 const dimPreview = ref(null)      // 当前预览标注
+const dimensionColor = ref('#303133')
+const dimensionColorPresets = ['#303133', '#409eff', '#67c23a', '#e6a23c', '#f56c6c']
 const dimensions = ref([])        // 已放置标注
 const selectedDimId = ref(null)   // 选中标注 id
 const dimDragging = ref(null)     // { dim, offset, ... } 拖拽调整中
@@ -951,6 +960,38 @@ function polylinePoints(points) {
   return points.map(p => `${p[0]},${p[1]}`).join(' ')
 }
 
+/**
+ * 将 line/polyline 规整为可标注的两点线段。
+ * 后端对 BSpline 面的 HLR 剪影线会离散为 polyline(气缸等模型占大多数),
+ * 视觉上近似直线;此处检测其是否近似直线:
+ *   - 是 → 返回 {x1,y1,x2,y2,meta} 供几何计算与标注
+ *   - 否(真曲线) → 返回 null，不做直线类标注
+ */
+function toLineSeg(seg) {
+  if (!seg) return null
+  if (seg.type === 'line') {
+    return { x1: seg.x1, y1: seg.y1, x2: seg.x2, y2: seg.y2, meta: seg.meta }
+  }
+  if (seg.type === 'polyline' && seg.points && seg.points.length >= 2) {
+    const pts = seg.points
+    const x1 = pts[0][0], y1 = pts[0][1]
+    const x2 = pts[pts.length - 1][0], y2 = pts[pts.length - 1][1]
+    const len = Math.hypot(x2 - x1, y2 - y1)
+    if (len < 0.01) return null
+    // 所有点到首尾连线的最大法向偏差
+    let maxDev = 0
+    for (let i = 1; i < pts.length - 1; i++) {
+      const px = pts[i][0], py = pts[i][1]
+      const cross = Math.abs((x2 - x1) * (y1 - py) - (x1 - px) * (y2 - y1))
+      maxDev = Math.max(maxDev, cross / len)
+    }
+    // 偏差超过直线长度的 1.5% 视为曲线，不做直线标注
+    if (maxDev > 0.015 * len) return null
+    return { x1, y1, x2, y2, meta: seg.meta }
+  }
+  return null
+}
+
 // ===== 标注工具核心函数 =====
 
 /** 工具切换 */
@@ -992,8 +1033,9 @@ function getSvgMousePoint(event) {
 }
 
 function makeEdgeRef(view, idx, type, seg = null) {
+  if (!view) return null
   const edge = seg || getEdgeByRef(view.id, idx, type)
-  if (!view || !edge) return null
+  if (!edge) return null
   return {
     seg: edge,
     view,
@@ -1057,9 +1099,12 @@ function onDimEdgeSelect(hitEl) {
     const first = dimFirstEdge.value
     if (first.viewId === viewId && first.idx === idx && first.type === type) {
       // 同一根边线 → 单边对齐标注
-      placeLinearDimSingle(first, dimPreview.value?.offset)
+      const offset = dimPreview.value?.offset ?? getLinearOffsetFromMouse(first, getSvgMousePoint(event))
+      placeLinearDimSingle(first, offset)
       dimFirstEdge.value = null
+      dimHoveredEdge.value = null
       dimPreview.value = null
+      activeTool.value = null
       return
     }
     // 平行检测
@@ -1121,7 +1166,7 @@ function updateDimPreviewAt(event) {
     // 无第一边线：跟随光标预览最近边线
     if (dimHoveredEdge.value) {
       const seg = dimHoveredEdge.value.seg
-      if (seg.type === 'line') {
+      if (toLineSeg(seg)) {
         dimPreview.value = buildLinearSinglePreview(dimHoveredEdge.value, mousePos)
       }
     }
@@ -1147,7 +1192,7 @@ function updateDimPreviewAt(event) {
         }
       }
     }
-    if (dimHoveredEdge.value && dimHoveredEdge.value.seg.type === 'line') {
+    if (dimHoveredEdge.value && toLineSeg(dimHoveredEdge.value.seg)) {
       // 单选线预览：显示角度候选
       dimPreview.value = null
     }
@@ -1156,11 +1201,13 @@ function updateDimPreviewAt(event) {
 
 // ===== 几何工具 =====
 
-/** 判断两条线段是否平行（角度差 < 5°） */
+/** 判断两条线段是否平行（角度差 < 5°），line/polyline 视为直线 */
 function isParallel(seg1, seg2) {
-  if (seg1.type !== 'line' || seg2.type !== 'line') return false
-  const dx1 = seg1.x2 - seg1.x1, dy1 = seg1.y2 - seg1.y1
-  const dx2 = seg2.x2 - seg2.x1, dy2 = seg2.y2 - seg2.y1
+  const l1 = toLineSeg(seg1)
+  const l2 = toLineSeg(seg2)
+  if (!l1 || !l2) return false
+  const dx1 = l1.x2 - l1.x1, dy1 = l1.y2 - l1.y1
+  const dx2 = l2.x2 - l2.x1, dy2 = l2.y2 - l2.y1
   const len1 = Math.hypot(dx1, dy1), len2 = Math.hypot(dx2, dy2)
   if (len1 < 0.01 || len2 < 0.01) return false
   const dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2)
@@ -1218,10 +1265,12 @@ function buildLinearSinglePreview(edgeRef, mousePos) {
 }
 
 function getLinearOffsetFromMouse(edgeRef, mousePos) {
+  if (!edgeRef) return 50
   const { seg, view } = edgeRef
-  if (seg.type !== 'line' || !view || !mousePos) return 50
-  const p1 = getSheetPoint(view, seg.x1, seg.y1)
-  const p2 = getSheetPoint(view, seg.x2, seg.y2)
+  const line = toLineSeg(seg)
+  if (!line || !view || !mousePos) return 50
+  const p1 = getSheetPoint(view, line.x1, line.y1)
+  const p2 = getSheetPoint(view, line.x2, line.y2)
   const dir = lineBasis(p1, p2)
   if (!dir) return 50
   const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
@@ -1230,15 +1279,17 @@ function getLinearOffsetFromMouse(edgeRef, mousePos) {
 }
 
 function buildLinearSingleGeometry(edgeRef, offset = 50) {
+  if (!edgeRef) return null
   const { seg, view } = edgeRef
-  if (seg.type !== 'line' || !view) return null
-  const p1 = getSheetPoint(view, seg.x1, seg.y1)
-  const p2 = getSheetPoint(view, seg.x2, seg.y2)
+  const line = toLineSeg(seg)
+  if (!line || !view) return null
+  const p1 = getSheetPoint(view, line.x1, line.y1)
+  const p2 = getSheetPoint(view, line.x2, line.y2)
   const dir = lineBasis(p1, p2)
   if (!dir) return null
   const extEnd1 = offsetPoint(p1, dir.perp, offset)
   const extEnd2 = offsetPoint(p2, dir.perp, offset)
-  const mmVal = seg.meta && seg.meta.length ? seg.meta.length : Math.hypot(p2.x - p1.x, p2.y - p1.y) / (view.scale * getViewMmScale(view))
+  const mmVal = line.meta && line.meta.length ? line.meta.length : Math.hypot(p2.x - p1.x, p2.y - p1.y) / (view.scale * getViewMmScale(view))
   return {
     type: 'linear',
     mode: 'single',
@@ -1263,10 +1314,12 @@ function buildLinearParallelPreview(edgeRef1, edgeRef2, mousePos) {
 }
 
 function getParallelOffsetFromMouse(edgeRef, mousePos) {
+  if (!edgeRef) return 50
   const { seg, view } = edgeRef
-  if (seg.type !== 'line' || !view || !mousePos) return 50
-  const p1 = getSheetPoint(view, seg.x1, seg.y1)
-  const p2 = getSheetPoint(view, seg.x2, seg.y2)
+  const line = toLineSeg(seg)
+  if (!line || !view || !mousePos) return 50
+  const p1 = getSheetPoint(view, line.x1, line.y1)
+  const p2 = getSheetPoint(view, line.x2, line.y2)
   const dir = lineBasis(p1, p2)
   if (!dir) return 50
   const raw = signedDistanceToLine(mousePos, p1, dir.unit)
@@ -1277,11 +1330,13 @@ function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50) {
   if (!edgeRef1 || !edgeRef2) return null
   const { seg: seg1, view: view1 } = edgeRef1
   const { seg: seg2, view: view2 } = edgeRef2
-  if (seg1.type !== 'line' || seg2.type !== 'line') return null
-  const p1 = getSheetPoint(view1, seg1.x1, seg1.y1)
-  const p2 = getSheetPoint(view1, seg1.x2, seg1.y2)
-  const q1 = getSheetPoint(view2, seg2.x1, seg2.y1)
-  const q2 = getSheetPoint(view2, seg2.x2, seg2.y2)
+  const line1 = toLineSeg(seg1)
+  const line2 = toLineSeg(seg2)
+  if (!line1 || !line2) return null
+  const p1 = getSheetPoint(view1, line1.x1, line1.y1)
+  const p2 = getSheetPoint(view1, line1.x2, line1.y2)
+  const q1 = getSheetPoint(view2, line2.x1, line2.y1)
+  const q2 = getSheetPoint(view2, line2.x2, line2.y2)
   const basis = lineBasis(p1, p2)
   if (!basis) return null
   let normal = basis.perp
@@ -1327,6 +1382,7 @@ function placeLinearDimSingle(edgeRef, offset = 50) {
     mode: 'single',
     refs: [edgeRefData(edgeRef)],
     offset: geometry.offset,
+    color: dimensionColor.value,
     text: geometry.text
   })
   selectedDimId.value = id
@@ -1343,6 +1399,7 @@ function placeLinearDimParallel(edgeRef1, edgeRef2, offset = 50) {
     mode: 'parallel',
     refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
     offset: geometry.offset,
+    color: dimensionColor.value,
     text: geometry.text
   })
   selectedDimId.value = id
@@ -1368,6 +1425,7 @@ function placeDiameterDim(edgeRef, leaderAngle = -Math.PI / 4) {
     type: 'diameter',
     refs: [edgeRefData(edgeRef)],
     leaderAngle: geometry.leaderAngle,
+    color: dimensionColor.value,
     text: geometry.text
   })
   selectedDimId.value = id
@@ -1409,11 +1467,13 @@ function buildAngleGeometry(edgeRef1, edgeRef2, radius = 40) {
   if (!edgeRef1 || !edgeRef2) return null
   const { seg: seg1, view: view1 } = edgeRef1
   const { seg: seg2, view: view2 } = edgeRef2
-  if (seg1.type !== 'line' || seg2.type !== 'line') return null
-  const p1 = getSheetPoint(view1, seg1.x1, seg1.y1)
-  const p2 = getSheetPoint(view1, seg1.x2, seg1.y2)
-  const q1 = getSheetPoint(view2, seg2.x1, seg2.y1)
-  const q2 = getSheetPoint(view2, seg2.x2, seg2.y2)
+  const line1 = toLineSeg(seg1)
+  const line2 = toLineSeg(seg2)
+  if (!line1 || !line2) return null
+  const p1 = getSheetPoint(view1, line1.x1, line1.y1)
+  const p2 = getSheetPoint(view1, line1.x2, line1.y2)
+  const q1 = getSheetPoint(view2, line2.x1, line2.y1)
+  const q2 = getSheetPoint(view2, line2.x2, line2.y2)
   const inter = lineIntersection(p1, p2, q1, q2)
   if (!inter) return null
   const dir1 = lineBasis(inter, farthestEndpointFrom(inter, p1, p2))
@@ -1460,6 +1520,7 @@ function placeAngleDim(edgeRef1, edgeRef2, radius = 40) {
     type: 'angle',
     refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
     radius: geometry.radius,
+    color: dimensionColor.value,
     text: geometry.text
   })
   selectedDimId.value = id
@@ -1508,7 +1569,7 @@ function renderDimension(dim) {
     geometry = buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
   }
 
-  return geometry ? { ...geometry, id: dim.id } : null
+  return geometry ? { ...geometry, id: dim.id, color: dim.color || '#303133' } : null
 }
 
 function onDimMouseDown(event, dim) {
@@ -1901,26 +1962,26 @@ function onGlobalMouseUp() {
 }
 
 .dim-ext-line {
-  stroke: #606266;
+  stroke: var(--dimension-color, #606266);
   stroke-width: 0.8;
   stroke-dasharray: 3,2;
   vector-effect: non-scaling-stroke;
 }
 
 .dim-line {
-  stroke: #303133;
+  stroke: var(--dimension-color, #303133);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 
 .dim-arrow {
-  fill: #303133;
+  fill: var(--dimension-color, #303133);
   vector-effect: non-scaling-stroke;
 }
 
 .dim-text {
   font-size: 12px;
-  fill: #303133;
+  fill: var(--dimension-color, #303133);
   font-family: 'Microsoft YaHei', sans-serif;
   user-select: none;
   -webkit-user-select: none;
@@ -1931,21 +1992,11 @@ function onGlobalMouseUp() {
 }
 
 .dimension-selected .dim-line {
-  stroke: #409eff;
   stroke-width: 1.5;
 }
 
-.dimension-selected .dim-arrow {
-  fill: #409eff;
-}
-
 .dimension-selected .dim-text {
-  fill: #409eff;
   font-weight: 600;
-}
-
-.dim-view-hidden {
-  display: none;
 }
 
 .drawing-sheet.dim-active {
