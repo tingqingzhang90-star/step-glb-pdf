@@ -198,12 +198,12 @@
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
-                  <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <circle v-else-if="seg.type === 'circle' && (activeTool === 'diameter' || activeTool === 'linear')" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                 </template>
                 <template v-for="(seg, i) in pv.hiddenEdges" :key="`dvh-h-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
-                  <circle v-else-if="seg.type === 'circle' && activeTool === 'diameter'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
+                  <circle v-else-if="seg.type === 'circle' && (activeTool === 'diameter' || activeTool === 'linear')" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                 </template>
               </g>
             </g>
@@ -219,20 +219,32 @@
             <g v-if="activeTool && dimFirstEdge" class="dim-highlight" pointer-events="none">
               <g :transform="dimFirstEdge.transform">
                 <line v-if="dimFirstEdge.seg.type === 'line'" :x1="dimFirstEdge.seg.x1" :y1="dimFirstEdge.seg.y1" :x2="dimFirstEdge.seg.x2" :y2="dimFirstEdge.seg.y2" class="dim-highlight-selected" />
-                <circle v-else-if="dimFirstEdge.seg.type === 'circle'" :cx="dimFirstEdge.seg.cx" :cy="dimFirstEdge.seg.cy" :r="dimFirstEdge.seg.r" class="dim-highlight-selected" />
+                <template v-else-if="getFirstDimCircle()">
+                  <circle :cx="getFirstDimCircle().cx" :cy="getFirstDimCircle().cy" :r="getFirstDimCircle().r" class="dim-highlight-selected" />
+                  <g class="dim-center-mark" :transform="`translate(${getFirstDimCircle().cx}, ${getFirstDimCircle().cy})`">
+                    <line x1="-8" y1="0" x2="8" y2="0" />
+                    <line x1="0" y1="-8" x2="0" y2="8" />
+                  </g>
+                </template>
                 <polyline v-else-if="dimFirstEdge.seg.type === 'polyline'" :points="polylinePoints(dimFirstEdge.seg.points)" class="dim-highlight-selected" />
               </g>
             </g>
 
             <!-- 标注预览 -->
             <g v-if="dimPreview" class="dim-preview" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
-              <template v-if="dimPreview.type === 'linear'">
-                <line :x1="dimPreview.ext1.x" :y1="dimPreview.ext1.y" :x2="dimPreview.ext1End.x" :y2="dimPreview.ext1End.y" class="dim-ext-line" />
-                <line :x1="dimPreview.ext2.x" :y1="dimPreview.ext2.y" :x2="dimPreview.ext2End.x" :y2="dimPreview.ext2End.y" class="dim-ext-line" />
-                <line :x1="dimPreview.dimStart.x" :y1="dimPreview.dimStart.y" :x2="dimPreview.dimEnd.x" :y2="dimPreview.dimEnd.y" class="dim-line" />
-                <polygon v-if="dimPreview.arrow1" :points="dimPreview.arrow1" class="dim-arrow" />
-                <polygon v-if="dimPreview.arrow2" :points="dimPreview.arrow2" class="dim-arrow" />
-                <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dimPreview.text }}</text>
+              <template v-if="dimPreview.type === 'linear' || dimPreview.type === 'center-mark'">
+                <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark">
+                  <line :x1="cm.x - 8" :y1="cm.y" :x2="cm.x + 8" :y2="cm.y" />
+                  <line :x1="cm.x" :y1="cm.y - 8" :x2="cm.x" :y2="cm.y + 8" />
+                </g>
+                <template v-if="dimPreview.type === 'linear'">
+                  <line :x1="dimPreview.ext1.x" :y1="dimPreview.ext1.y" :x2="dimPreview.ext1End.x" :y2="dimPreview.ext1End.y" class="dim-ext-line" />
+                  <line :x1="dimPreview.ext2.x" :y1="dimPreview.ext2.y" :x2="dimPreview.ext2End.x" :y2="dimPreview.ext2End.y" class="dim-ext-line" />
+                  <line :x1="dimPreview.dimStart.x" :y1="dimPreview.dimStart.y" :x2="dimPreview.dimEnd.x" :y2="dimPreview.dimEnd.y" class="dim-line" />
+                  <polygon v-if="dimPreview.arrow1" :points="dimPreview.arrow1" class="dim-arrow" />
+                  <polygon v-if="dimPreview.arrow2" :points="dimPreview.arrow2" class="dim-arrow" />
+                  <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dimPreview.text }}</text>
+                </template>
               </template>
               <template v-if="dimPreview.type === 'diameter'">
                 <line :x1="dimPreview.leaderStart.x" :y1="dimPreview.leaderStart.y" :x2="dimPreview.leaderEnd.x" :y2="dimPreview.leaderEnd.y" class="dim-line" />
@@ -252,6 +264,10 @@
               <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="selectDim(dim.id)">
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
+                  <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark">
+                    <line :x1="cm.x - 8" :y1="cm.y" :x2="cm.x + 8" :y2="cm.y" />
+                    <line :x1="cm.x" :y1="cm.y - 8" :x2="cm.x" :y2="cm.y + 8" />
+                  </g>
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-ext-line" />
                   <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-ext-line" />
                   <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-line" />
@@ -1162,6 +1178,13 @@ function resolveDimRef(ref) {
   return makeEdgeRef(view, ref.idx, ref.type)
 }
 
+/** 第一选中边的圆心拟合（用于中心距标注高亮十字） */
+function getFirstDimCircle() {
+  const first = dimFirstEdge.value
+  if (!first) return null
+  return toCircle(first.seg)
+}
+
 function dimensionUsesView(dim, viewId) {
   return (dim.refs || []).some(ref => ref.viewId === viewId)
 }
@@ -1200,6 +1223,25 @@ function onDimEdgeSelect(hitEl) {
 
   if (activeTool.value === 'linear') {
     // 线性：点击边线1 → 点击边线2（平行）或再点击同一位置放置
+    // 圆/圆弧（孔）：作为中心点参与中心距标注
+    if (toCircle(seg)) {
+      if (!dimFirstEdge.value) {
+        dimFirstEdge.value = edgeRef
+        return
+      }
+      const first = dimFirstEdge.value
+      // 第一边也是圆 → 两孔中心距
+      if (toCircle(first.seg)) {
+        if (first.viewId === viewId && first.idx === idx && first.type === type) return
+        const offset = dimPreview.value?.offset ?? getCenterOffsetFromMouse(first, edgeRef, getSvgMousePoint(event))
+        placeLinearCenterDim(first, edgeRef, offset)
+        dimFirstEdge.value = null
+        dimHoveredEdge.value = null
+        dimPreview.value = null
+        return
+      }
+      return
+    }
     if (!dimFirstEdge.value) {
       dimFirstEdge.value = edgeRef
       return
@@ -1259,6 +1301,16 @@ function updateDimPreviewAt(event) {
     // 如果有第一边线，边线类型需要按鼠标位置预览
     if (dimFirstEdge.value) {
       const first = dimFirstEdge.value
+      // 第一边为圆 → 中心距模式：hover 到另一个圆时预览两圆心距离
+      if (toCircle(first.seg)) {
+        const hit = dimHoveredEdge.value
+        if (hit && (hit.viewId !== first.viewId || hit.idx !== first.idx) && toCircle(hit.seg)) {
+          dimPreview.value = buildCenterPreview(first, hit, mousePos)
+        } else {
+          dimPreview.value = null
+        }
+        return
+      }
       // 检测鼠标是否在另一条平行边线上
       const hit = dimHoveredEdge.value
       if (hit && (hit.viewId !== first.viewId || hit.idx !== first.idx)) {
@@ -1275,7 +1327,10 @@ function updateDimPreviewAt(event) {
     // 无第一边线：跟随光标预览最近边线
     if (dimHoveredEdge.value) {
       const seg = dimHoveredEdge.value.seg
-      if (toLineSeg(seg)) {
+      if (toCircle(seg)) {
+        // 圆：仅显示中心标记十字，等待选择第二孔
+        dimPreview.value = buildCenterMarkPreview(dimHoveredEdge.value)
+      } else if (toLineSeg(seg)) {
         dimPreview.value = buildLinearSinglePreview(dimHoveredEdge.value, mousePos)
       }
     }
@@ -1420,6 +1475,93 @@ function buildLinearSingleGeometry(edgeRef, offset = 50) {
 function buildLinearParallelPreview(edgeRef1, edgeRef2, mousePos) {
   const offset = getParallelOffsetFromMouse(edgeRef1, mousePos)
   return buildLinearParallelGeometry(edgeRef1, edgeRef2, offset)
+}
+
+/** 圆中心（图纸坐标） */
+function getCircleCenterSheet(edgeRef) {
+  if (!edgeRef) return null
+  const circ = toCircle(edgeRef.seg)
+  if (!circ) return null
+  return getSheetPoint(edgeRef.view, circ.cx, circ.cy)
+}
+
+/** 中心距标注偏移（鼠标到两圆心连线中点的法向距离） */
+function getCenterOffsetFromMouse(edgeRef1, edgeRef2, mousePos) {
+  const c1 = getCircleCenterSheet(edgeRef1)
+  const c2 = getCircleCenterSheet(edgeRef2)
+  if (!c1 || !c2 || !mousePos) return 50
+  const basis = lineBasis(c1, c2)
+  if (!basis) return 50
+  const mid = { x: (c1.x + c2.x) / 2, y: (c1.y + c2.y) / 2 }
+  const raw = (mousePos.x - mid.x) * basis.perp.x + (mousePos.y - mid.y) * basis.perp.y
+  return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+}
+
+/** 单圆中心标记：虚线十字预览（未选择第二孔时） */
+function buildCenterMarkPreview(edgeRef) {
+  const c = getCircleCenterSheet(edgeRef)
+  if (!c) return null
+  return {
+    type: 'center-mark',
+    id: null,
+    center: c,
+    centerMarks: [c],
+    text: ''
+  }
+}
+
+/** 两圆心距离标注预览 */
+function buildCenterPreview(edgeRef1, edgeRef2, mousePos) {
+  const offset = getCenterOffsetFromMouse(edgeRef1, edgeRef2, mousePos)
+  return buildLinearCenterGeometry(edgeRef1, edgeRef2, offset)
+}
+
+/** 两圆心距离标注几何（延伸线从圆心引出） */
+function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50) {
+  if (!edgeRef1 || !edgeRef2) return null
+  const { view: view1 } = edgeRef1
+  const c1 = getCircleCenterSheet(edgeRef1)
+  const c2 = getCircleCenterSheet(edgeRef2)
+  if (!c1 || !c2) return null
+  const basis = lineBasis(c1, c2)
+  if (!basis) return null
+  const extEnd1 = offsetPoint(c1, basis.perp, offset)
+  const extEnd2 = offsetPoint(c2, basis.perp, offset)
+  const mmVal = basis.len / (view1.scale * getViewMmScale(view1))
+  return {
+    type: 'linear',
+    mode: 'center',
+    refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
+    offset,
+    ext1: c1,
+    ext1End: extEnd1,
+    ext2: c2,
+    ext2End: extEnd2,
+    dimStart: extEnd1,
+    dimEnd: extEnd2,
+    arrow1: computeArrowTip(extEnd1, basis.unit),
+    arrow2: computeArrowTip(extEnd2, { x: -basis.unit.x, y: -basis.unit.y }),
+    textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 },
+    text: formatMm(mmVal),
+    centerMarks: [c1, c2]
+  }
+}
+
+/** 放置两孔中心距标注 */
+function placeLinearCenterDim(edgeRef1, edgeRef2, offset = 50) {
+  const geometry = buildLinearCenterGeometry(edgeRef1, edgeRef2, offset)
+  if (!geometry) return
+  const id = `dim_${++dimIdCounter}`
+  dimensions.value.push({
+    id,
+    type: 'linear',
+    mode: 'center',
+    refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
+    offset: geometry.offset,
+    color: dimensionColor.value,
+    text: geometry.text
+  })
+  selectedDimId.value = id
 }
 
 function getParallelOffsetFromMouse(edgeRef, mousePos) {
@@ -1671,9 +1813,13 @@ function renderDimension(dim) {
   if (dim.type === 'linear') {
     const first = resolveDimRef(dim.refs[0])
     if (!first) return null
-    geometry = dim.mode === 'parallel'
-      ? buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
-      : buildLinearSingleGeometry(first, dim.offset)
+    if (dim.mode === 'center') {
+      geometry = buildLinearCenterGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+    } else if (dim.mode === 'parallel') {
+      geometry = buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+    } else {
+      geometry = buildLinearSingleGeometry(first, dim.offset)
+    }
   } else if (dim.type === 'diameter') {
     geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle)
   } else if (dim.type === 'angle') {
@@ -1700,9 +1846,15 @@ function updateDimDrag(event) {
   if (dim.type === 'linear') {
     const first = resolveDimRef(dim.refs[0])
     if (!first) return
-    dim.offset = dim.mode === 'parallel'
-      ? getParallelOffsetFromMouse(first, mousePos)
-      : getLinearOffsetFromMouse(first, mousePos)
+    if (dim.mode === 'center') {
+      const second = resolveDimRef(dim.refs[1])
+      if (!second) return
+      dim.offset = getCenterOffsetFromMouse(first, second, mousePos)
+    } else if (dim.mode === 'parallel') {
+      dim.offset = getParallelOffsetFromMouse(first, mousePos)
+    } else {
+      dim.offset = getLinearOffsetFromMouse(first, mousePos)
+    }
   } else if (dim.type === 'diameter') {
     const ref = resolveDimRef(dim.refs[0])
     if (!ref) return
@@ -2089,6 +2241,14 @@ function onGlobalMouseUp() {
 
 .dim-arrow {
   fill: var(--dimension-color, #303133);
+  vector-effect: non-scaling-stroke;
+}
+
+/* 中心标记：虚线十字 */
+.dim-center-mark line {
+  stroke: var(--dimension-color, #303133);
+  stroke-width: 0.8;
+  stroke-dasharray: 2.5, 2;
   vector-effect: non-scaling-stroke;
 }
 
