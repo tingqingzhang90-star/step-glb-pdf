@@ -443,6 +443,28 @@ def _segment_length(seg):
     return 0.0
 
 
+def _curve_3d_length(adaptor, deflection=0.5):
+    """求 3D 曲线真实弧长(mm)，用于 polyline 边标注精确尺寸。
+
+    与 2D 像素换算不同，该值来自 CAD 模型真实几何，
+    避免“归一化像素 ÷ bbox.scale”因缩放四舍五入引入毫米级误差。
+    """
+    try:
+        sampler = GCPnts_QuasiUniformDeflection(adaptor, deflection)
+        n = sampler.NbPoints()
+        if n < 2:
+            return None
+        total = 0.0
+        prev = sampler.Value(1)
+        for i in range(2, n + 1):
+            p = sampler.Value(i)
+            total += prev.Distance(p)
+            prev = p
+        return total
+    except Exception:
+        return None
+
+
 def _filter_short_segments(segments, min_length=2.0):
     """过滤短边,减少螺纹/倒角/碎片线对工程图的干扰"""
     if not segments:
@@ -595,25 +617,37 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
             else:
                 # 圆弧(HLR 切割后非完整 2π)→离散为 polyline,
                 # 但保留 CAD 真实圆心/半径(mm)供前端直径/半径标注精确取值
+                arc_angle = abs(u2 - u1)
+                seg_meta = {
+                    "curve": "circle",
+                    "radius": round(float(radius), 4),
+                    "center": [round(cx, 4), round(cy, 4)],
+                    "arc_start": round(float(u1), 4),
+                    "arc_end": round(float(u2), 4)
+                }
+                # 真实弧长 mm = r*θ(θ 为弧度),整圆时 θ≈2π;
+                # 用解析公式而非离散弦长,保证生产级精度
+                seg_meta["length"] = round(float(radius) * arc_angle, 2)
                 pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
                                         max_extent=max_extent)
                 if pts:
                     segments.append({
                         "type": "polyline",
                         "points": pts,
-                        "meta": {
-                            "curve": "circle",
-                            "radius": round(float(radius), 4),
-                            "center": [round(cx, 4), round(cy, 4)],
-                            "arc_start": round(float(u1), 4),
-                            "arc_end": round(float(u2), 4)
-                        }
+                        "meta": seg_meta
                     })
         else:
+            # 一般曲线(BSpline/Bezier)经 HLR 后常输出为 polyline,
+            # 用 GCPnts 采样求 3D 真实弧长(mm),供前端长度标注精确取值,
+            # 避免"归一化像素 ÷ bbox.scale"因缩放四舍五入引入毫米级误差
             pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
                                     max_extent=max_extent)
             if pts:
-                segments.append({"type": "polyline", "points": pts})
+                seg_data = {"type": "polyline", "points": pts}
+                real_len = _curve_3d_length(adaptor)
+                if real_len:
+                    seg_data["meta"] = {"length": round(real_len, 2)}
+                segments.append(seg_data)
     except Exception:
         pass
 
