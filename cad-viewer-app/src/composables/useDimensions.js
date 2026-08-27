@@ -1,7 +1,7 @@
 // 标注工具:状态声明 + 引擎装配(dimCore 几何构建 / dimEngine 交互状态机)
 import { ref, computed } from 'vue'
 import { createDimEngine, coreFactory } from '@/dimensions/index.js'
-import { toCircle } from '@/dimensions/geometry.js'
+import { toCircle, toLineSeg } from '@/dimensions/geometry.js'
 
 export function useDimensions({ placedViews, selectedViewId, coords }) {
   const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle'
@@ -74,6 +74,31 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     selectedDimId.value = null
   }
 
+  /** SVG mousedown:标注工具激活时的边线选择/放置/取消 */
+  function onSvgMouseDown(event) {
+    if (!activeTool.value) return
+    const target = document.elementFromPoint(event.clientX, event.clientY)
+    const hit = target && target.closest ? target.closest('[data-dim-view]') : null
+    if (hit) {
+      onDimEdgeSelect(hit, event)
+      return
+    }
+    // 点击空白处：若当前是 single 线性预览，则在当前 offset 位置放置；否则取消
+    const first = dimFirstEdge.value
+    const preview = dimPreview.value
+    if (activeTool.value === 'linear' && first && preview && toLineSeg(first.seg) && preview.type === 'linear' && preview.mode === 'single') {
+      const offset = preview.offset ?? dimCore.getLinearOffsetFromMouse(first, coords.eventToSheetPoint(event))
+      const id = dimCore.placeLinearDimSingle(first, offset)
+      if (id) selectDim(id)
+      dimFirstEdge.value = null
+      dimPreview.value = null
+      dimHoveredEdge.value = null
+      activeTool.value = null
+      return
+    }
+    clearTransientSelection()
+  }
+
   /** SVG mousemove:通过透明命中层做边线 hover 检测 + 预览更新 */
   function onSvgMouseMove(event) {
     if (!activeTool.value) return
@@ -122,6 +147,6 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     renderedDimensions,
     toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, selectDim, getFirstDimCircle,
-    onSvgMouseMove, clearTransientSelection, removeByView, resetAll
+    onSvgMouseDown, onSvgMouseMove, clearTransientSelection, removeByView, resetAll
   }
 }
