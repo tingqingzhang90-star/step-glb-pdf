@@ -90,6 +90,13 @@
 ### 文件与函数大小
 - 单文件 ≤ 300 行、单函数 ≤ 50 行、单文件导出 ≤ 10、单 Python 模块类 ≤ 5。
 
+### 前端大文件拆分(强制,防巨型单文件)
+- **Vue 单文件(.vue)script + template + style 合计 ≤ 300 行**,超过必须拆分,禁止放任 App.vue / 页面文件无限膨胀。
+- 拆分必须按「职责边界 + 依赖注入」推进,禁止为拆而拆(见下方反过度抽象):先把**纯函数/纯工具**抽到无依赖模块(如 `src/*/xxxGeometry.js`),再把**有状态逻辑**用「工厂 + 依赖注入」封装成 composable(如 `createDimEngine(deps)` / `createXxxEngine(deps)`),App.vue 只保留模板、事件总控与状态声明。
+- 新增前端模块统一放在有意义的子目录:`src/dimensions/`(标注)、`src/views/`(画布/视图)、`src/utils/`(通用工具);禁止把新工具塞进 App.vue。
+- 事件总控函数(如 `onSvgMouseDown`、`onGlobalMouseMove`)因跨越多个子系统,留在组件内;其内部调用的业务逻辑交给引擎模块。
+- 重构后必须 `npm run build` 验证(AGENTS.md 6.1 禁止 npm 命令自动执行,故由用户执行确认)。
+
 ### 命名约定
 - 组件 Vue:PascalCase;函数/变量:camelCase;常量:UPPER_SNAKE_CASE;类:PascalCase;类型:不加 `I` 前缀。
 - 目录 kebab-case;Python 文件 snake_case;CSS 类 kebab-case(BEM)。

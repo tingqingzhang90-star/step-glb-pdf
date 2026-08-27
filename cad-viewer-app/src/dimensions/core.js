@@ -79,12 +79,53 @@ export function createDimensionCore(deps, ctx) {
     return data.id
   }
 
-  /** 圆中心（图纸坐标） */
+  /** 圆中心（图纸坐标），用于渲染/拖拽定位 */
   function getCircleCenterSheet(edgeRef) {
     if (!edgeRef) return null
     const circ = toCircle(edgeRef.seg)
     if (!circ) return null
     return getSheetPoint(edgeRef.view, circ.cx, circ.cy)
+  }
+
+  /**
+   * 圆中心（CAD 真值 mm 坐标）。
+   * 优先用后端返回的真实中心 mm（对称于 meta.radius 真值半径），
+   * 后端需在 circle 元数据补充 center_mm: [x, y]（模型坐标系 mm）。
+   * 回退：用归一化像素圆心 ÷ 后端精确比例 bbox.scale，
+   * 不经过 displayScale 双重换算，避免缩放/round 引入毫米级误差。
+   */
+  function getCircleCenterMm(edgeRef) {
+    if (!edgeRef) return null
+    const circ = toCircle(edgeRef.seg)
+    if (!circ) return null
+    const meta = circ.meta || {}
+    if (Array.isArray(meta.center_mm) && meta.center_mm.length === 2 &&
+        typeof meta.center_mm[0] === 'number' && typeof meta.center_mm[1] === 'number') {
+      return { x: meta.center_mm[0], y: meta.center_mm[1] }
+    }
+    const s = getViewMmScale(edgeRef.view)
+    if (s) return { x: circ.cx / s, y: circ.cy / s }
+    return null
+  }
+
+  /** 边线端点的 CAD 真值 mm 坐标（与 lineSegMmLength 同源），用于圆标注垂足投影 */
+  function lineMmEndpoints(line) {
+    const m = line && line.meta && line.meta.mm_coords
+    if (!m || m.length < 4) return null
+    return [{ x: m[0], y: m[1] }, { x: m[2], y: m[3] }]
+  }
+
+  /** 真值 mm 坐标系下：点 mmC 到边线(mm)所在直线的有符号距离 */
+  function pointToLineMmDistance(mmC, mmLine) {
+    if (!mmC || !mmLine) return null
+    const [a, b] = mmLine
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len2 = dx * dx + dy * dy
+    if (len2 < 1e-9) return null
+    const nx = -dy / Math.sqrt(len2)
+    const ny = dx / Math.sqrt(len2)
+    return Math.abs((mmC.x - a.x) * nx + (mmC.y - a.y) * ny)
   }
 
   // ===== 单边线性标注 =====
@@ -239,7 +280,12 @@ export function createDimensionCore(deps, ctx) {
     if (!basis) return null
     const extEnd1 = offsetPoint(c1, basis.perp, offset)
     const extEnd2 = offsetPoint(c2, basis.perp, offset)
-    const mmVal = basis.len / (view1.scale * getViewMmScale(view1))
+    // 优先用两圆心 CAD 真值 mm 坐标直接算欧氏距离(不经过像素缩放,无 0.1mm 误差)
+    const mmC1 = getCircleCenterMm(edgeRef1)
+    const mmC2 = getCircleCenterMm(edgeRef2)
+    const mmVal = (mmC1 && mmC2)
+      ? Math.hypot(mmC1.x - mmC2.x, mmC1.y - mmC2.y)
+      : basis.len / (view1.scale * getViewMmScale(view1))
     return {
       type: 'linear',
       mode: 'center',
@@ -302,7 +348,12 @@ export function createDimensionCore(deps, ctx) {
     const f = projectPointToLine(c, q1, u)
     const footC = { x: c.x + u.x * offset, y: c.y + u.y * offset }
     const footF = { x: f.x + u.x * offset, y: f.y + u.y * offset }
-    const mmVal = Math.abs(dC) / (view.scale * getViewMmScale(view))
+    // 优先用 CAD 真值 mm 直接算圆心到边线距离(不经过像素缩放,无 0.1mm 误差)
+    const mmC = getCircleCenterMm(circleRef)
+    const mmLine = lineMmEndpoints(line)
+    const mmVal = (mmC && mmLine)
+      ? pointToLineMmDistance(mmC, mmLine)
+      : Math.abs(dC) / (view.scale * getViewMmScale(view))
     return {
       type: 'linear',
       mode: 'circle-edge',

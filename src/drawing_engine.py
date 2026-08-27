@@ -611,6 +611,9 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
                     "r": float(radius),
                     "meta": {
                         "radius": round(float(radius), 2),
+                        # 真实中心 mm(模型坐标系 2D 投影),供前端圆心到边线/圆心距离标注精确取值;
+                        # normalize_view 只改 center 为像素坐标,center_mm 保持 mm 真值不变
+                        "center_mm": [round(cx, 2), round(cy, 2)],
                         "center": [round(cx, 2), round(cy, 2)]
                     }
                 })
@@ -621,6 +624,8 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
                 seg_meta = {
                     "curve": "circle",
                     "radius": round(float(radius), 4),
+                    # 真实中心 mm(与 center 同值,但 normalize_view 只改 center 为像素,center_mm 保持 mm 真值)
+                    "center_mm": [round(cx, 4), round(cy, 4)],
                     "center": [round(cx, 4), round(cy, 4)],
                     "arc_start": round(float(u1), 4),
                     "arc_end": round(float(u2), 4)
