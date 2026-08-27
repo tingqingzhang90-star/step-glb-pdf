@@ -153,6 +153,7 @@ export default defineConfig({
   plugins: [vue(), createPatchDataModelPlugin(), resolveOptionalPeerDeps()],
   resolve: {
     alias: {
+      '@': path.resolve(__dirname, 'src'),
       '@mlightcad/data-model': SHIM_PATH
     }
   },
