@@ -235,9 +235,9 @@
             <!-- 标注预览 -->
             <g v-if="dimPreview" class="dim-preview" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
               <template v-if="dimPreview.type === 'linear' || dimPreview.type === 'center-mark'">
-                <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark">
-                  <line :x1="cm.x - 8" :y1="cm.y" :x2="cm.x + 8" :y2="cm.y" />
-                  <line :x1="cm.x" :y1="cm.y - 8" :x2="cm.x" :y2="cm.y + 8" />
+                <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dimPreview.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dimPreview.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
+                  <line :x1="-8" :y1="0" :x2="8" :y2="0" />
+                  <line :x1="0" :y1="-8" :x2="0" :y2="8" />
                 </g>
                 <template v-if="dimPreview.type === 'linear'">
                   <line :x1="dimPreview.ext1.x" :y1="dimPreview.ext1.y" :x2="dimPreview.ext1End.x" :y2="dimPreview.ext1End.y" class="dim-ext-line" />
@@ -266,9 +266,9 @@
               <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="selectDim(dim.id)">
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
-                  <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark">
-                    <line :x1="cm.x - 8" :y1="cm.y" :x2="cm.x + 8" :y2="cm.y" />
-                    <line :x1="cm.x" :y1="cm.y - 8" :x2="cm.x" :y2="cm.y + 8" />
+                  <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dim.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dim.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
+                    <line :x1="-8" :y1="0" :x2="8" :y2="0" />
+                    <line :x1="0" :y1="-8" :x2="0" :y2="8" />
                   </g>
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-ext-line" />
                   <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-ext-line" />
@@ -402,6 +402,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading } from '@element-plus/icons-vue'
+import { buildArrowPoints, linearArrowDirs, buildLinearArrows } from '@/dimensions/arrow.js'
 
 const models = ref([])
 const selectedModel = ref('')
@@ -1271,17 +1272,7 @@ function dimensionUsesView(dim, viewId) {
   return (dim.refs || []).some(ref => ref.viewId === viewId)
 }
 
-/** 箭头三角形（图纸坐标） */
-function computeArrowTip(end, dir, size) {
-  const perp = { x: -dir.y, y: dir.x }
-  const pt = size || 8
-  const w = pt * 0.4
-  return [
-    `${end.x},${end.y}`,
-    `${end.x - dir.x * pt + perp.x * w},${end.y - dir.y * pt + perp.y * w}`,
-    `${end.x - dir.x * pt - perp.x * w},${end.y - dir.y * pt - perp.y * w}`
-  ].join(' ')
-}
+/** 箭头几何已抽到 @/dimensions/arrow.js（长尖双向），此处不再内联 */
 
 /** 边线选择处理 */
 function onDimEdgeSelect(hitEl) {
@@ -1304,19 +1295,27 @@ function onDimEdgeSelect(hitEl) {
   }
 
   if (activeTool.value === 'linear') {
-    // 线性：点击边线1 → 点击边线2（平行）或再点击同一位置放置
-    // 圆/圆弧（孔）：作为中心点参与中心距标注
+    // 圆/圆弧（孔）：作为中心点参与距离标注
     if (toCircle(seg)) {
       if (!dimFirstEdge.value) {
         dimFirstEdge.value = edgeRef
         return
       }
       const first = dimFirstEdge.value
+      if (first.viewId === viewId && first.idx === idx && first.type === type) return
       // 第一边也是圆 → 两孔中心距
       if (toCircle(first.seg)) {
-        if (first.viewId === viewId && first.idx === idx && first.type === type) return
         const offset = dimPreview.value?.offset ?? getCenterOffsetFromMouse(first, edgeRef, getSvgMousePoint(event))
         placeLinearCenterDim(first, edgeRef, offset)
+        dimFirstEdge.value = null
+        dimHoveredEdge.value = null
+        dimPreview.value = null
+        return
+      }
+      // 第一边是线、第二边是圆 → 圆心到边线距离
+      if (toLineSeg(first.seg)) {
+        const offset = dimPreview.value?.offset ?? getCircleEdgeOffsetFromMouse(edgeRef, first, getSvgMousePoint(event))
+        placeLinearCircleEdgeDim(edgeRef, first, offset)
         dimFirstEdge.value = null
         dimHoveredEdge.value = null
         dimPreview.value = null
@@ -1338,6 +1337,15 @@ function onDimEdgeSelect(hitEl) {
       dimHoveredEdge.value = null
       dimPreview.value = null
       activeTool.value = null
+      return
+    }
+    // 第一边是圆、第二边是线 → 圆心到边线距离
+    if (toCircle(first.seg) && toLineSeg(seg)) {
+      const offset = dimPreview.value?.offset ?? getCircleEdgeOffsetFromMouse(first, edgeRef, getSvgMousePoint(event))
+      placeLinearCircleEdgeDim(first, edgeRef, offset)
+      dimFirstEdge.value = null
+      dimHoveredEdge.value = null
+      dimPreview.value = null
       return
     }
     // 平行检测
@@ -1383,19 +1391,26 @@ function updateDimPreviewAt(event) {
     // 如果有第一边线，边线类型需要按鼠标位置预览
     if (dimFirstEdge.value) {
       const first = dimFirstEdge.value
-      // 第一边为圆 → 中心距模式：hover 到另一个圆时预览两圆心距离
+      const hit = dimHoveredEdge.value
+      const isDiff = hit && (hit.viewId !== first.viewId || hit.idx !== first.idx || hit.type !== first.type)
+      // 第一边为圆
       if (toCircle(first.seg)) {
-        const hit = dimHoveredEdge.value
-        if (hit && (hit.viewId !== first.viewId || hit.idx !== first.idx) && toCircle(hit.seg)) {
+        if (isDiff && toCircle(hit.seg)) {
           dimPreview.value = buildCenterPreview(first, hit, mousePos)
+        } else if (isDiff && toLineSeg(hit.seg)) {
+          dimPreview.value = buildLinearCircleEdgePreview(first, hit, mousePos)
         } else {
-          dimPreview.value = null
+          dimPreview.value = buildCenterMarkPreview(first)
         }
         return
       }
+      // 第一边为线，hover 到圆 → 圆心到边线距离
+      if (isDiff && toCircle(hit.seg) && toLineSeg(first.seg)) {
+        dimPreview.value = buildLinearCircleEdgePreview(hit, first, mousePos)
+        return
+      }
       // 检测鼠标是否在另一条平行边线上
-      const hit = dimHoveredEdge.value
-      if (hit && (hit.viewId !== first.viewId || hit.idx !== first.idx)) {
+      if (isDiff) {
         const seg2 = getEdgeByRef(hit.viewId, hit.idx, hit.type)
         if (seg2 && isParallel(first.seg, seg2)) {
           dimPreview.value = buildLinearParallelPreview(first, hit, mousePos)
@@ -1487,6 +1502,11 @@ function signedDistanceToLine(point, linePoint, normal) {
   return (point.x - linePoint.x) * normal.x + (point.y - linePoint.y) * normal.y
 }
 
+function projectPointToLine(point, linePoint, dir) {
+  const t = (point.x - linePoint.x) * dir.x + (point.y - linePoint.y) * dir.y
+  return { x: linePoint.x + dir.x * t, y: linePoint.y + dir.y * t }
+}
+
 // ===== 线性标注构建 =====
 
 function edgeRefData(edgeRef) {
@@ -1547,9 +1567,13 @@ function buildLinearSingleGeometry(edgeRef, offset = 50) {
     ext2End: extEnd2,
     dimStart: extEnd1,
     dimEnd: extEnd2,
-    arrow1: computeArrowTip(extEnd1, dir.unit),
-    arrow2: computeArrowTip(extEnd2, { x: -dir.unit.x, y: -dir.unit.y }),
-    textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 },
+    ...(() => {
+      const r = buildLinearArrows(extEnd1, extEnd2, dir.unit, formatMm(mmVal))
+      return {
+        ...r,
+        textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 + (r.outward ? -10 : -22) }
+      }
+    })(),
     text: formatMm(mmVal)
   }
 }
@@ -1577,6 +1601,79 @@ function getCenterOffsetFromMouse(edgeRef1, edgeRef2, mousePos) {
   const mid = { x: (c1.x + c2.x) / 2, y: (c1.y + c2.y) / 2 }
   const raw = (mousePos.x - mid.x) * basis.perp.x + (mousePos.y - mid.y) * basis.perp.y
   return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+}
+
+/** 圆心到边线标注偏移：尺寸线垂直于边线，offset 取鼠标相对圆心沿边线方向(unit)的有符号距离 */
+function getCircleEdgeOffsetFromMouse(circleRef, edgeRef, mousePos) {
+  const c = getCircleCenterSheet(circleRef)
+  const line = toLineSeg(edgeRef?.seg)
+  if (!c || !line || !mousePos) return 50
+  const q1 = getSheetPoint(edgeRef.view, line.x1, line.y1)
+  const q2 = getSheetPoint(edgeRef.view, line.x2, line.y2)
+  const basis = lineBasis(q1, q2)
+  if (!basis) return 50
+  return (mousePos.x - c.x) * basis.unit.x + (mousePos.y - c.y) * basis.unit.y
+}
+
+/** 圆心到边线距离标注几何：
+ *  - 尺寸线方向 = 边线法线(basis.perp)，与被测方向一致；
+ *  - 延伸线方向 = 边线方向(basis.unit)，从圆心和边线垂足沿 unit 走到尺寸线；
+ *  - 尺寸线位置由鼠标沿 unit 方向的位移决定。
+ */
+function buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset = 50) {
+  if (!circleRef || !edgeRef) return null
+  const c = getCircleCenterSheet(circleRef)
+  const line = toLineSeg(edgeRef.seg)
+  if (!c || !line) return null
+  const view = circleRef.view
+  const q1 = getSheetPoint(edgeRef.view, line.x1, line.y1)
+  const q2 = getSheetPoint(edgeRef.view, line.x2, line.y2)
+  const basis = lineBasis(q1, q2)
+  if (!basis) return null
+  const u = basis.unit
+  const dC = signedDistanceToLine(c, q1, basis.perp)
+  const f = projectPointToLine(c, q1, u)
+  const footC = { x: c.x + u.x * offset, y: c.y + u.y * offset }
+  const footF = { x: f.x + u.x * offset, y: f.y + u.y * offset }
+  const mmVal = Math.abs(dC) / (view.scale * getViewMmScale(view))
+  return {
+    type: 'linear',
+    mode: 'circle-edge',
+    refs: [edgeRefData(circleRef), edgeRefData(edgeRef)],
+    offset,
+    ext1: c,
+    ext1End: footC,
+    ext2: f,
+    ext2End: footF,
+    dimStart: footC,
+    dimEnd: footF,
+    ...(() => {
+      const r = buildLinearArrows(footC, footF, basis.perp, formatMm(mmVal))
+      return {
+        ...r,
+        textPos: { x: (footC.x + footF.x) / 2, y: (footC.y + footF.y) / 2 + (r.outward ? -10 : -22) }
+      }
+    })(),
+    text: formatMm(mmVal),
+    centerMarks: [c],
+    centerMarkAngle: Math.atan2(u.y, u.x)
+  }
+}
+
+/** 圆心到边线距离标注预览 */
+function buildLinearCircleEdgePreview(circleRef, edgeRef, mousePos) {
+  const offset = getCircleEdgeOffsetFromMouse(circleRef, edgeRef, mousePos)
+  return buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset)
+}
+
+/** 放置圆心到边线距离标注 */
+function placeLinearCircleEdgeDim(circleRef, edgeRef, offset = 50) {
+  const geometry = buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset)
+  if (!geometry) return
+  const id = `dim_${++dimIdCounter}`
+  dimensions.value.push({ id, ...geometry })
+  reRenderDimensions()
+  selectDim(id)
 }
 
 /** 单圆中心标记：虚线十字预览（未选择第二孔时） */
@@ -1621,9 +1718,13 @@ function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50) {
     ext2End: extEnd2,
     dimStart: extEnd1,
     dimEnd: extEnd2,
-    arrow1: computeArrowTip(extEnd1, basis.unit),
-    arrow2: computeArrowTip(extEnd2, { x: -basis.unit.x, y: -basis.unit.y }),
-    textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 10 },
+    ...(() => {
+      const r = buildLinearArrows(extEnd1, extEnd2, basis.unit, formatMm(mmVal))
+      return {
+        ...r,
+        textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 + (r.outward ? -10 : -22) }
+      }
+    })(),
     text: formatMm(mmVal),
     centerMarks: [c1, c2]
   }
@@ -1697,9 +1798,14 @@ function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50) {
     ext2End,
     dimStart: ext1End,
     dimEnd: ext2End,
-    arrow1: computeArrowTip(ext1End, normal),
-    arrow2: computeArrowTip(ext2End, { x: -normal.x, y: -normal.y }),
-    textPos: { x: (ext1End.x + ext2End.x) / 2 + basis.unit.x * 10, y: (ext1End.y + ext2End.y) / 2 + basis.unit.y * 10 },
+    ...(() => {
+      const r = buildLinearArrows(ext1End, ext2End, normal, formatMm(mmVal))
+      const shift = r.outward ? 10 : 14
+      return {
+        ...r,
+        textPos: { x: (ext1End.x + ext2End.x) / 2 + basis.unit.x * shift, y: (ext1End.y + ext2End.y) / 2 + basis.unit.y * shift }
+      }
+    })(),
     text: formatMm(mmVal)
   }
 }
@@ -1783,7 +1889,7 @@ function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4) {
     leaderAngle: angle,
     leaderStart: textPos,
     leaderEnd: edgePt,
-    arrow: computeArrowTip(edgePt, dir),
+    arrow: buildArrowPoints(edgePt, dir, true),
     textPos,
     text: `ø${formatMm(mmVal)}`
   }
@@ -1839,8 +1945,8 @@ function buildAngleGeometry(edgeRef1, edgeRef2, radius = 40) {
     startAngle,
     endAngle,
     arcPath: buildArcPath(inter.x, inter.y, radius, startAngle, endAngle),
-    arrow1: computeArrowTip(arrowP1, tan1, 6),
-    arrow2: computeArrowTip(arrowP2, { x: -tan2.x, y: -tan2.y }, 6),
+    arrow1: buildArrowPoints(arrowP1, tan1, true),
+    arrow2: buildArrowPoints(arrowP2, { x: -tan2.x, y: -tan2.y }, true),
     textPos: { x: inter.x + Math.cos(midAngle) * (radius + 18), y: inter.y + Math.sin(midAngle) * (radius + 18) },
     text: formatDeg(angle * 180 / Math.PI)
   }
@@ -1899,6 +2005,8 @@ function renderDimension(dim) {
       geometry = buildLinearCenterGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
     } else if (dim.mode === 'parallel') {
       geometry = buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+    } else if (dim.mode === 'circle-edge') {
+      geometry = buildLinearCircleEdgeGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
     } else {
       geometry = buildLinearSingleGeometry(first, dim.offset)
     }
@@ -1934,6 +2042,10 @@ function updateDimDrag(event) {
       dim.offset = getCenterOffsetFromMouse(first, second, mousePos)
     } else if (dim.mode === 'parallel') {
       dim.offset = getParallelOffsetFromMouse(first, mousePos)
+    } else if (dim.mode === 'circle-edge') {
+      const second = resolveDimRef(dim.refs[1])
+      if (!second) return
+      dim.offset = getCircleEdgeOffsetFromMouse(first, second, mousePos)
     } else {
       dim.offset = getLinearOffsetFromMouse(first, mousePos)
     }
@@ -2322,7 +2434,6 @@ function onGlobalMouseUp() {
 .dim-ext-line {
   stroke: var(--dimension-color, #606266);
   stroke-width: 0.8;
-  stroke-dasharray: 3,2;
   vector-effect: non-scaling-stroke;
 }
 
@@ -2341,7 +2452,6 @@ function onGlobalMouseUp() {
 .dim-center-mark line {
   stroke: var(--dimension-color, #303133);
   stroke-width: 0.8;
-  stroke-dasharray: 2.5, 2;
   vector-effect: non-scaling-stroke;
 }
 
