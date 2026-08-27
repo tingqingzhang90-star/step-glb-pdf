@@ -92,9 +92,11 @@
           <svg
             ref="svgRef"
             :class="['drawing-sheet', { 'dim-active': activeTool }]"
-            :width="sheetWidth"
-            :height="sheetHeight"
+            :width="sheetWidth * sheetZoom"
+            :height="sheetHeight * sheetZoom"
             :viewBox="`0 0 ${sheetWidth} ${sheetHeight}`"
+            :style="sheetCardStyle"
+            @wheel="onSheetWheel"
             @mousedown="onSvgMouseDown"
             @mousemove="onSvgMouseMove"
           >
@@ -127,7 +129,7 @@
             <g
               v-for="pv in placedViews"
               :key="pv.id"
-              :transform="`translate(${pv.x}, ${pv.y}) scale(${pv.scale})`"
+              :transform="`translate(${pv.x}, ${pv.y}) scale(${getViewDisplayScale(pv)})`"
               :class="['placed-view', { selected: selectedViewId === pv.id }]"
               @mousedown.stop="onViewMouseDown($event, pv)"
               @click.stop="selectView(pv.id)"
@@ -194,7 +196,7 @@
 
             <!-- 标注命中层（仅标注工具激活时） -->
             <g v-if="activeTool" class="dim-hit-layer" pointer-events="stroke">
-              <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${pv.scale})`">
+              <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${getViewDisplayScale(pv)})`">
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
@@ -420,6 +422,19 @@ const svgRef = ref(null)
 const sheetWidth = ref(1189)
 const sheetHeight = ref(841)
 
+// 整卡缩放/平移：SVG 内部图纸坐标固定，外层卡片的位置和尺寸统一变化。
+// 白色卡片背景、图框、标题栏、视图及标注将始终作为同一整体移动。
+const sheetZoom = ref(1)
+const sheetPan = ref({ x: 0, y: 0 })
+const sheetPanning = ref(null)
+const SHEET_ZOOM_MIN = 0.35
+const SHEET_ZOOM_MAX = 4
+const SHEET_ZOOM_STEP = 1.12
+const sheetCardStyle = computed(() => ({
+  left: `${sheetPan.value.x}px`,
+  top: `${sheetPan.value.y}px`
+}))
+
 const draggingFromPalette = ref(false)
 const draggingView = ref(null)
 const dragPreviewPos = ref(null)
@@ -509,6 +524,13 @@ const drawingDocumentPreview = computed(() => JSON.stringify({
 
 onMounted(async () => {
   await loadModelList()
+  const area = sheetAreaRef.value
+  if (area) {
+    sheetPan.value = {
+      x: (area.clientWidth - sheetWidth.value) / 2,
+      y: (area.clientHeight - sheetHeight.value) / 2
+    }
+  }
   window.addEventListener('mousemove', onGlobalMouseMove)
   window.addEventListener('mouseup', onGlobalMouseUp)
   window.addEventListener('pointermove', onPalettePointerMove)
@@ -748,8 +770,8 @@ function computeContentBBox(view) {
 // ===== 对齐检测辅助函数 =====
 function getViewCenterInSheet(pv) {
   return {
-    x: pv.x + (pv.contentBBox.x + pv.contentBBox.width / 2) * pv.scale,
-    y: pv.y + (pv.contentBBox.y + pv.contentBBox.height / 2) * pv.scale
+    x: pv.x + (pv.contentBBox.x + pv.contentBBox.width / 2) * getViewDisplayScale(pv),
+    y: pv.y + (pv.contentBBox.y + pv.contentBBox.height / 2) * getViewDisplayScale(pv)
   }
 }
 
@@ -827,10 +849,29 @@ function onViewMouseDown(event, view) {
   if (activeTool.value) return
   selectedViewId.value = view.id
   movingView = view
-  moveStartPos = { x: event.clientX, y: event.clientY, vx: view.x, vy: view.y }
+  const startPoint = getSvgPoint(event)
+  moveStartPos = {
+    x: startPoint?.x ?? event.clientX,
+    y: startPoint?.y ?? event.clientY,
+    vx: view.x,
+    vy: view.y
+  }
 }
 
 function onSvgMouseDown(event) {
+  // 鼠标中键拖动整张工程图纸；不进入视图/标注左键交互
+  if (event.button === 1) {
+    event.preventDefault()
+    sheetPanning.value = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: sheetPan.value.x,
+      startY: sheetPan.value.y
+    }
+    document.body.classList.add('sheet-panning')
+    return
+  }
+
   // 标注工具激活：优先处理边线选择
   if (activeTool.value) {
     const target = event.target
@@ -880,13 +921,25 @@ function onSvgMouseMove(event) {
 }
 
 function onGlobalMouseMove(event) {
+  if (sheetPanning.value) {
+    const drag = sheetPanning.value
+    // 平移的是整张卡片的 CSS 绝对位置，直接使用屏幕像素差。
+    sheetPan.value = {
+      x: drag.startX + event.clientX - drag.startClientX,
+      y: drag.startY + event.clientY - drag.startClientY
+    }
+    return
+  }
   if (dimDragging.value) {
     updateDimDrag(event)
     return
   }
   if (!movingView) return
-  const dx = event.clientX - moveStartPos.x
-  const dy = event.clientY - moveStartPos.y
+  const point = getSvgPoint(event)
+  const currentX = point?.x ?? event.clientX
+  const currentY = point?.y ?? event.clientY
+  const dx = currentX - moveStartPos.x
+  const dy = currentY - moveStartPos.y
   let newX = moveStartPos.vx + dx
   let newY = moveStartPos.vy + dy
 
@@ -944,6 +997,28 @@ function onViewScaleChange(newScale) {
   globalScale.value = clamped
   for (const v of placedViews.value) {
     zoomViewAroundCenter(v, clamped)
+  }
+}
+
+function onSheetWheel(event) {
+  event.preventDefault()
+
+  const direction = event.deltaY < 0 ? SHEET_ZOOM_STEP : 1 / SHEET_ZOOM_STEP
+  const oldZoom = sheetZoom.value
+  const newZoom = Math.max(SHEET_ZOOM_MIN, Math.min(SHEET_ZOOM_MAX, oldZoom * direction))
+  if (newZoom === oldZoom) return
+
+  // sheetPan 是相对 sheet-area 的本地坐标，不能与 clientX/clientY（屏幕坐标）混算。
+  // 先将鼠标位置转换到工作区坐标，缩放时即可保持鼠标下的卡片点不移动。
+  const areaRect = sheetAreaRef.value?.getBoundingClientRect()
+  if (!areaRect) return
+  const pointerX = event.clientX - areaRect.left
+  const pointerY = event.clientY - areaRect.top
+  const ratio = newZoom / oldZoom
+  sheetZoom.value = newZoom
+  sheetPan.value = {
+    x: pointerX - (pointerX - sheetPan.value.x) * ratio,
+    y: pointerY - (pointerY - sheetPan.value.y) * ratio
   }
 }
 
@@ -1144,8 +1219,15 @@ function getEdgeByRef(viewId, idx, type) {
 }
 
 /** 视图局部坐标 → 图纸坐标 */
+function getViewDisplayScale(view) {
+  // 白色卡片整体缩放统一由 SVG 根节点 CSS transform 完成（一层缩放），
+  // 视图内部只使用自身基础比例，避免双重缩放导致视图相对卡片位置漂移。
+  return view.scale
+}
+
 function getSheetPoint(view, lx, ly) {
-  return { x: view.x + lx * view.scale, y: view.y + ly * view.scale }
+  const displayScale = getViewDisplayScale(view)
+  return { x: view.x + lx * displayScale, y: view.y + ly * displayScale }
 }
 
 function getSvgMousePoint(event) {
@@ -1167,7 +1249,7 @@ function makeEdgeRef(view, idx, type, seg = null) {
     viewId: view.id,
     idx,
     type,
-    transform: `translate(${view.x}, ${view.y}) scale(${view.scale})`
+    transform: `translate(${view.x}, ${view.y}) scale(${getViewDisplayScale(view)})`
   }
 }
 
@@ -1453,7 +1535,7 @@ function buildLinearSingleGeometry(edgeRef, offset = 50) {
   if (!dir) return null
   const extEnd1 = offsetPoint(p1, dir.perp, offset)
   const extEnd2 = offsetPoint(p2, dir.perp, offset)
-  const mmVal = line.meta && line.meta.length ? line.meta.length : Math.hypot(p2.x - p1.x, p2.y - p1.y) / (view.scale * getViewMmScale(view))
+  const mmVal = line.meta && line.meta.length ? line.meta.length : Math.hypot(p2.x - p1.x, p2.y - p1.y) / (getViewDisplayScale(view) * getViewMmScale(view))
   return {
     type: 'linear',
     mode: 'single',
@@ -1662,8 +1744,8 @@ function buildDiameterPreview(edgeRef, mousePos) {
   const { seg, view } = edgeRef
   const circ = toCircle(seg)
   if (!circ || !view || !mousePos) return null
-  const cx = view.x + circ.cx * view.scale
-  const cy = view.y + circ.cy * view.scale
+  const cx = view.x + circ.cx * getViewDisplayScale(view)
+  const cy = view.y + circ.cy * getViewDisplayScale(view)
   const angle = Math.atan2(mousePos.y - cy, mousePos.x - cx)
   return buildDiameterGeometry(edgeRef, angle)
 }
@@ -1688,9 +1770,9 @@ function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4) {
   const { seg, view } = edgeRef
   const circ = toCircle(seg)
   if (!circ || !view) return null
-  const cx = view.x + circ.cx * view.scale
-  const cy = view.y + circ.cy * view.scale
-  const r = circ.r * view.scale
+  const cx = view.x + circ.cx * getViewDisplayScale(view)
+  const cy = view.y + circ.cy * getViewDisplayScale(view)
+  const r = circ.r * getViewDisplayScale(view)
   const dir = { x: Math.cos(angle), y: Math.sin(angle) }
   const edgePt = { x: cx + dir.x * r, y: cy + dir.y * r }
   const textPos = { x: cx + dir.x * (r + 30), y: cy + dir.y * (r + 30) }
@@ -1895,6 +1977,10 @@ function onKeyDown(event) {
 
 /** 全局鼠标事件：标注拖拽调整 */
 function onGlobalMouseUp() {
+  if (sheetPanning.value) {
+    sheetPanning.value = null
+    document.body.classList.remove('sheet-panning')
+  }
   movingView = null
   moveStartPos = null
   alignmentGuides.value = []
@@ -2094,7 +2180,7 @@ function onGlobalMouseUp() {
   width: 100%;
   height: 100%;
   position: relative;
-  overflow: auto;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2112,7 +2198,9 @@ function onGlobalMouseUp() {
 }
 
 .drawing-sheet {
-  position: relative;
+  position: absolute;
+  transform-origin: 0 0;
+  cursor: default;
   z-index: 1;
   background: #fff;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
@@ -2123,6 +2211,11 @@ function onGlobalMouseUp() {
 
 .placed-view {
   cursor: move;
+}
+
+:global(body.sheet-panning),
+:global(body.sheet-panning *) {
+  cursor: grabbing !important;
 }
 
 .placed-view.selected {
