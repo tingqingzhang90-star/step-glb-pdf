@@ -7,6 +7,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
   const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle'
   const dimHoveredEdge = ref(null)   // { seg, transform, viewId, idx, type }
   const dimFirstEdge = ref(null)     // 第一选中边线
+  const dimPending = ref(null)       // { mode, first, second } 已选齐对象，等点击固定
   const dimPreview = ref(null)       // 当前预览标注
   const dimensionColor = ref('#303133')
   const dimensionColorPresets = ['#303133', '#409eff', '#67c23a', '#e6a23c', '#f56c6c']
@@ -34,12 +35,13 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
   })
 
   const {
-    toggleTool, onDimEdgeSelect, updateDimPreviewAt, onDimMouseDown,
-    onDimDragMove, onGlobalDimMouseUp, onKeyDown
+    toggleTool, onDimEdgeSelect, updateDimPreviewAt, commitPendingLinear,
+    onDimMouseDown, onDimDragMove, onGlobalDimMouseUp, onKeyDown
   } = createDimEngine({
     activeTool,
     dimHoveredEdge,
     dimFirstEdge,
+    dimPending,
     dimPreview,
     dimensions,
     selectedDimId,
@@ -60,16 +62,18 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     .filter(Boolean)
   )
 
-  /** 第一选中边的圆心拟合(中心距标注高亮十字) */
-  function getFirstDimCircle() {
-    const first = dimFirstEdge.value
-    if (!first) return null
-    return toCircle(first.seg)
-  }
+  /** 待高亮的选中对象：第一边 + 待固定态的第二边，附带圆的拟合结果 */
+  const dimHighlightEdges = computed(() => {
+    const list = []
+    if (dimFirstEdge.value) list.push(dimFirstEdge.value)
+    if (dimPending.value?.second) list.push(dimPending.value.second)
+    return list.map(edge => ({ edge, circle: toCircle(edge.seg) }))
+  })
 
   /** 点击图纸空白:清除临时选择(保留已放置标注) */
   function clearTransientSelection() {
     dimFirstEdge.value = null
+    dimPending.value = null
     dimPreview.value = null
     selectedDimId.value = null
   }
@@ -83,7 +87,12 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
       onDimEdgeSelect(hit, event)
       return
     }
-    // 点击空白处：若当前是 single 线性预览，则在当前 offset 位置放置；否则取消
+    // 点击空白处：已选齐对象的预览就地落位
+    if (activeTool.value === 'linear' && dimPending.value) {
+      commitPendingLinear()
+      return
+    }
+    // 只选了一根边线：单边标注按当前偏移直接放置
     const first = dimFirstEdge.value
     const preview = dimPreview.value
     if (activeTool.value === 'linear' && first && preview && toLineSeg(first.seg) && preview.type === 'linear' && preview.mode === 'single') {
@@ -138,15 +147,16 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     selectedDimId.value = null
     dimHoveredEdge.value = null
     dimFirstEdge.value = null
+    dimPending.value = null
     dimPreview.value = null
   }
 
   return {
-    activeTool, dimHoveredEdge, dimFirstEdge, dimPreview,
+    activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
-    renderedDimensions,
+    renderedDimensions, dimHighlightEdges,
     toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove,
-    onGlobalDimMouseUp, onKeyDown, selectDim, getFirstDimCircle,
+    onGlobalDimMouseUp, onKeyDown, selectDim,
     onSvgMouseDown, onSvgMouseMove, clearTransientSelection, removeByView, resetAll
   }
 }

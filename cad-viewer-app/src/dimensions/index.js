@@ -2,7 +2,7 @@
 // 从 App.vue 抽离。依赖注入共享 state 与 helper，配合 core 完成标注放置与渲染。
 //
 // 注入 deps：
-//   state（ref）: activeTool, dimHoveredEdge, dimFirstEdge, dimPreview,
+//   state（ref）: activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
 //                dimensions, selectedDimId, dimDragging, placedViews
 //   helpers:
 //     getEdgeByRef(viewId, idx, type)   → seg
@@ -14,14 +14,16 @@
 //   core: createDimensionCore 返回的实例
 
 import { ElMessage } from 'element-plus'
-import { toLineSeg, toCircle, isParallel, lineBasis } from './geometry.js'
+import { toLineSeg, toCircle, isParallel } from './geometry.js'
 import { createDimensionCore } from './core.js'
+import { resolveLinearMode, buildPendingPreview, commitPending } from './pending.js'
 
 export function createDimEngine(deps) {
   const {
     activeTool,
     dimHoveredEdge,
     dimFirstEdge,
+    dimPending,
     dimPreview,
     dimensions,
     selectedDimId,
@@ -39,6 +41,7 @@ export function createDimEngine(deps) {
 
   const clearSelection = () => {
     dimFirstEdge.value = null
+    dimPending.value = null
     dimHoveredEdge.value = null
     dimPreview.value = null
   }
@@ -58,9 +61,20 @@ export function createDimEngine(deps) {
   /** 标注点击后的统一清理 */
   function finishDimPlacement(resetTool) {
     dimFirstEdge.value = null
+    dimPending.value = null
     dimHoveredEdge.value = null
     dimPreview.value = null
     if (resetTool) activeTool.value = null
+  }
+
+  /** 待固定态落位：按当前预览偏移写入标注 */
+  function commitPendingLinear() {
+    const pending = dimPending.value
+    if (!pending) return
+    const id = commitPending(core, pending, dimPreview.value?.offset)
+    if (!id) return
+    selectDim(id)
+    finishDimPlacement(pending.mode === 'single')
   }
 
   /** 边线选择处理 */
@@ -85,66 +99,25 @@ export function createDimEngine(deps) {
     }
 
     if (activeTool.value === 'linear') {
-      // 圆/圆弧（孔）：作为中心点参与距离标注
-      if (toCircle(seg)) {
-        if (!dimFirstEdge.value) {
-          dimFirstEdge.value = edgeRef
-          return
-        }
-        const first = dimFirstEdge.value
-        if (first.viewId === viewId && first.idx === idx && first.type === type) return
-        const mousePos = getSvgMousePoint(event)
-        // 第一边也是圆 → 两孔中心距
-        if (toCircle(first.seg)) {
-          const offset = dimPreview.value?.offset ?? core.getCenterOffsetFromMouse(first, edgeRef, mousePos)
-          const id = core.placeLinearCenterDim(first, edgeRef, offset)
-          if (id) selectDim(id)
-          finishDimPlacement()
-          return
-        }
-        // 第一边是线、第二边是圆 → 圆心到边线距离
-        if (toLineSeg(first.seg)) {
-          const offset = dimPreview.value?.offset ?? core.getCircleEdgeOffsetFromMouse(edgeRef, first, mousePos)
-          const id = core.placeLinearCircleEdgeDim(edgeRef, first, offset)
-          if (id) selectDim(id)
-          finishDimPlacement()
-          return
-        }
+      // 已选齐被测对象：本次点击在光标处落位
+      if (dimPending.value) {
+        commitPendingLinear()
         return
       }
       if (!dimFirstEdge.value) {
         dimFirstEdge.value = edgeRef
         return
       }
-      // 已有第一边线
       const first = dimFirstEdge.value
-      if (first.viewId === viewId && first.idx === idx && first.type === type) {
-        // 同一根边线 → 单边对齐标注
-        const mousePos = getSvgMousePoint(event)
-        const offset = dimPreview.value?.offset ?? core.getLinearOffsetFromMouse(first, mousePos)
-        const id = core.placeLinearDimSingle(first, offset)
-        if (id) selectDim(id)
-        finishDimPlacement(true)
+      const same = first.viewId === viewId && first.idx === idx && first.type === type
+      const pending = resolveLinearMode(first, same ? null : edgeRef)
+      if (!pending) {
+        ElMessage.warning(toCircle(first.seg) ? '请选择另一个孔或边线' : '线性标注需要选择平行边线')
         return
       }
-      // 第一边是圆、第二边是线 → 圆心到边线距离
-      if (toCircle(first.seg) && toLineSeg(seg)) {
-        const mousePos = getSvgMousePoint(event)
-        const offset = dimPreview.value?.offset ?? core.getCircleEdgeOffsetFromMouse(first, edgeRef, mousePos)
-        const id = core.placeLinearCircleEdgeDim(first, edgeRef, offset)
-        if (id) selectDim(id)
-        finishDimPlacement()
-        return
-      }
-      // 平行检测
-      if (isParallel(first.seg, seg)) {
-        const id = core.placeLinearDimParallel(first, edgeRef, dimPreview.value?.offset)
-        if (id) selectDim(id)
-        finishDimPlacement()
-        return
-      }
-      // 不平行：提示
-      ElMessage.warning('线性标注需要选择平行边线')
+      // 进入待固定态：之后预览跟着鼠标走，下一次点击才落位
+      dimPending.value = pending
+      dimPreview.value = buildPendingPreview(core, pending, getSvgMousePoint(event))
       return
     }
 
@@ -178,6 +151,11 @@ export function createDimEngine(deps) {
     const P = core.previewBuilders
 
     if (activeTool.value === 'linear') {
+      // 待固定态：模式已定，只让偏移跟随鼠标
+      if (dimPending.value) {
+        dimPreview.value = buildPendingPreview(core, dimPending.value, mousePos)
+        return
+      }
       // 如果有第一边线，边线类型需要按鼠标位置预览
       if (dimFirstEdge.value) {
         const first = dimFirstEdge.value
@@ -276,12 +254,14 @@ export function createDimEngine(deps) {
     selectedDimId.value = null
   }
 
-  /** 键盘事件：Delete 删除选中标注 */
+  /** 键盘事件：Delete 删除选中标注，Esc 放弃尚未落位的标注 */
   function onKeyDown(event) {
     if (event.key === 'Delete' || event.key === 'Del') {
-      if (selectedDimId.value) {
-        deleteSelectedDim()
-      }
+      if (selectedDimId.value) deleteSelectedDim()
+      return
+    }
+    if (event.key === 'Escape' && (dimFirstEdge.value || dimPending.value)) {
+      clearSelection()
     }
   }
 
@@ -299,6 +279,7 @@ export function createDimEngine(deps) {
     toggleTool,
     onDimEdgeSelect,
     updateDimPreviewAt,
+    commitPendingLinear,
     onDimMouseDown,
     onDimDragMove,
     onGlobalDimMouseUp,

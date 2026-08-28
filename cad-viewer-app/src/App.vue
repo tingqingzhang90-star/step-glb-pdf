@@ -134,6 +134,18 @@
               @mousedown.stop="onViewMouseDown($event, pv)"
               @click.stop="selectView(pv.id)"
             >
+              <!-- 命中底板:SVG 默认只有描边参与命中,图形内部空白点不到;
+                   铺一层透明可命中矩形,让整个视图范围都能选中与拖动。
+                   标注工具激活时必须让路,否则事件被本组 .stop 拦截,
+                   SVG 根上的标注落位逻辑收不到点击 -->
+              <rect
+                :x="pv.contentBBox.x - 4"
+                :y="pv.contentBBox.y - 4"
+                :width="pv.contentBBox.width + 8"
+                :height="pv.contentBBox.height + 8"
+                fill="transparent"
+                :pointer-events="activeTool ? 'none' : 'all'"
+              />
               <rect
                 :x="pv.contentBBox.x - 4"
                 :y="pv.contentBBox.y - 4"
@@ -218,22 +230,22 @@
                 <polyline v-else-if="dimHoveredEdge.seg.type === 'polyline'" :points="polylinePoints(dimHoveredEdge.seg.points)" class="dim-highlight-hover" />
               </g>
             </g>
-            <g v-if="activeTool && dimFirstEdge" class="dim-highlight" pointer-events="none">
-              <g :transform="dimFirstEdge.transform">
-                <line v-if="dimFirstEdge.seg.type === 'line'" :x1="dimFirstEdge.seg.x1" :y1="dimFirstEdge.seg.y1" :x2="dimFirstEdge.seg.x2" :y2="dimFirstEdge.seg.y2" class="dim-highlight-selected" />
-                <template v-else-if="getFirstDimCircle()">
-                  <circle :cx="getFirstDimCircle().cx" :cy="getFirstDimCircle().cy" :r="getFirstDimCircle().r" class="dim-highlight-selected" />
-                  <g class="dim-center-mark" :transform="`translate(${getFirstDimCircle().cx}, ${getFirstDimCircle().cy})`">
+            <g v-for="(item, ei) in dimHighlightEdges" :key="'sel-' + ei" class="dim-highlight" pointer-events="none">
+              <g :transform="item.edge.transform">
+                <line v-if="item.edge.seg.type === 'line'" :x1="item.edge.seg.x1" :y1="item.edge.seg.y1" :x2="item.edge.seg.x2" :y2="item.edge.seg.y2" class="dim-highlight-selected" />
+                <template v-else-if="item.circle">
+                  <circle :cx="item.circle.cx" :cy="item.circle.cy" :r="item.circle.r" class="dim-highlight-selected" />
+                  <g class="dim-center-mark" :transform="`translate(${item.circle.cx}, ${item.circle.cy})`">
                     <line x1="-8" y1="0" x2="8" y2="0" />
                     <line x1="0" y1="-8" x2="0" y2="8" />
                   </g>
                 </template>
-                <polyline v-else-if="dimFirstEdge.seg.type === 'polyline'" :points="polylinePoints(dimFirstEdge.seg.points)" class="dim-highlight-selected" />
+                <polyline v-else-if="item.edge.seg.type === 'polyline'" :points="polylinePoints(item.edge.seg.points)" class="dim-highlight-selected" />
               </g>
             </g>
 
             <!-- 标注预览 -->
-            <g v-if="dimPreview" class="dim-preview" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
+            <g v-if="dimPreview" :class="['dim-preview', { 'dim-preview-pending': !!dimPending }]" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
               <template v-if="dimPreview.type === 'linear' || dimPreview.type === 'center-mark'">
                 <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dimPreview.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dimPreview.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
                   <line :x1="-8" :y1="0" :x2="8" :y2="0" />
@@ -440,10 +452,11 @@ const { alignmentGuides, startMoveView, moveViewTo, endMoveView, clearGuides } =
 
 // ===== 标注:工具状态机与引擎装配 =====
 const {
-  activeTool, dimHoveredEdge, dimFirstEdge, dimPreview, dimDragging,
+  activeTool, dimHoveredEdge, dimPending, dimPreview, dimDragging,
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
+  dimHighlightEdges,
   toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove, onGlobalDimMouseUp,
-  onKeyDown, selectDim, getFirstDimCircle, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
+  onKeyDown, selectDim, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
   clearTransientSelection, removeByView, resetAll
 } = useDimensions({ placedViews, selectedViewId, coords })
 
@@ -909,6 +922,12 @@ function onModelChange() {
 .dim-arrow {
   fill: var(--dimension-color, #303133);
   vector-effect: non-scaling-stroke;
+}
+
+/* 待固定预览：虚线表示还没落位，再点一次左键才确定 */
+.dim-preview-pending .dim-line,
+.dim-preview-pending .dim-ext-line {
+  stroke-dasharray: 5 3;
 }
 
 /* 中心标记：虚线十字 */
