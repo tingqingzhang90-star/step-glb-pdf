@@ -556,7 +556,11 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
 
     元数据 meta 用于模板边线匹配:
       - line: orientation(horizontal/vertical/diagonal), length, midpoint
-      - circle: radius, center
+      - circle: radius, center, center_mm
+
+    三类边线都附带 mm_coords: [x1, y1, x2, y2],即边线两端点在当前视图
+    投影平面上的真实 mm 坐标(不随 _normalize_view 缩放),前端长度标注
+    直接取用,避免"归一化像素÷bbox.scale"两次 round 造成 0.1mm 级误差。
     """
     segments = []
 
@@ -593,8 +597,12 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
                 "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                 "meta": {
                     "orientation": orientation,
-                    "length": round(length, 2),
-                    "midpoint": [round((x1 + x2) / 2, 2), round((y1 + y2) / 2, 2)]
+                    "length": round(length, 4),
+                    "midpoint": [round((x1 + x2) / 2, 2), round((y1 + y2) / 2, 2)],
+                    # 投影端点的真实 mm 坐标(未经归一化),前端长度标注直接取真值,
+                    # 避免"归一化像素÷bbox.scale"两次 round 引入 0.1mm 级误差
+                    "mm_coords": [round(x1, 6), round(y1, 6),
+                                  round(x2, 6), round(y2, 6)]
                 }
             })
         elif curve_type == 1:  # GeomAbs_Circle
@@ -636,6 +644,12 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
                 pts = _discretize_curve(adaptor, x_dir=x_dir, up_dir=up_dir,
                                         max_extent=max_extent)
                 if pts:
+                    # 弧端点真实 mm(投影):短弧若被前端判定为直线,
+                    # 用真值端点算弦长,避免离散采样点的 deflection 级误差
+                    a1 = project_point(adaptor.Value(u1))
+                    a2 = project_point(adaptor.Value(u2))
+                    seg_meta["mm_coords"] = [round(a1[0], 6), round(a1[1], 6),
+                                             round(a2[0], 6), round(a2[1], 6)]
                     segments.append({
                         "type": "polyline",
                         "points": pts,
@@ -652,6 +666,14 @@ def _edge_to_segments(edge, x_dir=None, up_dir=None, max_extent=None):
                 real_len = _curve_3d_length(adaptor)
                 if real_len:
                     seg_data["meta"] = {"length": round(real_len, 2)}
+                # 曲线精确端点(投影 mm):离散采样点带 deflection 级误差,
+                # 前端把近似直线的 polyline 当线段标注时用真值端点算弦长
+                c1 = project_point(adaptor.Value(adaptor.FirstParameter()))
+                c2 = project_point(adaptor.Value(adaptor.LastParameter()))
+                seg_data.setdefault("meta", {})["mm_coords"] = [
+                    round(c1[0], 6), round(c1[1], 6),
+                    round(c2[0], 6), round(c2[1], 6)
+                ]
                 segments.append(seg_data)
     except Exception:
         pass
