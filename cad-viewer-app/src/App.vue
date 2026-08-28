@@ -24,6 +24,7 @@
           <el-button size="small" :type="activeTool === 'linear' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('linear')">线性</el-button>
           <el-button size="small" :type="activeTool === 'diameter' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('diameter')">直径</el-button>
           <el-button size="small" :type="activeTool === 'angle' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('angle')">角度</el-button>
+          <el-button size="small" :type="activeTool === 'center-mark' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('center-mark')">中心</el-button>
         </el-button-group>
         <el-color-picker v-model="dimensionColor" size="small" :predefine="dimensionColorPresets" aria-label="标注颜色" />
         <el-divider direction="vertical" />
@@ -212,12 +213,12 @@
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
-                  <circle v-else-if="seg.type === 'circle' && (activeTool === 'diameter' || activeTool === 'linear')" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
+                  <circle v-else-if="seg.type === 'circle' && circleHitTools.includes(activeTool)" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
                 </template>
                 <template v-for="(seg, i) in pv.hiddenEdges" :key="`dvh-h-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
-                  <circle v-else-if="seg.type === 'circle' && (activeTool === 'diameter' || activeTool === 'linear')" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
+                  <circle v-else-if="seg.type === 'circle' && circleHitTools.includes(activeTool)" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                 </template>
               </g>
             </g>
@@ -236,8 +237,8 @@
                 <template v-else-if="item.circle">
                   <circle :cx="item.circle.cx" :cy="item.circle.cy" :r="item.circle.r" class="dim-highlight-selected" />
                   <g class="dim-center-mark" :transform="`translate(${item.circle.cx}, ${item.circle.cy})`">
-                    <line x1="-8" y1="0" x2="8" y2="0" />
-                    <line x1="0" y1="-8" x2="0" y2="8" />
+                    <line :x1="-(item.r || 8)" y1="0" :x2="item.r || 8" y2="0" />
+                    <line x1="0" :y1="-(item.r || 8)" x2="0" :y2="item.r || 8" />
                   </g>
                 </template>
                 <polyline v-else-if="item.edge.seg.type === 'polyline'" :points="polylinePoints(item.edge.seg.points)" class="dim-highlight-selected" />
@@ -248,8 +249,8 @@
             <g v-if="dimPreview" :class="['dim-preview', { 'dim-preview-pending': !!dimPending }]" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
               <template v-if="dimPreview.type === 'linear' || dimPreview.type === 'center-mark'">
                 <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dimPreview.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dimPreview.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
-                  <line :x1="-8" :y1="0" :x2="8" :y2="0" />
-                  <line :x1="0" :y1="-8" :x2="0" :y2="8" />
+                  <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" />
+                  <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" />
                 </g>
                 <template v-if="dimPreview.type === 'linear'">
                   <line :x1="dimPreview.ext1.x" :y1="dimPreview.ext1.y" :x2="dimPreview.ext1End.x" :y2="dimPreview.ext1End.y" class="dim-ext-line" />
@@ -279,8 +280,8 @@
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
                   <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dim.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dim.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
-                    <line :x1="-8" :y1="0" :x2="8" :y2="0" />
-                    <line :x1="0" :y1="-8" :x2="0" :y2="8" />
+                    <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" />
+                    <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" />
                   </g>
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-ext-line" />
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-stroke" />
@@ -305,6 +306,15 @@
                   <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
                   <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
                   <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dim.text }}</text>
+                </template>
+                <!-- 孔位中心标记 -->
+                <template v-if="dim.type === 'center-mark'">
+                  <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="`translate(${cm.x}, ${cm.y})`">
+                    <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" />
+                    <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" />
+                    <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" class="dim-hit-stroke" />
+                    <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" class="dim-hit-stroke" />
+                  </g>
                 </template>
               </g>
             </g>
@@ -459,6 +469,9 @@ const {
   onKeyDown, selectDim, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
   clearTransientSelection, removeByView, resetAll
 } = useDimensions({ placedViews, selectedViewId, coords })
+
+// 需要命中圆的标注工具(其余工具下圆不参与命中)
+const circleHitTools = ['diameter', 'linear', 'center-mark']
 
 // ===== 型号选择与视图调色板数据 =====
 const {
@@ -930,8 +943,9 @@ function onModelChange() {
   stroke-dasharray: 5 3;
 }
 
-/* 中心标记：虚线十字 */
-.dim-center-mark line {
+/* 中心标记：实线十字。排除命中加宽的透明副本，
+   否则 .dim-center-mark line 优先级更高会把副本染成可见粗线 */
+.dim-center-mark line:not(.dim-hit-stroke) {
   stroke: var(--dimension-color, #303133);
   stroke-width: 0.8;
   vector-effect: non-scaling-stroke;

@@ -4,7 +4,7 @@ import { createDimEngine, coreFactory } from '@/dimensions/index.js'
 import { toCircle, toLineSeg } from '@/dimensions/geometry.js'
 
 export function useDimensions({ placedViews, selectedViewId, coords }) {
-  const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle'
+  const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle' | 'center-mark'
   const dimHoveredEdge = ref(null)   // { seg, transform, viewId, idx, type }
   const dimFirstEdge = ref(null)     // 第一选中边线
   const dimPending = ref(null)       // { mode, first, second } 已选齐对象，等点击固定
@@ -62,12 +62,16 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     .filter(Boolean)
   )
 
-  /** 待高亮的选中对象：第一边 + 待固定态的第二边，附带圆的拟合结果 */
+  /** 待高亮的选中对象：第一边 + 待固定态的第二边，附带圆拟合与图纸坐标半径 */
   const dimHighlightEdges = computed(() => {
     const list = []
     if (dimFirstEdge.value) list.push(dimFirstEdge.value)
     if (dimPending.value?.second) list.push(dimPending.value.second)
-    return list.map(edge => ({ edge, circle: toCircle(edge.seg) }))
+    return list.map(edge => {
+      const circle = toCircle(edge.seg)
+      const r = circle ? circle.r * coords.getViewDisplayScale(edge.view) : null
+      return { edge, circle, r }
+    })
   })
 
   /** 点击图纸空白:清除临时选择(保留已放置标注) */

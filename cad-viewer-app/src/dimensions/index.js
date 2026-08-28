@@ -89,6 +89,15 @@ export function createDimEngine(deps) {
     const edgeRef = makeEdgeRef(view, idx, type, seg)
     if (!edgeRef) return
 
+    if (activeTool.value === 'center-mark') {
+      // 孔位中心标记：点击即放置，十字线长度自动取该孔直径
+      if (toCircle(seg)) {
+        const id = core.placeCenterMarkDim(edgeRef)
+        if (id) selectDim(id)
+      }
+      return
+    }
+
     if (activeTool.value === 'diameter') {
       // 直径：点击即放置（圆/圆弧/孔，circle 或可拟合的 polyline）
       if (toCircle(seg)) {
@@ -168,6 +177,7 @@ export function createDimEngine(deps) {
           } else if (isDiff && toLineSeg(hit.seg)) {
             dimPreview.value = P.linearCircleEdge(first, hit, mousePos)
           } else {
+            // 未选第二对象或重复选第一对象:贴合圆周的中心十字提示
             dimPreview.value = P.centerMark(first)
           }
           return
@@ -193,11 +203,19 @@ export function createDimEngine(deps) {
       if (dimHoveredEdge.value) {
         const seg = dimHoveredEdge.value.seg
         if (toCircle(seg)) {
-          // 圆：仅显示中心标记十字，等待选择第二孔
+          // 圆：贴合圆周的中心十字,等待选择第二孔
           dimPreview.value = P.centerMark(dimHoveredEdge.value)
         } else if (toLineSeg(seg)) {
           dimPreview.value = P.linearSingle(dimHoveredEdge.value, mousePos)
         }
+      }
+      return
+    }
+
+    if (activeTool.value === 'center-mark') {
+      // 孔位中心标记预览：十字线随该孔直径变化
+      if (dimHoveredEdge.value && toCircle(dimHoveredEdge.value.seg)) {
+        dimPreview.value = P.centerMark(dimHoveredEdge.value)
       }
       return
     }

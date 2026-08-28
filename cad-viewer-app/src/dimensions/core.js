@@ -305,7 +305,11 @@ export function createDimensionCore(deps, ctx) {
         }
       })(),
       text: formatMm(mmVal),
-      centerMarks: [c1, c2]
+      // 中心十字按各自孔的半径贴合(不再固定 8px 短十字)
+      centerMarks: [
+        { x: c1.x, y: c1.y, r: centerMarkHalfPx(edgeRef1) },
+        { x: c2.x, y: c2.y, r: centerMarkHalfPx(edgeRef2) }
+      ]
     }
   }
 
@@ -373,7 +377,7 @@ export function createDimensionCore(deps, ctx) {
         }
       })(),
       text: formatMm(mmVal),
-      centerMarks: [c],
+      centerMarks: [{ x: c.x, y: c.y, r: centerMarkHalfPx(circleRef) }],
       centerMarkAngle: Math.atan2(u.y, u.x)
     }
   }
@@ -383,17 +387,46 @@ export function createDimensionCore(deps, ctx) {
     return buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset)
   }
 
-  /** 单圆中心标记：虚线十字预览（未选择第二孔时） */
-  function buildCenterMarkPreview(edgeRef) {
+  /**
+   * 中心十字半长(图纸坐标像素):与对应孔的半径一致,端点恰好落在圆周上。
+   * 用于独立孔位中心标记、中心距/圆心到边线辅助十字、"已选第一对象"提示——
+   * 任何"圆上画十字"的场景都按孔大小贴合,不再做 8px 短十字区分。
+   */
+  function centerMarkHalfPx(edgeRef) {
+    const circ = toCircle(edgeRef?.seg)
+    if (!circ) return 0
+    return circ.r * getViewDisplayScale(edgeRef.view)
+  }
+
+  /** 用 edgeRef 直接生成中心标记点(模板用的 {x, y, r} 结构) */
+  function buildCenterMarkPoints(edgeRef) {
     const c = getCircleCenterSheet(edgeRef)
     if (!c) return null
+    return { x: c.x, y: c.y, r: centerMarkHalfPx(edgeRef) }
+  }
+
+  function buildCenterMarkGeometry(edgeRef) {
+    const cm = buildCenterMarkPoints(edgeRef)
+    if (!cm) return null
     return {
       type: 'center-mark',
-      id: null,
-      center: c,
-      centerMarks: [c],
+      refs: [edgeRefData(edgeRef)],
+      centerMarks: [cm],
       text: ''
     }
+  }
+
+  function placeCenterMarkDim(edgeRef) {
+    const geometry = buildCenterMarkGeometry(edgeRef)
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'center-mark',
+      refs: geometry.refs,
+      color: ctx.dimensionColor.value
+    })
+    return id
   }
 
   // ===== 放置 =====
@@ -603,6 +636,8 @@ export function createDimensionCore(deps, ctx) {
       } else {
         geometry = buildLinearSingleGeometry(first, dim.offset)
       }
+    } else if (dim.type === 'center-mark') {
+      geometry = buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
     } else if (dim.type === 'diameter') {
       geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength)
     } else if (dim.type === 'angle') {
@@ -659,7 +694,7 @@ export function createDimensionCore(deps, ctx) {
     linearParallel: buildLinearParallelPreview,
     linearCenter: buildCenterPreview,
     linearCircleEdge: buildLinearCircleEdgePreview,
-    centerMark: buildCenterMarkPreview,
+    centerMark: buildCenterMarkGeometry,
     diameter: buildDiameterPreview,
     angle: buildAnglePreview
   }
@@ -675,7 +710,7 @@ export function createDimensionCore(deps, ctx) {
     buildLinearParallelGeometry,
     buildLinearCenterGeometry,
     buildLinearCircleEdgeGeometry,
-    buildCenterMarkPreview,
+    buildCenterMarkGeometry,
     buildDiameterGeometry,
     buildAngleGeometry,
     // 放置
@@ -683,6 +718,7 @@ export function createDimensionCore(deps, ctx) {
     placeLinearDimParallel,
     placeLinearCenterDim,
     placeLinearCircleEdgeDim,
+    placeCenterMarkDim,
     placeDiameterDim,
     placeAngleDim,
     // 渲染与拖拽
