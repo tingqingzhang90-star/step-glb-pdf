@@ -714,6 +714,43 @@ def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, para
         calc["label"] = dim_def.get("label", "")
         return calc
 
+    elif dim_type == "linear_text":
+        # 文字型尺寸线: 两端绑锚点,文本不参与数值计算(如"减速机尺寸")
+        cond = dim_def.get("condition")
+        if cond:
+            cond_value = params.get(cond)
+            if not cond_value or cond_value in (False, 0, "0", "", "false", "False"):
+                return None
+        a1 = anchor_map.get(dim_def.get("from_anchor"))
+        a2 = anchor_map.get(dim_def.get("to_anchor"))
+        p1 = _anchor_to_2d_point(a1, view_type)
+        p2 = _anchor_to_2d_point(a2, view_type)
+        if not p1 or not p2:
+            return None
+        orientation = dim_def.get("orientation", "horizontal")
+        if orientation == "horizontal":
+            dist = abs(p2[0] - p1[0])
+        elif orientation == "vertical":
+            dist = abs(p2[1] - p1[1])
+        else:
+            dist = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+        calc = {
+            "p1": p1,
+            "p2": p2,
+            "value": round(dist, 1),
+            "text": _resolve_template_string(dim_def.get("text", ""), params),
+        }
+        calc["p1_screen"] = to_screen(*calc["p1"])
+        calc["p2_screen"] = to_screen(*calc["p2"])
+        calc["offset"] = dim_def.get("offset", 20)
+        calc["id"] = dim_def["id"]
+        # 渲染走 linear 分支(SVG/PDF 均按既有线性标注绘制)
+        calc["type"] = "linear"
+        calc["view"] = dim_def.get("view", "")
+        calc["orientation"] = orientation
+        calc["label"] = dim_def.get("label", "")
+        return calc
+
     elif dim_type == "hole":
         circle = _match_edge(segments, dim_def.get("circle_ref"))
         if not circle:
@@ -869,7 +906,9 @@ def _anchor_to_2d_point(anchor, view_type=None):
     xd = axes["x_dir"]
     ud = axes["up_dir"]
     screen_x = px * xd[0] + py * xd[1] + pz * xd[2]
-    screen_y = px * ud[0] + py * ud[1] + pz * ud[2]
+    # HLR 投影段的 y 轴 = ax2 的 Y = N × Vx = -up(drawing_engine 实测约定),
+    # 锚点必须与边线同空间,故 screen_y 取 -up 方向分量
+    screen_y = -(px * ud[0] + py * ud[1] + pz * ud[2])
     return [round(screen_x, 2), round(screen_y, 2)]
 
 

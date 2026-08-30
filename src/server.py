@@ -734,6 +734,75 @@ def api_drawing_data(model_code):
         }), 500
 
 
+# ===================== 前端实例模板路由 =====================
+
+# 前端编辑器"保存为模板"落盘目录(与规则式模板区分)
+TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "data", "templates", "engineering")
+
+
+def _template_identity(model_id):
+    """模板身份 = 型号前三段(系列-连接-安装负载),后两段为系列内变量"""
+    return "-".join(str(model_id).split("-")[:3])
+
+
+@app.route("/api/drawing-template", methods=["POST"])
+def api_save_drawing_template():
+    """保存前端编辑器当前图纸为实例模板
+
+    请求体即 buildDrawingDocument() 输出(sheet/model_id/views/annotations)。
+    落盘 data/templates/engineering/<model_id>.json,并写入模板身份。
+    """
+    doc = request.get_json(silent=True)
+    if not isinstance(doc, dict):
+        return jsonify({"ok": False, "error": "请求体必须是 JSON 对象"}), 400
+    model_id = doc.get("model_id")
+    views = doc.get("views")
+    if not model_id or not isinstance(model_id, str):
+        return jsonify({"ok": False, "error": "缺少 model_id(请先导入模型)"}), 400
+    if not views:
+        return jsonify({"ok": False, "error": "views 为空(请先放置视图)"}), 400
+
+    doc = dict(doc)
+    doc["template_kind"] = "frontend-instance"
+    doc["template_identity"] = _template_identity(model_id)
+    doc["schema_version"] = 1
+
+    os.makedirs(TEMPLATES_DIR, exist_ok=True)
+    path = os.path.join(TEMPLATES_DIR, f"{model_id}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"写入失败: {e}"}), 500
+    return jsonify({"ok": True, "template_id": model_id,
+                    "identity": doc["template_identity"], "path": path})
+
+
+@app.route("/api/drawing-templates", methods=["GET"])
+def api_list_drawing_templates():
+    """列出全部前端实例模板(按身份分组信息一并返回)"""
+    if not os.path.isdir(TEMPLATES_DIR):
+        return jsonify({"ok": True, "templates": []})
+    templates = []
+    for name in sorted(os.listdir(TEMPLATES_DIR)):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(TEMPLATES_DIR, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        templates.append({
+            "template_id": doc.get("model_id"),
+            "identity": doc.get("template_identity"),
+            "view_count": len(doc.get("views", [])),
+            "annotation_count": len(doc.get("annotations", [])),
+            "file": name,
+        })
+    return jsonify({"ok": True, "templates": templates})
+
+
 # ===================== SolidWorks 风格视图面板路由 =====================
 
 def _find_model_shape_path(model_code):
