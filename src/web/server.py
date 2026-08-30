@@ -806,6 +806,44 @@ def api_list_drawing_templates():
 
 # ===================== 模板出图路由(导入模板 → 选型号 → 生成 → 下载) =====================
 
+def _parse_uploaded_template():
+    """解析上传的模板(multipart 的 file 字段,或 JSON 请求体)
+
+    Returns:
+        (doc, None) 成功;(None, error_response) 失败
+    """
+    if request.files:
+        f = request.files.get("file")
+        if f is None:
+            return None, (jsonify({"ok": False, "error": "缺少 file 字段"}), 400)
+        try:
+            doc = json.loads(f.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            return None, (jsonify(
+                {"ok": False, "error": f"模板不是合法 UTF-8 JSON: {e}"}), 400)
+    else:
+        doc = request.get_json(silent=True)
+
+    if not isinstance(doc, dict):
+        return None, (jsonify({"ok": False,
+                               "error": "模板内容必须是 JSON 对象"}), 400)
+    model_id = doc.get("model_id")
+    if not model_id or not isinstance(model_id, str):
+        return None, (jsonify({"ok": False,
+                               "error": "模板缺少 model_id 字段"}), 400)
+    if not doc.get("views"):
+        return None, (jsonify({"ok": False, "error": "模板 views 为空"}), 400)
+    return doc, None
+
+
+def _save_template_doc(model_id, doc):
+    """模板落盘 data/templates/engineering/<model_id>.json"""
+    os.makedirs(TEMPLATES_DIR, exist_ok=True)
+    with open(os.path.join(TEMPLATES_DIR, f"{model_id}.json"),
+              "w", encoding="utf-8") as fp:
+        json.dump(doc, fp, ensure_ascii=False, indent=2)
+
+
 @app.route("/api/template-drawing/upload", methods=["POST"])
 def api_upload_drawing_template():
     """上传前端导出的实例模板 JSON
@@ -815,37 +853,18 @@ def api_upload_drawing_template():
       2. application/json,请求体即模板文档
     落盘到 data/templates/engineering/<model_id>.json,并补全模板身份。
     """
-    doc = None
-    if request.files:
-        f = request.files.get("file")
-        if f is None:
-            return jsonify({"ok": False, "error": "缺少 file 字段"}), 400
-        try:
-            doc = json.loads(f.read().decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as e:
-            return jsonify({"ok": False, "error": f"模板不是合法 UTF-8 JSON: {e}"}), 400
-    else:
-        doc = request.get_json(silent=True)
+    doc, err = _parse_uploaded_template()
+    if err:
+        return err
 
-    if not isinstance(doc, dict):
-        return jsonify({"ok": False, "error": "模板内容必须是 JSON 对象"}), 400
-    model_id = doc.get("model_id")
-    views = doc.get("views")
-    if not model_id or not isinstance(model_id, str):
-        return jsonify({"ok": False, "error": "模板缺少 model_id 字段"}), 400
-    if not views:
-        return jsonify({"ok": False, "error": "模板 views 为空"}), 400
-
+    model_id, views = doc["model_id"], doc["views"]
     doc = dict(doc)
     doc["template_kind"] = "frontend-instance"
     doc["template_identity"] = _template_identity(model_id)
     doc["schema_version"] = 1
 
-    os.makedirs(TEMPLATES_DIR, exist_ok=True)
-    path = os.path.join(TEMPLATES_DIR, f"{model_id}.json")
     try:
-        with open(path, "w", encoding="utf-8") as fp:
-            json.dump(doc, fp, ensure_ascii=False, indent=2)
+        _save_template_doc(model_id, doc)
     except OSError as e:
         return jsonify({"ok": False, "error": f"写入失败: {e}"}), 500
 
@@ -895,54 +914,36 @@ def api_series_models():
     return jsonify({"ok": True, "identity": identity, "models": models})
 
 
-@app.route("/api/template-drawing/generate", methods=["POST"])
-def api_generate_from_template():
-    """用实例模板对选定型号批量生成工程图 PDF
-
-    请求体:
-        template_id  已保存模板的 model_id(必填)
-        models       型号编码数组(必填,可多选)
-    返回每个型号的出图结果(ok / pdf / 标注命中情况 / 失配原因)。
-    """
-    from batch import batch_drawing as bd
-
-    body = request.get_json(silent=True) or {}
-    template_id = body.get("template_id")
-    models = body.get("models") or []
-    if not template_id:
-        return jsonify({"ok": False, "error": "缺少 template_id"}), 400
-    if not isinstance(models, list) or not models:
-        return jsonify({"ok": False, "error": "models 必须是非空数组"}), 400
-
+def _load_template_doc(template_id):
+    """读取已保存的模板文档,返回 (template_doc, error_response)"""
     tpl_path = os.path.join(TEMPLATES_DIR, f"{template_id}.json")
     if not os.path.isfile(tpl_path):
-        return jsonify({
+        return None, (jsonify({
             "ok": False,
-            "error": f"模板不存在: {template_id}(请先上传或保存模板)"}), 404
-
+            "error": f"模板不存在: {template_id}(请先上传或保存模板)"}), 404)
     try:
         with open(tpl_path, "r", encoding="utf-8") as f:
-            template_doc = json.load(f)
+            return json.load(f), None
     except (OSError, json.JSONDecodeError) as e:
-        return jsonify({"ok": False, "error": f"模板读取失败: {e}"}), 500
+        return None, (jsonify({"ok": False,
+                               "error": f"模板读取失败: {e}"}), 500)
 
-    tmpl_identity = template_doc.get("template_identity") or \
-        _template_identity(template_doc.get("model_id", ""))
-    # 同系列校验:不同系列的型号几何差异过大,共用模板无意义
+
+def _reject_cross_series(models, tmpl_identity):
+    """不同系列几何差异过大,共用模板无意义,返回被拒型号列表"""
     rejected = [m for m in models if _template_identity(m) != tmpl_identity]
-    if rejected:
-        return jsonify({
-            "ok": False,
-            "error": f"以下型号与模板系列({tmpl_identity})不同: "
-                     f"{', '.join(rejected)}",
-            "rejected": rejected,
-        }), 400
+    if not rejected:
+        return None
+    return jsonify({
+        "ok": False,
+        "error": f"以下型号与模板系列({tmpl_identity})不同: "
+                 f"{', '.join(rejected)}",
+        "rejected": rejected,
+    }), 400
 
-    try:
-        results = bd.run_frontend(models, template_doc, OUT_DIR)
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"出图失败: {e}"}), 500
 
+def _to_client_results(results):
+    """出图结果转前端结构:PDF 绝对路径改相对项目根,供下载接口使用"""
     out = []
     for r in results:
         pdf_abs = r.get("pdf") or ""
@@ -952,16 +953,54 @@ def api_generate_from_template():
             "model_code": r.get("model_code"),
             "ok": bool(r.get("ok")),
             "error": r.get("error"),
-            "pdf": rel,                       # 相对项目根,供下载接口使用
+            "pdf": rel,
             "elapsed": r.get("elapsed"),
             "dims": r.get("dims", []),
             "unmatched": r.get("unmatched", []),
         })
+    return out
+
+
+@app.route("/api/template-drawing/generate", methods=["POST"])
+def api_generate_from_template():
+    """用实例模板对选定型号批量生成工程图 PDF
+
+    请求体:
+        template_id  已保存模板的 model_id(必填)
+        models       型号编码数组(必填,可多选)
+    返回每个型号的出图结果(ok / pdf / 标注命中情况 / 失配原因)。
+    """
+    body = request.get_json(silent=True) or {}
+    template_id = body.get("template_id")
+    models = body.get("models") or []
+    if not template_id:
+        return jsonify({"ok": False, "error": "缺少 template_id"}), 400
+    if not isinstance(models, list) or not models:
+        return jsonify({"ok": False, "error": "models 必须是非空数组"}), 400
+
+    template_doc, err = _load_template_doc(template_id)
+    if err:
+        return err
+
+    tmpl_identity = template_doc.get("template_identity") or \
+        _template_identity(template_doc.get("model_id", ""))
+    err = _reject_cross_series(models, tmpl_identity)
+    if err:
+        return err
+
+    # 校验通过后才加载出图管线:它顶层依赖 pythonOCC,
+    # 提前 import 会让纯参数校验也背上 OCC 依赖
+    from batch import batch_drawing as bd
+    try:
+        results = bd.run_frontend(models, template_doc, OUT_DIR)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"出图失败: {e}"}), 500
+
     return jsonify({
         "ok": True,
         "identity": tmpl_identity,
         "template_id": template_id,
-        "results": out,
+        "results": _to_client_results(results),
     })
 
 

@@ -6,14 +6,13 @@
     :close-on-click-modal="false"
     append-to-body
   >
-    <!-- 步骤 1: 选择模板 -->
     <el-steps :active="step" finish-status="success" simple class="td-steps">
       <el-step title="选择模板" />
       <el-step title="选择型号" />
       <el-step title="生成下载" />
     </el-steps>
 
-    <!-- ---- 步骤 1 ---- -->
+    <!-- ---- 步骤 1: 选择模板 ---- -->
     <div v-if="step === 0" class="td-body">
       <el-tabs v-model="tplTab">
         <el-tab-pane label="从已保存模板选择" name="saved">
@@ -21,16 +20,14 @@
             :data="templates"
             highlight-current-row
             height="280"
-            @current-change="onPickSaved"
+            @current-change="pickSaved"
           >
             <el-table-column prop="template_id" label="模板型号" min-width="200" />
             <el-table-column prop="identity" label="系列身份" width="150" />
             <el-table-column prop="view_count" label="视图" width="70" align="center" />
             <el-table-column prop="annotation_count" label="标注" width="70" align="center" />
           </el-table>
-          <div class="td-hint">
-            共 {{ templates.length }} 个模板。选中后点「下一步」。
-          </div>
+          <div class="td-hint">共 {{ templates.length }} 个模板。选中后点「下一步」。</div>
         </el-tab-pane>
 
         <el-tab-pane label="导入模板文件" name="upload">
@@ -40,12 +37,10 @@
             :auto-upload="false"
             :limit="1"
             :on-change="onFileChange"
-            :on-remove="onFileRemove"
+            :on-remove="clearUpload"
           >
             <el-icon class="td-upload-icon"><UploadFilled /></el-icon>
-            <div class="el-upload__text">
-              拖入模板 JSON 文件,或<em>点击选择</em>
-            </div>
+            <div class="el-upload__text">拖入模板 JSON 文件,或<em>点击选择</em></div>
             <template #tip>
               <div class="el-upload__tip">
                 模板由本编辑器「保存为模板」导出,含 model_id / views / annotations
@@ -54,19 +49,18 @@
           </el-upload>
           <div v-if="uploadResult" class="td-upload-ok">
             已导入: {{ uploadResult.template_id }}
-            (系列 {{ uploadResult.identity }},
-            {{ uploadResult.annotation_count }} 条标注)
+            (系列 {{ uploadResult.identity }},{{ uploadResult.annotation_count }} 条标注)
           </div>
         </el-tab-pane>
       </el-tabs>
     </div>
 
-    <!-- ---- 步骤 2 ---- -->
+    <!-- ---- 步骤 2: 选择型号 ---- -->
     <div v-else-if="step === 1" class="td-body">
       <div class="td-row">
         <span class="td-label">模板:</span>
         <el-tag type="primary">{{ templateId }}</el-tag>
-        <span class="td-label" style="margin-left:16px">系列:</span>
+        <span class="td-label td-label-gap">系列:</span>
         <el-tag type="success">{{ identity }}</el-tag>
       </div>
       <div class="td-row td-row-tight">
@@ -74,9 +68,7 @@
           :model-value="allChecked"
           :indeterminate="indeterminate"
           @change="toggleAll"
-        >
-          全选({{ models.length }} 个同系列型号)
-        </el-checkbox>
+        >全选({{ models.length }} 个同系列型号)</el-checkbox>
       </div>
       <el-checkbox-group v-model="selectedModels" class="td-checks">
         <el-checkbox
@@ -102,7 +94,7 @@
       </div>
     </div>
 
-    <!-- ---- 步骤 3 ---- -->
+    <!-- ---- 步骤 3: 生成下载 ---- -->
     <div v-else class="td-body">
       <el-table :data="results" height="300" v-loading="generating">
         <el-table-column prop="model_code" label="型号" min-width="200" />
@@ -116,11 +108,7 @@
         <el-table-column label="标注命中" min-width="180">
           <template #default="{ row }">
             <span v-if="!row.dims || !row.dims.length">—</span>
-            <el-tooltip
-              v-else
-              placement="top"
-              :content="dimSummary(row)"
-            >
+            <el-tooltip v-else placement="top" :content="dimSummary(row)">
               <span>
                 <el-tag
                   v-for="d in row.dims"
@@ -133,7 +121,7 @@
             </el-tooltip>
           </template>
         </el-table-column>
-        <el-table-column prop="elapsed" label="耗时" width="80" align="center">
+        <el-table-column label="耗时" width="80" align="center">
           <template #default="{ row }">{{ row.elapsed }}s</template>
         </el-table-column>
         <el-table-column label="操作" width="150" align="center">
@@ -178,14 +166,10 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { computed, watch } from 'vue'
 import { UploadFilled, Loading } from '@element-plus/icons-vue'
-import {
-  fetchDrawingTemplates, uploadDrawingTemplate,
-  fetchSeriesModels, generateFromTemplate,
-  pdfDownloadUrl, pdfPreviewUrl
-} from '@/api/drawingApi'
+import { useTemplateDrawing } from '@/composables/useTemplateDrawing'
+import { pdfDownloadUrl, pdfPreviewUrl } from '@/api/drawingApi'
 
 const props = defineProps({ modelValue: Boolean })
 const emit = defineEmits(['update:modelValue'])
@@ -195,90 +179,24 @@ const visible = computed({
   set: v => emit('update:modelValue', v)
 })
 
-const step = ref(0)
-const tplTab = ref('saved')
-const templates = ref([])
-const templateId = ref('')
-const identity = ref('')
-const models = ref([])
-const selectedModels = ref([])
-const results = ref([])
-const generating = ref(false)
-const uploadResult = ref(null)
-
-const allChecked = computed(
-  () => models.value.length > 0 &&
-        selectedModels.value.length === models.value.length)
-const indeterminate = computed(
-  () => selectedModels.value.length > 0 &&
-        selectedModels.value.length < models.value.length)
-const unmatchedTotal = computed(
-  () => results.value.reduce(
-    (n, r) => n + (r.unmatched ? r.unmatched.length : 0), 0))
-
-async function loadTemplates() {
-  const data = await fetchDrawingTemplates()
-  templates.value = data.ok ? (data.templates || []) : []
-}
-
-function onPickSaved(row) {
-  if (!row) return
-  templateId.value = row.template_id
-  identity.value = row.identity
-}
+const {
+  step, tplTab, templates, templateId, identity,
+  models, selectedModels, results, generating, uploadResult,
+  allChecked, indeterminate, unmatchedTotal,
+  loadTemplates, pickSaved, uploadFile, clearUpload,
+  loadModels, toggleAll, generate, reset
+} = useTemplateDrawing()
 
 async function onFileChange(uploadFile) {
-  const data = await uploadDrawingTemplate(uploadFile.raw)
-  if (!data.ok) {
-    ElMessage.error(data.error || '模板导入失败')
-    return
-  }
-  uploadResult.value = data
-  templateId.value = data.template_id
-  identity.value = data.identity
-  ElMessage.success(`模板已导入: ${data.template_id}`)
-}
-
-function onFileRemove() {
-  uploadResult.value = null
-  if (tplTab.value === 'upload') templateId.value = ''
+  await uploadFile(uploadFile.raw)
 }
 
 async function goModels() {
-  const data = await fetchSeriesModels({ templateId: templateId.value })
-  if (!data.ok) {
-    ElMessage.error(data.error || '获取同系列型号失败')
-    return
-  }
-  identity.value = data.identity || identity.value
-  models.value = data.models || []
-  selectedModels.value = models.value.map(m => m.model_code)
-  step.value = 1
-}
-
-function toggleAll(checked) {
-  selectedModels.value = checked ? models.value.map(m => m.model_code) : []
+  if (await loadModels()) step.value = 1
 }
 
 async function doGenerate() {
-  generating.value = true
-  try {
-    const data = await generateFromTemplate(
-      templateId.value, selectedModels.value)
-    if (!data.ok) {
-      ElMessage.error(data.error || '出图失败')
-      if (data.rejected && data.rejected.length) {
-        ElMessage.warning(`已剔除不同系列型号: ${data.rejected.join(', ')}`)
-      }
-      return
-    }
-    results.value = data.results || []
-    step.value = 2
-    const okN = results.value.filter(r => r.ok).length
-    ElMessage.success(`完成 ${okN}/${results.value.length} 张`)
-  } finally {
-    generating.value = false
-  }
+  if (await generate()) step.value = 2
 }
 
 function dimSummary(row) {
@@ -297,17 +215,6 @@ function close() {
   visible.value = false
 }
 
-function reset() {
-  step.value = 0
-  tplTab.value = 'saved'
-  templateId.value = ''
-  identity.value = ''
-  models.value = []
-  selectedModels.value = []
-  results.value = []
-  uploadResult.value = null
-}
-
 watch(visible, v => {
   if (v) {
     reset()
@@ -322,6 +229,7 @@ watch(visible, v => {
 .td-row { display: flex; align-items: center; margin-bottom: 10px; }
 .td-row-tight { margin-bottom: 6px; }
 .td-label { font-size: 13px; color: #606266; }
+.td-label-gap { margin-left: 16px; }
 .td-checks { display: flex; flex-direction: column; gap: 2px; }
 .td-check { height: 24px; }
 .td-hint { margin-top: 10px; font-size: 12px; color: #909399; }
@@ -332,11 +240,11 @@ watch(visible, v => {
   background: #f0f9eb; color: #67c23a; border-radius: 4px;
 }
 .td-dim-tag { margin-right: 3px; }
+.td-err { font-size: 12px; color: #f56c6c; }
 .td-generating {
   margin-top: 12px; padding: 8px 12px; font-size: 13px; color: #409eff;
   background: #ecf5ff; border-radius: 4px;
   display: flex; align-items: center; gap: 6px;
 }
-.td-err { font-size: 12px; color: #f56c6c; }
 .td-footer { display: flex; justify-content: flex-end; gap: 8px; }
 </style>
