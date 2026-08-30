@@ -10,8 +10,8 @@
       "id": "view_1",
       "source_view": "left",
       "label": "左视",
-      "x": 52,
-      "y": -56,
+      "x": 50,
+      "y": -38,
       "scale": 0.93,
       "px_per_mm": 0.1617
     }
@@ -19,6 +19,27 @@
   "annotations": [
     {
       "id": "dim_1",
+      "type": "linear",
+      "mode": "motor-envelope",
+      "text": "电机减速机尺寸",
+      "customText": "电机减速机尺寸",
+      "bind_motor": true,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 455,
+          "type": "edges"
+        }
+      ],
+      "offset": -21.424246571051015,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_2",
       "type": "linear",
       "mode": "single",
       "text": "540mm",
@@ -31,100 +52,12 @@
           "type": "edges"
         }
       ],
-      "offset": 15.974090821621367,
+      "offset": 25.992782205413477,
       "radius": null,
       "side": null,
       "leaderAngle": null,
       "leaderLength": null,
       "color": "#303133"
-    },
-    {
-      "id": "dim_2",
-      "type": "linear",
-      "mode": "parallel",
-      "text": "716.2mm",
-      "customText": null,
-      "bind_motor": true,
-      "refs": [
-        {
-          "viewId": "view_1",
-          "idx": 571,
-          "type": "edges"
-        },
-        {
-          "viewId": "view_1",
-          "idx": 91,
-          "type": "edges"
-        }
-      ],
-      "offset": 32.99281764119476,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": null
-    },
-    {
-      "id": "dim_3",
-      "type": "linear",
-      "mode": "single",
-      "text": "300mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_1",
-          "idx": 90,
-          "type": "edges"
-        }
-      ],
-      "offset": -16.005485456692867,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_4",
-      "type": "diameter",
-      "mode": null,
-      "text": "ø10.1mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_1",
-          "idx": 166,
-          "type": "edges"
-        }
-      ],
-      "offset": null,
-      "radius": null,
-      "side": null,
-      "leaderAngle": 0.06542216087048493,
-      "leaderLength": 48.080467416011665,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_5",
-      "type": "center-mark",
-      "mode": null,
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_1",
-          "idx": 7,
-          "type": "edges"
-        }
-      ],
-      "offset": null,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
     }
   ],
   "template_kind": "frontend-instance",

@@ -28,9 +28,10 @@
 - 没跑过不能说"测试通过";没分析不能说"安全";没 benchmark 不能说"性能好"。
 
 #### 6.1 验证动作规则(后端测试可自动执行)
-- **后端 pytest 允许 AI 自动执行**(必须连独立测试库 `TEST_DATABASE_URL`),其他运行类命令禁止自动执行。
-- 允许:后端 pytest、测试库 `flask db upgrade`、静态检查(flake8/mypy/IDE 诊断)。
+- **后端 pytest 与前端 `npm run type-check` 允许 AI 自动执行**,其他运行类命令禁止自动执行。
+- 允许:后端 pytest、前端 `npm run type-check`、测试库 `flask db upgrade`、静态检查(flake8/mypy/IDE 诊断)。
 - 禁止:启动/重启开发服务(`flask run`)、前端 `npm run dev`/`build`、连接生产库或开发库。
+- 前端 `npm run type-check` 本质是基于 `vue-tsc` 的编译期静态校验(非打包),**不触发 `vite build`**,故例外于上述 build 禁令,允许 AI 自动执行。
 - **pytest 必须使用独立测试库 `TEST_DATABASE_URL`**,禁止复用开发库;每次后端变更跑全量 + 变更单测。
 - **执行方式(强制:绝对路径)**:必须用 `pdf1` 环境 Python 绝对路径,禁止 `conda activate` 前缀。
   ```

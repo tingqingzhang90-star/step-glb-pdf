@@ -61,3 +61,5 @@ htmlcov/
 
 # 诊断脚本目录（调试用，不入库）
 tools/diagnose/
+node_modules/
+
