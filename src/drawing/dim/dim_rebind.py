@@ -231,17 +231,18 @@ def _synthetic_seg(p1_mm, p2_mm, to_canvas):
 
 
 def _snap_seg_to_view(seg, view_segs, orientation, offset):
-    """把合成的端面线吸附到视图真实边线构成的轮廓范围
+    """把合成的端面线吸附到视图中最接近的真实边线端点
 
     电机包络端点来自 bbox 8 角点投影,端面线 y/x 跨度=轮廓全范围,
-    会超出电机/减速机本体的真实轮廓。这里在端面附近收集所有同方向
-    真实边线,取它们的极值端点作为端面线范围,与前端手动点选两端
-    真实边线的效果一致。
+    远超电机在视图中的真实边线,导致尺寸线悬空。
+    这里在视图边线中找同方向、位置最接近的边线,把端面线端点替换为
+    该真实边线的端点(与前端 snapEndpointToViewEdge 行为一致)。
     """
     if not view_segs:
         return seg
     SNAP = 30.0
-    candidates = []
+    best = None
+    best_dist = float('inf')
     if orientation == "horizontal":
         # 端面线竖直,找同 x 附近的竖直边线
         sx = (seg["x1"] + seg["x2"]) / 2.0
@@ -250,30 +251,20 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset):
                 continue
             if abs(s["x1"] - s["x2"]) > 2.0:
                 continue
-            cx = (s["x1"] + s["x2"]) / 2.0
-            if abs(cx - sx) > SNAP:
-                continue
-            candidates.append(s)
-        if not candidates:
+            dist = abs((s["x1"] + s["x2"]) / 2.0 - sx)
+            if dist < best_dist and dist < SNAP:
+                best_dist = dist
+                best = s
+        if best is None:
             return seg
-        # offset>=0: 尺寸线在下方,延伸线向上,取真实边线的最大 y(下边缘)
-        # offset<0:  尺寸线在上方,延伸线向下,取真实边线的最小 y(上边缘)
-        # 但端面线需要覆盖整个真实轮廓,因此取所有候选边线的最小到最大 y,
-        # 再按 offset 决定尺寸线从哪一侧引出,端面线本身保持真实范围。
-        ys = []
-        for s in candidates:
-            ys.extend([s["y1"], s["y2"]])
-        y_min, y_max = min(ys), max(ys)
-        x = sum((s["x1"] + s["x2"]) / 2.0 for s in candidates) / len(candidates)
+        # 取真实边线的上端或下端(按 offset 方向)
+        if offset >= 0:
+            y = max(best["y1"], best["y2"])
+        else:
+            y = min(best["y1"], best["y2"])
         seg_snap = dict(seg)
-        seg_snap["x1"] = seg_snap["x2"] = x
-        seg_snap["y1"] = y_min
-        seg_snap["y2"] = y_max
-        # 同步 meta,避免后续渲染误判方向/长度
-        meta = dict(seg_snap.get("meta") or {})
-        meta["orientation"] = "vertical"
-        meta["length"] = round(y_max - y_min, 4)
-        seg_snap["meta"] = meta
+        seg_snap["x1"] = seg_snap["x2"] = (best["x1"] + best["x2"]) / 2.0
+        seg_snap["y1"] = seg_snap["y2"] = y
         return seg_snap
     else:
         # 端面线水平,找同 y 附近的水平边线
@@ -283,25 +274,19 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset):
                 continue
             if abs(s["y1"] - s["y2"]) > 2.0:
                 continue
-            cy = (s["y1"] + s["y2"]) / 2.0
-            if abs(cy - sy) > SNAP:
-                continue
-            candidates.append(s)
-        if not candidates:
+            dist = abs((s["y1"] + s["y2"]) / 2.0 - sy)
+            if dist < best_dist and dist < SNAP:
+                best_dist = dist
+                best = s
+        if best is None:
             return seg
-        xs = []
-        for s in candidates:
-            xs.extend([s["x1"], s["x2"]])
-        x_min, x_max = min(xs), max(xs)
-        y = sum((s["y1"] + s["y2"]) / 2.0 for s in candidates) / len(candidates)
+        if offset >= 0:
+            x = max(best["x1"], best["x2"])
+        else:
+            x = min(best["x1"], best["x2"])
         seg_snap = dict(seg)
-        seg_snap["y1"] = seg_snap["y2"] = y
-        seg_snap["x1"] = x_min
-        seg_snap["x2"] = x_max
-        meta = dict(seg_snap.get("meta") or {})
-        meta["orientation"] = "horizontal"
-        meta["length"] = round(x_max - x_min, 4)
-        seg_snap["meta"] = meta
+        seg_snap["y1"] = seg_snap["y2"] = (best["y1"] + best["y2"]) / 2.0
+        seg_snap["x1"] = seg_snap["x2"] = x
         return seg_snap
 
 

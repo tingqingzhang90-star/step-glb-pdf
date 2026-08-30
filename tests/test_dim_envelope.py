@@ -52,33 +52,22 @@ def test_envelope_faces_returns_none_when_body_missing():
     assert dim_envelope.envelope_faces([], "left") is None
 
 
-def test_snap_seg_to_view_horizontal_uses_real_edge_span():
-    """吸附后端面线应取真实边线的完整范围,而不是 bbox 极值"""
+def test_snap_seg_to_view_horizontal_picks_bottom_on_positive_offset():
     seg = {"type": "line", "x1": 100.0, "y1": 0.0, "x2": 100.0, "y2": 400.0,
            "meta": {"orientation": "vertical"}}
     view_segs = [{"type": "line", "x1": 102.0, "y1": 120.0, "x2": 102.0, "y2": 160.0}]
     snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "horizontal", 50)
-    # 端面线 x 定位到候选边线平均 x, y 范围取候选边线真实端点的极值
+    # 吸附到 x 最接近的真实边线,并取该边线下端点
     assert snapped["x1"] == snapped["x2"] == 102.0
-    assert snapped["y1"] == 120.0
-    assert snapped["y2"] == 160.0
-    assert snapped["meta"]["orientation"] == "vertical"
-    assert snapped["meta"]["length"] == 40.0
+    assert snapped["y1"] == snapped["y2"] == 160.0
 
 
-def test_snap_seg_to_view_horizontal_collects_multiple_edges():
-    """端面附近多条边线时,范围取所有边线端点的极值"""
+def test_snap_seg_to_view_horizontal_picks_top_on_negative_offset():
     seg = {"type": "line", "x1": 100.0, "y1": 0.0, "x2": 100.0, "y2": 400.0,
            "meta": {"orientation": "vertical"}}
-    view_segs = [
-        {"type": "line", "x1": 102.0, "y1": 120.0, "x2": 102.0, "y2": 160.0},
-        {"type": "line", "x1": 104.0, "y1": 155.0, "x2": 104.0, "y2": 190.0},
-    ]
-    snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "horizontal", 50)
-    assert snapped["x1"] == snapped["x2"]
-    assert snapped["y1"] == 120.0
-    assert snapped["y2"] == 190.0
-    assert snapped["meta"]["length"] == 70.0
+    view_segs = [{"type": "line", "x1": 102.0, "y1": 120.0, "x2": 102.0, "y2": 160.0}]
+    snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "horizontal", -50)
+    assert snapped["y1"] == snapped["y2"] == 120.0
 
 
 def test_snap_seg_to_view_keeps_original_when_no_edge_in_range():
