@@ -1,4 +1,0 @@
-SERVER OK routes= 19
-static exists= True
-viewer exists= True
-editor exists= True
