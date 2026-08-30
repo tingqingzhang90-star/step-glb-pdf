@@ -49,6 +49,11 @@ env/
 venv/
 ENV/
 
+# 测试产物
+.pytest_cache/
+.coverage
+htmlcov/
+
 # 临时文件
 *.tmp
 *.bak

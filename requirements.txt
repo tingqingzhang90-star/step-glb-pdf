@@ -1,0 +1,14 @@
+# 运行时依赖(直接依赖,不含传递依赖)
+# 环境: conda 环境名 pdf1,Python 3.10;禁止 python -m venv
+flask==3.1.3            # src/web/server.py HTTP 服务
+reportlab==5.0.0        # src/drawing/dim/dim_pdf_sheet.py PDF 渲染
+ezdxf==1.4.4            # src/drawing/dxf_exporter.py DXF 导出
+pymupdf==1.28.2         # src/drawing/drawing_generator.py(遗留 PyMuPDF 管线)
+
+# pythonocc-core 只提供 OCC import,无 pip 元数据(conda 安装)。
+# 它是 core/drawing_engine.py 的 HLR 投影基础,pip 装不了,必须走 conda:
+#   conda install -c conda-forge pythonocc-core
+# 故不列在此文件;部署时需单独准备含 OCC 的 conda 环境。
+
+# 测试与静态检查
+pytest==9.1.1           # tests/ 后端接口测试,须装在 pdf1 环境

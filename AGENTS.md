@@ -30,13 +30,29 @@
 #### 6.1 验证动作规则(后端测试可自动执行)
 - **后端 pytest 允许 AI 自动执行**(必须连独立测试库 `TEST_DATABASE_URL`),其他运行类命令禁止自动执行。
 - 允许:后端 pytest、测试库 `flask db upgrade`、静态检查(flake8/mypy/IDE 诊断)。
-- 禁止:启动/重启开发服务(`flask run`)、`pip install`、前端 `npm run dev`/`build`、连接生产库或开发库。
+- 禁止:启动/重启开发服务(`flask run`)、前端 `npm run dev`/`build`、连接生产库或开发库。
 - **pytest 必须使用独立测试库 `TEST_DATABASE_URL`**,禁止复用开发库;每次后端变更跑全量 + 变更单测。
-- **执行方式(强制:绝对路径)**:PowerShell 中必须用 `pdf1` 环境 Python 绝对路径,禁止 `conda activate` 前缀。
+- **执行方式(强制:绝对路径)**:必须用 `pdf1` 环境 Python 绝对路径,禁止 `conda activate` 前缀。
   ```
   C:\Users\12463\.conda\envs\pdf1\python.exe -m pytest
   C:\Users\12463\.conda\envs\pdf1\python.exe -m pytest tests/test_xxx.py -v
   ```
+
+#### 6.2 测试环境必须是项目环境 pdf1(强制)
+- **禁止用系统 Python(`C:\Program Files\python\python.exe`)跑本项目的测试。**
+  系统 Python 缺少 pythonOCC 等核心依赖,用它跑会出现"跳过"或
+  `ModuleNotFoundError: No module named 'OCC'` 的假结果——测试通过不等于项目环境通过。
+- 唯一有效测试环境:`C:\Users\12463\.conda\envs\pdf1\python.exe`(含 flask / OCC / reportlab)。
+- 测试中不确定的重依赖用 `pytest.importorskip`,让无该依赖的环境显式跳过而非报错,
+  但**交付结论必须基于 pdf1 全绿**,跳过项要如实说明。
+
+#### 6.3 依赖安装规则(用户授权后可自动执行)
+- 以下情况 AI 可在 `pdf1` 环境执行 `pip install`(用户已授权):
+  项目环境**缺少规则要求的能力**(例如 pytest 未装导致交付验证无法进行)。
+- 安装后必须**同步更新 `requirements.txt`**,写入实际安装的版本号(按分组:运行时 / 测试与静态检查)。
+- 仍禁止:为试探性目的装无关包、改动运行时依赖版本、用 `pip freeze` 整段覆盖。
+- 涉及 pythonocc-core 时不可 pip 安装,只能 conda:
+  `conda install -c conda-forge pythonocc-core`(它无 pip 元数据,import 名为 `OCC`)。
 
 ### 7. 禁止阿谀式语言
 - 禁止"Great question! / Excellent!"等讨好话术,直接回答技术问题。
