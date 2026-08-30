@@ -650,6 +650,55 @@ def apply_template(views_data, template, params=None):
     return result
 
 
+def _envelope_dimension(dim_def, anchor_map, params, to_screen):
+    """电机包络尺寸: 两端贴合减速机端面轮廓,方向按视图自动判定
+
+    与 linear_text 的区别: 端点取端面**轮廓**而非端面中心,延伸线不会
+    穿过减速机实体;水平/竖直由视图投影自动判定,模板无需写死。
+
+    Args:
+        dim_def: 标注定义(condition/text/show_value/offset 可选)
+        anchor_map: 锚点字典 {id: anchor_dict}
+        params: 参数字典(条件判断与占位符替换)
+        to_screen: 模型坐标 → 屏幕坐标的闭包
+
+    Returns:
+        标注结果 dict,或 None(条件不满足 / 该视图轴向退化)
+    """
+    from drawing.dim.dim_envelope import envelope_endpoints, envelope_faces
+
+    condition = dim_def.get("condition")
+    if condition and not params.get(condition):
+        return None
+    faces = envelope_faces(list(anchor_map.values()), dim_def.get("view"))
+    if not faces:
+        return None
+
+    orientation = faces["orientation"]
+    offset = dim_def.get("offset", 20)
+    p1 = envelope_endpoints(faces["face_min"], orientation, offset)
+    p2 = envelope_endpoints(faces["face_max"], orientation, offset)
+    label = _resolve_template_string(dim_def.get("text", ""), params)
+    value = f"{faces['span_mm']:.0f}"
+    text = f"{value} ({label})" if dim_def.get("show_value") and label else (
+        value if dim_def.get("show_value") else label)
+
+    return {
+        "id": dim_def["id"],
+        "type": "linear",
+        "view": dim_def.get("view", ""),
+        "orientation": orientation,
+        "offset": offset,
+        "label": dim_def.get("label", ""),
+        "p1": p1,
+        "p2": p2,
+        "value": faces["span_mm"],
+        "text": text,
+        "p1_screen": to_screen(*p1),
+        "p2_screen": to_screen(*p2),
+    }
+
+
 def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, params=None, view_type=None):
     """计算单个标注
 
@@ -672,6 +721,9 @@ def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, para
     def to_screen(x, y):
         """模型坐标 → 屏幕坐标"""
         return [round(x * scale + offset[0], 2), round(y * scale + offset[1], 2)]
+
+    if dim_type == "linear_envelope":
+        return _envelope_dimension(dim_def, anchor_map, params, to_screen)
 
     if dim_type == "linear":
         orientation = dim_def.get("orientation", "horizontal")

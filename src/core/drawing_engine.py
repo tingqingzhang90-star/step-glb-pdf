@@ -856,7 +856,11 @@ def _normalize_view(segments, hidden_segments, target_width=400, target_height=3
         "x": 0, "y": 0,
         "width": target_width, "height": target_height,
         "scale": round(scale, 4),
-        "orig_width": round(width, 2), "orig_height": round(height, 2)
+        "orig_width": round(width, 2), "orig_height": round(height, 2),
+        # 视图内容从模型投影坐标(mm)变换到 400x300 框内的平移量,
+        # 供前端电机包络等需要把后端 mm 坐标对齐到同一局部坐标系的场景使用
+        "offset_x": round(offset_x, 4),
+        "offset_y": round(offset_y, 4),
     }
 
     return norm_segments, norm_hidden, bbox

@@ -13,8 +13,6 @@
 """
 import math
 
-from drawing.rule_template.drawing_template import _anchor_to_2d_point
-
 # 各视图投影面坐标轴与模型主轴(Z)的映射(ax2 坐标系,单位 mm)
 AXIAL_MAP = {"left": ("x", 1.0), "right": ("x", -1.0),
              "top": ("y", 1.0), "bottom": ("y", -1.0)}
@@ -187,38 +185,16 @@ def _motor_face_lines(target_profile, view_name):
     """电机包络两端面的投影线(mm),供 bind_motor 标注合成边线
 
     Returns:
-        [(p1, p2), (p1, p2)]: 轴向 min 面与 max 面的线段端点(mm 投影坐标)
+        (face_min, face_max, size): 两端面线段(各为 (p1, p2)),无电机或
+        该视图轴向退化时返回 (None, None, None)
     """
-    if view_name not in AXIAL_MAP:
-        return None
-    axis, sign = AXIAL_MAP[view_name]
-    t = _by_id(target_profile)
-    motor = t.get("motor.body")
-    if not motor:
+    from drawing.dim.dim_envelope import envelope_faces
+
+    faces = envelope_faces(target_profile["anchors"], view_name)
+    if not faces:
         return None, None, None
-    bmin, bmax = motor["bbox_min"], motor["bbox_max"]
-
-    def proj(p):
-        anchor = {"point3d": list(p)}
-        pt = _anchor_to_2d_point(anchor, view_name)
-        return pt
-
-    # 8 个包围盒角点投影 → 非轴向分量的范围
-    corners = [(x, y, z) for x in (bmin[0], bmax[0])
-               for y in (bmin[1], bmax[1]) for z in (bmin[2], bmax[2])]
-    pts = [proj(c) for c in corners]
-    other = "y" if axis == "x" else "x"
-    vals = [p[{"x": 0, "y": 1}[other]] for p in pts]
-    lo, hi = min(vals), max(vals)
-
-    def face_line(z):
-        anchor = t["motor.axis_min_face" if z == bmin[2] else "motor.axis_max_face"]
-        center = _anchor_to_2d_point(anchor, view_name)
-        if axis == "x":
-            return (center[0], lo), (center[0], hi)
-        return (lo, center[1]), (hi, center[1])
-
-    return face_line(bmin[2]), face_line(bmax[2]), motor["size"]
+    motor = _by_id(target_profile).get("motor.body")
+    return faces["face_min"], faces["face_max"], motor["size"]
 
 
 def _mm_to_canvas_fn(view_segs, k):
@@ -254,6 +230,66 @@ def _synthetic_seg(p1_mm, p2_mm, to_canvas):
     }
 
 
+def _snap_seg_to_view(seg, view_segs, orientation, offset):
+    """把合成的端面线吸附到视图中最接近的真实边线端点
+
+    电机包络端点来自 bbox 8 角点投影,端面线 y/x 跨度=轮廓全范围,
+    远超电机在视图中的真实边线,导致尺寸线悬空。
+    这里在视图边线中找同方向、位置最接近的边线,把端面线端点替换为
+    该真实边线的端点(与前端 snapEndpointToViewEdge 行为一致)。
+    """
+    if not view_segs:
+        return seg
+    SNAP = 30.0
+    best = None
+    best_dist = float('inf')
+    if orientation == "horizontal":
+        # 端面线竖直,找同 x 附近的竖直边线
+        sx = (seg["x1"] + seg["x2"]) / 2.0
+        for s in view_segs:
+            if s.get("type") != "line":
+                continue
+            if abs(s["x1"] - s["x2"]) > 2.0:
+                continue
+            dist = abs((s["x1"] + s["x2"]) / 2.0 - sx)
+            if dist < best_dist and dist < SNAP:
+                best_dist = dist
+                best = s
+        if best is None:
+            return seg
+        # 取真实边线的上端或下端(按 offset 方向)
+        if offset >= 0:
+            y = max(best["y1"], best["y2"])
+        else:
+            y = min(best["y1"], best["y2"])
+        seg_snap = dict(seg)
+        seg_snap["x1"] = seg_snap["x2"] = (best["x1"] + best["x2"]) / 2.0
+        seg_snap["y1"] = seg_snap["y2"] = y
+        return seg_snap
+    else:
+        # 端面线水平,找同 y 附近的水平边线
+        sy = (seg["y1"] + seg["y2"]) / 2.0
+        for s in view_segs:
+            if s.get("type") != "line":
+                continue
+            if abs(s["y1"] - s["y2"]) > 2.0:
+                continue
+            dist = abs((s["y1"] + s["y2"]) / 2.0 - sy)
+            if dist < best_dist and dist < SNAP:
+                best_dist = dist
+                best = s
+        if best is None:
+            return seg
+        if offset >= 0:
+            x = max(best["x1"], best["x2"])
+        else:
+            x = min(best["x1"], best["x2"])
+        seg_snap = dict(seg)
+        seg_snap["y1"] = seg_snap["y2"] = (best["y1"] + best["y2"]) / 2.0
+        seg_snap["x1"] = seg_snap["x2"] = x
+        return seg_snap
+
+
 def rebind_annotation(ann, base_refs, ctx, target_profile,
                       view_placements, match_cache):
     """重绑单条标注
@@ -271,9 +307,9 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
     """
     # bind_motor 线性标注:两端绑电机包络面(换电机型号自动跟随)
     if ann.get("bind_motor"):
-        if ann.get("type") != "linear" or ann.get("mode") not in (None, "single", "parallel"):
+        if ann.get("type") != "linear" or ann.get("mode") not in (None, "single", "parallel", "motor-envelope"):
             return {"status": "unmatched",
-                    "reason": "bind_motor 仅支持线性标注(单边/平行间距)",
+                    "reason": "bind_motor 仅支持线性标注(单边/平行间距/电机包络)",
                     "segs": [], "views": []}
         view_id = ann["refs"][0]["viewId"] if ann.get("refs") else None
         placement = view_placements.get(view_id)
@@ -283,7 +319,8 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
         faces = _motor_face_lines(target_profile, placement["source_view"])
         if not faces or faces[0] is None:
             return {"status": "unmatched",
-                    "reason": "该视图无轴向,电机包络标注仅支持 left/right/top/bottom",
+                    "reason": f"视图 {placement['source_view']} 下电机轴向与投影方向垂直,"
+                              "两端面重合,无法标注包络尺寸",
                     "segs": [], "views": []}
         fmin, fmax, _size = faces
         to_canvas = _mm_to_canvas_fn(placement["segs"], placement["k"])
@@ -295,8 +332,15 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
         if not seg_min or not seg_max:
             return {"status": "unmatched", "reason": "电机包络线合成失败",
                     "segs": [], "views": []}
+        # 电机包络端面线 y/x 范围来自 bbox 8 角点投影,会远超电机实际边线,
+        # 需吸附到 placement["segs"] 的真实边线端点,让延伸线起点落在视图电机实际边缘。
+        segs_view = placement.get("segs") or []
+        if ann.get("mode") != "single" and segs_view:
+            # 端面线方向:vertical 端面线对应 horizontal 包络,horizontal 端面线对应 vertical 包络
+            dim_orientation = "horizontal" if seg_min.get("meta", {}).get("orientation") == "vertical" else "vertical"
+            seg_min = _snap_seg_to_view(seg_min, segs_view, dim_orientation, ann.get("offset", 50))
+            seg_max = _snap_seg_to_view(seg_max, segs_view, dim_orientation, ann.get("offset", 50))
         if ann.get("mode") == "single":
-            # 单边样式: 取电机接入端面一条边(配合自定义文字)
             return {"status": "motor", "reason": "",
                     "segs": [seg_max], "views": [placement]}
         return {"status": "motor", "reason": "",

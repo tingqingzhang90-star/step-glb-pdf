@@ -117,9 +117,11 @@ def build_dim_primitives(ann, segs, views):
 
     if dtype == "linear":
         mode = ann.get("mode") or "single"
+        # motor-envelope 重绑后返回左右端面两条边,走专用渲染
         builder = {"single": _linear_single, "parallel": _linear_parallel,
                    "center": _linear_center,
-                   "circle-edge": _linear_circle_edge}.get(mode)
+                   "circle-edge": _linear_circle_edge,
+                   "motor-envelope": _linear_motor_envelope}.get(mode)
         if builder is None:
             return None
         prims = builder(ann, segs, views)
@@ -159,6 +161,94 @@ def _linear_single(ann, segs, views):
         "dim_lines": [(e1, e2)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
         "texts": [{"pos": ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2 - 3),
+                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "center_marks": [], "text": text,
+    }
+
+
+def _linear_motor_envelope(ann, segs, views):
+    """电机包络尺寸:用左右两条端面线,生成跨度的水平/竖直尺寸线,与前端
+    buildMotorEnvelopeGeometry 一致(单条被测线无法表达整个包络跨度)。"""
+    if len(segs) < 2 or len(views) < 2:
+        return None
+    line1 = to_line_seg(segs[0])
+    line2 = to_line_seg(segs[1])
+    if not line1 or not line2:
+        return None
+    # 两端面线在画布坐标上的端点
+    p1a = _sheet_point(views[0], line1["x1"], line1["y1"])
+    p1b = _sheet_point(views[0], line1["x2"], line1["y2"])
+    p2a = _sheet_point(views[1], line2["x1"], line2["y1"])
+    p2b = _sheet_point(views[1], line2["x2"], line2["y2"])
+
+    # 端面线方向由 meta.orientation 提供(吸附后端面线退化为点,无法从 dx/dy 判断)
+    # vertical   端面线 → horizontal 包络(尺寸线水平)
+    # horizontal 端面线 → vertical   包络(尺寸线竖直)
+    o1 = line1.get("meta", {}).get("orientation", "vertical")
+    o2 = line2.get("meta", {}).get("orientation", "vertical")
+    if o1 != o2:
+        return None
+
+    offset = ann.get("offset") or 50
+    # 与前端一致:offset 正 → 尺寸线画在包络下方/右方,延伸线向上/左;
+    # offset 负 → 尺寸线在上方/左方,延伸线向下/右。
+    if o1 == "vertical":  # 包络水平(端面线竖直)
+        # 尺寸线水平,延伸线竖直
+        unit = (1.0, 0.0)
+        normal = (0.0, 1.0) if offset >= 0 else (0.0, -1.0)
+        # 取每条端面线向上/向下的端点作延伸线起点
+        if offset >= 0:
+            ext1 = p1a if p1a[1] > p1b[1] else p1b  # 下端点
+            ext2 = p2a if p2a[1] > p2b[1] else p2b
+        else:
+            ext1 = p1a if p1a[1] < p1b[1] else p1b  # 上端点
+            ext2 = p2a if p2a[1] < p2b[1] else p2b
+        # 两条端面线可能吸附到不同边线,其端点 y 会不同,必须统一为更下/更上,
+        # 否则尺寸线会倾斜(与前端 motorEnvelope.js 保持一致)。
+        if offset >= 0:
+            y = max(ext1[1], ext2[1])
+        else:
+            y = min(ext1[1], ext2[1])
+        ext1 = (ext1[0], y)
+        ext2 = (ext2[0], y)
+    else:  # 包络竖直(端面线水平)
+        unit = (0.0, 1.0)
+        normal = (1.0, 0.0) if offset >= 0 else (-1.0, 0.0)
+        if offset >= 0:
+            ext1 = p1a if p1a[0] > p1b[0] else p1b  # 右端点
+            ext2 = p2a if p2a[0] > p2b[0] else p2b
+        else:
+            ext1 = p1a if p1a[0] < p1b[0] else p1b  # 左端点
+            ext2 = p2a if p2a[0] < p2b[0] else p2b
+        # 统一 x
+        if offset >= 0:
+            x = max(ext1[0], ext2[0])
+        else:
+            x = min(ext1[0], ext2[0])
+        ext1 = (x, ext1[1])
+        ext2 = (x, ext2[1])
+
+    # span_mm 优先取模板中保存的
+    mm_val = ann.get("spanMm")
+    if mm_val is None:
+        m1 = (line1.get("meta") or {}).get("mm_coords") or []
+        m2 = (line2.get("meta") or {}).get("mm_coords") or []
+        if m1 and m2:
+            mm_val = math.hypot(m2[0] - m1[0], m2[1] - m1[1])
+        else:
+            return None
+    text = format_mm(mm_val)
+
+    dim_base = offset_point(ext1, normal, abs(offset))
+    dim_end = offset_point(ext2, normal, abs(offset))
+
+    arrows = build_linear_arrows(dim_base, dim_end, unit, text)
+    mid = ((dim_base[0] + dim_end[0]) / 2.0, (dim_base[1] + dim_end[1]) / 2.0)
+    return {
+        "lines": [(ext1, dim_base), (ext2, dim_end)],
+        "dim_lines": [(dim_base, dim_end)],
+        "arrows": [arrows["arrow1"], arrows["arrow2"]],
+        "texts": [{"pos": (mid[0], mid[1] - 3),
                    "text": text, "angle": 0.0, "anchor": "middle"}],
         "center_marks": [], "text": text,
     }

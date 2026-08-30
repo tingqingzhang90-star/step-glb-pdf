@@ -1,7 +1,7 @@
 {
   "name": "250系列液压缸工程图模板",
   "template_id": "250-E-H2K1",
-  "version": 2,
+  "version": 3,
   "sheet": {
     "size": "A3",
     "width": 420,
@@ -13,19 +13,28 @@
       "id": "left",
       "type": "left",
       "x": 45,
-      "y": 30,
+      "y": 50,
       "scale": "auto",
-      "target_width": 340,
-      "target_height": 70
+      "target_width": 230,
+      "target_height": 47
     },
     {
       "id": "front",
       "type": "front",
-      "x": 60,
-      "y": 140,
+      "x": 45,
+      "y": 175,
       "scale": "auto",
-      "target_width": 90,
-      "target_height": 80
+      "target_width": 47,
+      "target_height": 47
+    },
+    {
+      "id": "top",
+      "type": "top",
+      "x": 250,
+      "y": 45,
+      "scale": "auto",
+      "target_width": 50,
+      "target_height": 230
     }
   ],
   "dimensions": [
@@ -36,7 +45,7 @@
       "orientation": "vertical",
       "edge1_ref": {"method": "bbox_y_min"},
       "edge2_ref": {"method": "bbox_y_max"},
-      "offset": 30,
+      "offset": 25,
       "label": "总高"
     },
     {
@@ -46,7 +55,7 @@
       "orientation": "horizontal",
       "edge1_ref": {"method": "bbox_x_min"},
       "edge2_ref": {"method": "bbox_x_max"},
-      "offset": 30,
+      "offset": 25,
       "label": "总宽"
     },
     {
@@ -64,18 +73,30 @@
       "orientation": "horizontal",
       "from_anchor": "cylinder.front_end",
       "to_anchor": "cylinder.back_end",
-      "offset": 45,
+      "offset": 48,
       "label": "缸长D1"
     },
     {
       "id": "dim_motor_length",
-      "type": "linear_text",
+      "type": "linear_envelope",
       "view": "left",
-      "orientation": "horizontal",
       "from_anchor": "motor.axis_min_face",
       "to_anchor": "motor.axis_max_face",
       "text": "减速机尺寸",
-      "offset": 62,
+      "show_value": true,
+      "offset": 22,
+      "condition": "has_motor",
+      "label": ""
+    },
+    {
+      "id": "dim_motor_length_top",
+      "type": "linear_envelope",
+      "view": "top",
+      "from_anchor": "motor.axis_min_face",
+      "to_anchor": "motor.axis_max_face",
+      "text": "电机减速机尺寸",
+      "show_value": true,
+      "offset": 25,
       "condition": "has_motor",
       "label": ""
     },
@@ -85,7 +106,7 @@
       "view": "left",
       "condition": "has_motor",
       "text": "电机: {{motor}}",
-      "position": {"x": 250, "y": 125}
+      "position": {"x": 150, "y": 288}
     }
   ],
   "title_block": {

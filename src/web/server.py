@@ -1077,6 +1077,37 @@ def api_drawing_view_palette(model_code):
     try:
         with _build_lock:
             result = drawing_engine.generate_all_standard_views(shape_path)
+        # 补充电机/减速机包络投影,供前端"电机包络"标注工具预览
+        try:
+            from drawing import anchor_resolver
+            from drawing.dim import dim_envelope
+            anchors = anchor_resolver.resolve_anchors(model_code)["anchors"]
+            motor_envelope = {}
+            gearbox_envelope = {}
+            for view_name in result["views"]:
+                env = dim_envelope.envelope_faces(anchors, view_name, body_id="motor.body")
+                if env:
+                    motor_envelope[view_name] = {
+                        "orientation": env["orientation"],
+                        "face_min": env["face_min"],
+                        "face_max": env["face_max"],
+                        "span_mm": env["span_mm"],
+                        "outline": env["outline"],
+                    }
+                env2 = dim_envelope.gearbox_envelope_faces(anchors, view_name)
+                if env2:
+                    gearbox_envelope[view_name] = {
+                        "orientation": env2["orientation"],
+                        "face_min": env2["face_min"],
+                        "face_max": env2["face_max"],
+                        "span_mm": env2["span_mm"],
+                        "outline": env2["outline"],
+                    }
+            result["motor_envelope"] = motor_envelope
+            result["gearbox_envelope"] = gearbox_envelope
+        except Exception:
+            result["motor_envelope"] = {}
+            result["gearbox_envelope"] = {}
         return jsonify({"ok": True, **result})
     except Exception as e:
         import traceback
