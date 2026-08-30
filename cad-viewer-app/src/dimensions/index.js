@@ -246,13 +246,15 @@ export function createDimEngine(deps) {
     }
   }
 
-  /** 标注 mousedown：开始拖拽 */
+  /** 标注 mousedown：开始拖拽(无论标注工具是否激活)
+   * 之前在 activeTool 激活时直接 return,导致已放置标注在标注模式下无法调整位置。
+   * 现状:`@mousedown.stop` 阻止冒泡,不会触发 SVG 根的"落位"逻辑,所以这里打开拖拽
+   * 不会与标注流程冲突;center-mark 无可调参数,自然不会被 updateDimDrag 影响。 */
   function onDimMouseDown(event, dim) {
-    if (activeTool.value) return
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
-    dimDragging.value = { id: dim.id, type: dim.type }
+    dimDragging.value = { id: dim.id, type: dim.type, startMouse: mousePos, startOffset: dim.offset }
   }
 
   /** 全局 mouseup：结束标注拖拽 */

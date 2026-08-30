@@ -1,0 +1,32 @@
+{
+  "_comment": "前后端共用样式配置。前端用 px(屏幕像素,SVG non-scaling-stroke),后端按 96dpi 折算成 mm。改一处同步两端。",
+
+  "edge": {
+    "visible": { "stroke_px": 1.0, "color": "#303133" },
+    "hidden":  { "stroke_px": 0.8, "color": "#999999" }
+  },
+
+  "dim": {
+    "line":  { "stroke_px": 1.0, "color": "#303133" },
+    "ext":   { "stroke_px": 0.8, "color": "#606266" },
+    "text":  { "font_px": 9,     "color": "#303133" },
+    "arrow": { "len_px": 3.5,   "half_px": 0.5 }
+  },
+
+  "center_mark": {
+    "stroke_px": 0.8,
+    "color": "#303133"
+  },
+
+  "frame": {
+    "stroke_px": 1.0,
+    "color": "#999999"
+  },
+
+  "title_block": {
+    "stroke_px": 1.0,
+    "color": "#555555"
+  },
+
+  "_px_to_mm_at_96dpi": 0.2645833
+}

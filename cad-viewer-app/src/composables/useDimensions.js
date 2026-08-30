@@ -13,6 +13,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
   const dimensionColorPresets = ['#303133', '#409eff', '#67c23a', '#e6a23c', '#f56c6c']
   const dimensions = ref([])         // 已放置标注
   const selectedDimId = ref(null)    // 选中标注 id
+  const dimHoveredId = ref(null)     // 悬浮中的已放置标注 id(字符串,来自 data-dim-id)
   const dimDragging = ref(null)      // 拖拽调整中
   const dimIdCounter = { value: 0 }  // 按引用传给 core 自增
 
@@ -36,7 +37,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
 
   const {
     toggleTool, onDimEdgeSelect, updateDimPreviewAt, commitPendingLinear,
-    onDimMouseDown, onDimDragMove, onGlobalDimMouseUp, onKeyDown
+    onDimMouseDown, onDimDragMove,     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
     activeTool,
     dimHoveredEdge,
@@ -61,6 +62,16 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     .map(dim => dimCore.renderDimension(dim))
     .filter(Boolean)
   )
+
+  const selectedDim = computed(() =>
+    dimensions.value.find(d => d.id === selectedDimId.value) || null
+  )
+
+  /** 属性面板编辑标注字段(customText/bind_motor),直接改对象触发重渲染 */
+  function setDimField(id, field, value) {
+    const dim = dimensions.value.find(d => d.id === id)
+    if (dim) dim[field] = value
+  }
 
   /** 待高亮的选中对象：第一边 + 待固定态的第二边，附带圆拟合与图纸坐标半径 */
   const dimHighlightEdges = computed(() => {
@@ -112,11 +123,33 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     clearTransientSelection()
   }
 
-  /** SVG mousemove:通过透明命中层做边线 hover 检测 + 预览更新 */
+  /** 鼠标移出图纸:清掉 hover 高亮,避免残留 */
+  function onSvgMouseLeave() {
+    dimHoveredId.value = null
+    if (dimHoveredEdge.value) dimHoveredEdge.value = null
+  }
+
+  /** 点击已放置标注:选中它;标注工具激活时同步退出其临时选择态(第一边/待固定预览) */
+  function onDimClick(dim) {
+    selectDim(dim.id)
+    if (activeTool.value) clearDimToolState()
+  }
+
+  /** SVG mousemove:先看是否悬浮在已放置标注上,否则走透明命中层的边线 hover + 预览更新 */
   function onSvgMouseMove(event) {
-    if (!activeTool.value) return
+    // 已放置标注优先：无论是普通模式还是标注工具激活时,都要能悬浮高亮并点击选中。
+    // 命中时冻结预览(不跟随鼠标),否则待固定态的预览会在用户去点标注时乱跳。
     const target = document.elementFromPoint(event.clientX, event.clientY)
-    const hit = target && target.closest ? target.closest('[data-dim-view]') : null
+    const hitDimEl = target?.closest('[data-dim-id]')
+    if (hitDimEl) {
+      dimHoveredId.value = hitDimEl.dataset.dimId
+      if (dimHoveredEdge.value) dimHoveredEdge.value = null
+      return
+    }
+    if (dimHoveredId.value) dimHoveredId.value = null
+
+    if (!activeTool.value) return
+    const hit = target?.closest('[data-dim-view]') ?? null
     if (hit) {
       const viewId = hit.dataset.dimView
       const idx = parseInt(hit.dataset.dimIdx, 10)
@@ -149,6 +182,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
   function resetAll() {
     dimensions.value = []
     selectedDimId.value = null
+    dimHoveredId.value = null
     dimHoveredEdge.value = null
     dimFirstEdge.value = null
     dimPending.value = null
@@ -158,9 +192,10 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
   return {
     activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
-    renderedDimensions, dimHighlightEdges,
+    renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
     toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove,
-    onGlobalDimMouseUp, onKeyDown, selectDim,
-    onSvgMouseDown, onSvgMouseMove, clearTransientSelection, removeByView, resetAll
+    onGlobalDimMouseUp, onKeyDown, selectDim, onDimClick,
+    onSvgMouseDown, onSvgMouseMove, onSvgMouseLeave,
+    clearTransientSelection, removeByView, resetAll
   }
 }

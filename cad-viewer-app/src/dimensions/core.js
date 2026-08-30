@@ -388,14 +388,18 @@ export function createDimensionCore(deps, ctx) {
   }
 
   /**
-   * 中心十字半长(图纸坐标像素):与对应孔的半径一致,端点恰好落在圆周上。
+   * 中心十字半长(图纸坐标像素):等于对应孔的半径再略超出 1mm,端点落在
+   * 圆周外一点,与工程图中心标记习惯一致、更醒目。1mm 的超出量按视图缩放
+   * 折回图纸坐标,使不同比例下视觉超出量稳定。
    * 用于独立孔位中心标记、中心距/圆心到边线辅助十字、"已选第一对象"提示——
    * 任何"圆上画十字"的场景都按孔大小贴合,不再做 8px 短十字区分。
    */
   function centerMarkHalfPx(edgeRef) {
     const circ = toCircle(edgeRef?.seg)
     if (!circ) return 0
-    return circ.r * getViewDisplayScale(edgeRef.view)
+    const r = circ.r * getViewDisplayScale(edgeRef.view)
+    const extra = 0.2 / (getViewMmScale(edgeRef.view) || 1) // 0.5mm 超出圆周，轻微探出
+    return r + extra
   }
 
   /** 用 edgeRef 直接生成中心标记点(模板用的 {x, y, r} 结构) */
@@ -498,8 +502,24 @@ export function createDimensionCore(deps, ctx) {
     const cy = view.y + circ.cy * getViewDisplayScale(view)
     const r = circ.r * getViewDisplayScale(view)
     const dir = { x: Math.cos(angle), y: Math.sin(angle) }
+    // 直径线贯穿整个圆:起点 = 对侧圆周,终点 = 圆心正方向 r+leaderLength 处
+    // 这样 leader 长度 = 2r + leaderLength,贯穿整个圆,箭头仍画在正侧圆周
+    const leaderStart = { x: cx - dir.x * r, y: cy - dir.y * r }
     const edgePt = { x: cx + dir.x * r, y: cy + dir.y * r }
-    const textPos = { x: cx + dir.x * (r + leaderLength), y: cy + dir.y * (r + leaderLength) }
+    const leaderEnd = { x: cx + dir.x * (r + leaderLength), y: cy + dir.y * (r + leaderLength) }
+    // 文字完全位于 leader 线段上:
+    //   1) 沿 -dir 方向从 leaderEnd 退回,把文字落在 leader 末端的内侧(不超出箭头)
+    //   2) 再沿屏幕"上方"法向微调 4px,与线分离避免压线
+    // 取两个候选法向中 y 更小者作为屏幕上方方向,保证任意 leader 朝向都靠上
+    const perpUp1 = { x: -dir.y, y: dir.x }
+    const perpUp2 = { x: dir.y, y: -dir.x }
+    const perp = perpUp1.y <= perpUp2.y ? perpUp1 : perpUp2
+    const textAlongBack = 20   // 沿 -dir 退回距离,让文字落回 leader 末端内侧
+    const textPerpGap = 4      // 垂直于 leader 的上方微调
+    const textPos = {
+      x: leaderEnd.x - dir.x * textAlongBack + perp.x * textPerpGap,
+      y: leaderEnd.y - dir.y * textAlongBack + perp.y * textPerpGap
+    }
     const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
     // 让文字始终处于可读角度(不倒立)
     const textAngle = Math.abs(angle) > Math.PI / 2 ? angle + Math.PI : angle
@@ -509,8 +529,8 @@ export function createDimensionCore(deps, ctx) {
       leaderAngle: angle,
       leaderLength,
       textAngle,
-      leaderStart: { x: cx, y: cy },
-      leaderEnd: textPos,
+      leaderStart,
+      leaderEnd,
       arrow: buildArrowPoints(edgePt, dir, false),
       textPos,
       text: `ø${formatMm(mmVal)}`
@@ -526,6 +546,8 @@ export function createDimensionCore(deps, ctx) {
     const r = circ.r * getViewDisplayScale(view)
     const angle = Math.atan2(mousePos.y - cy, mousePos.x - cx)
     const dist = Math.hypot(mousePos.x - cx, mousePos.y - cy)
+    // leader 长度按鼠标在圆外超出圆周的距离算;
+    // 起点在 buildDiameterGeometry 中固定为对侧圆周,线自然贯穿整个圆
     const leaderLength = Math.max(15, dist - r)
     return buildDiameterGeometry(edgeRef, angle, leaderLength)
   }
@@ -644,6 +666,9 @@ export function createDimensionCore(deps, ctx) {
       geometry = buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
     }
 
+    if (dim.customText != null && dim.customText !== '') {
+      geometry.text = dim.customText
+    }
     return geometry ? { ...geometry, id: dim.id, color: dim.color || '#303133' } : null
   }
 

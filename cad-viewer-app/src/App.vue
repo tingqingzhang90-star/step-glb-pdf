@@ -14,6 +14,10 @@
       </div>
 
       <div class="toolbar-center">
+        <el-select v-model="sheetSize" size="small" style="width: 80px" :disabled="!viewsLoaded" @change="onSheetSizeChange" title="图纸幅面">
+          <el-option v-for="s in sheetSizeOptions" :key="s" :label="s" :value="s" />
+        </el-select>
+        <el-divider direction="vertical" />
         <el-button-group>
           <el-button size="small" :icon="ZoomIn" :disabled="!viewsLoaded" @click="zoomCanvas(1.2)">放大</el-button>
           <el-button size="small" :icon="ZoomOut" :disabled="!viewsLoaded" @click="zoomCanvas(0.8)">缩小</el-button>
@@ -100,6 +104,7 @@
             @wheel="onSheetWheel"
             @mousedown="onSvgMouseDown"
             @mousemove="onSvgMouseMove"
+            @mouseleave="onSvgMouseLeave"
           >
             <rect x="20" y="20" :width="sheetWidth - 40" :height="sheetHeight - 40" fill="#ffffff" stroke="#999" stroke-width="1" />
             <rect x="920" y="690" width="240" height="120" fill="none" stroke="#555" stroke-width="1" />
@@ -158,7 +163,7 @@
                 stroke-dasharray="4,2"
                 vector-effect="non-scaling-stroke"
               />
-              <g class="visible-edges" vector-effect="non-scaling-stroke">
+              <g class="visible-edges" vector-effect="non-scaling-stroke" stroke-width="1">
                 <template v-for="(seg, i) in pv.edges" :key="`v${i}`">
                   <line
                     v-if="seg && seg.type === 'line'"
@@ -167,7 +172,6 @@
                     :x2="seg.x2"
                     :y2="seg.y2"
                     stroke="#333"
-                    stroke-width="1"
                     vector-effect="non-scaling-stroke"
                   />
                   <circle
@@ -176,7 +180,6 @@
                     :cy="seg.cy"
                     :r="seg.r"
                     stroke="#333"
-                    stroke-width="1"
                     fill="none"
                     vector-effect="non-scaling-stroke"
                   />
@@ -184,7 +187,6 @@
                     v-else-if="seg && seg.type === 'polyline'"
                     :points="polylinePoints(seg.points)"
                     stroke="#333"
-                    stroke-width="1"
                     fill="none"
                     vector-effect="non-scaling-stroke"
                   />
@@ -209,6 +211,43 @@
 
             <!-- 标注命中层（仅标注工具激活时） -->
             <g v-if="activeTool" class="dim-hit-layer" pointer-events="stroke">
+              <!-- 已放置标注的命中副本(只在标注模式下存在)。
+                   真实可见的 .dimension-group 此时 .dim-hit-stroke 让路给边线,
+                   由这里统一提供命中——已放置标注与模型边线共享同一命中层,
+                   不再有 12px 命中带互相遮挡的问题。
+                   命中事件在外层 g 上统一捕获,通过 data-dim-id 反查 dim 路由到
+                   onDimMouseDown/onDimClick。
+                   
+                   z-order 策略:
+                     - "等第二边" 状态(dimFirstEdge 已选、待固定态还没建立)时
+                       把本组放到 view 命中层 之前,让边线命中优先级高于已放置标注,
+                       避免已放置标注的 10px 命中带挡住底层的边线。
+                     - 其他时候放回 view 之后,已放置标注可正常点中。 -->
+              <g v-if="dimFirstEdge && !dimPending" class="dim-hit-dims" style="pointer-events:none">
+                <template v-for="dim in renderedDimensions" :key="`ddh-${dim.id}`">
+                  <template v-if="dim.type === 'linear'">
+                    <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cm-${dim.id}-${ci}`">
+                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
+                  </template>
+                  <template v-else-if="dim.type === 'diameter'">
+                    <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                  </template>
+                  <template v-else-if="dim.type === 'angle'">
+                    <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
+                  </template>
+                  <template v-else-if="dim.type === 'center-mark'">
+                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
+                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
+                  </template>
+                </template>
+              </g>
               <g v-for="pv in placedViews" :key="'hit-'+pv.id" :transform="`translate(${pv.x}, ${pv.y}) scale(${getViewDisplayScale(pv)})`">
                 <template v-for="(seg, i) in pv.edges" :key="`dvh-${i}`">
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'edges'" />
@@ -219,6 +258,31 @@
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <circle v-else-if="seg.type === 'circle' && circleHitTools.includes(activeTool)" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
+                </template>
+              </g>
+              <g v-if="!dimFirstEdge || dimPending" class="dim-hit-dims" @mousedown.stop="onDimHitMouseDown" @click.stop="onDimHitClick">
+                <template v-for="dim in renderedDimensions" :key="`ddh-${dim.id}`">
+                  <template v-if="dim.type === 'linear'">
+                    <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cm-${dim.id}-${ci}`">
+                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
+                  </template>
+                  <template v-else-if="dim.type === 'diameter'">
+                    <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                  </template>
+                  <template v-else-if="dim.type === 'angle'">
+                    <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
+                  </template>
+                  <template v-else-if="dim.type === 'center-mark'">
+                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
+                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
+                  </template>
                 </template>
               </g>
             </g>
@@ -276,7 +340,7 @@
 
             <!-- 已放置标注 -->
             <g class="dimensions-layer">
-              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id }]" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="selectDim(dim.id)">
+              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id, 'dimension-hovered': dimHoveredId === String(dim.id) }]" :data-dim-id="dim.id" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="onDimClick(dim)">
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
                   <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dim.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dim.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
@@ -303,6 +367,7 @@
                 <!-- 角度标注 -->
                 <template v-if="dim.type === 'angle'">
                   <path :d="dim.arcPath" class="dim-line" fill="none" />
+                  <path :d="dim.arcPath" class="dim-hit-stroke" fill="none" />
                   <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
                   <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
                   <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dim.text }}</text>
@@ -415,8 +480,45 @@
           <div class="stat-row"><span>模型尺寸</span><span class="num">{{ modelBbox.width }}×{{ modelBbox.height }}×{{ modelBbox.depth }}mm</span></div>
         </section>
 
+        <section v-if="selectedDim" class="property-section">
+          <div class="section-title">标注属性</div>
+          <div class="prop-row">
+            <span class="prop-label">类型</span>
+            <span class="prop-value">{{ dimTypeLabel(selectedDim) }}</span>
+          </div>
+          <div v-if="selectedDim.type === 'linear' || selectedDim.type === 'diameter' || selectedDim.type === 'angle'" class="prop-row stacked">
+            <span class="prop-label">自定义文字</span>
+            <el-input
+              :model-value="selectedDim.customText ?? ''"
+              size="small"
+              placeholder="留空显示测量值"
+              clearable
+              @update:model-value="v => setDimField(selectedDim.id, 'customText', v || null)"
+            />
+          </div>
+          <div v-if="selectedDim.type === 'linear'" class="prop-row stacked">
+            <span class="prop-label">绑定电机包络</span>
+            <el-switch
+              :model-value="!!selectedDim.bind_motor"
+              @update:model-value="v => setDimField(selectedDim.id, 'bind_motor', v)"
+            />
+            <span class="prop-hint">换电机型号时两端自动跟随新包络</span>
+          </div>
+        </section>
+
         <section class="property-section document-json">
           <div class="section-title">工程图状态</div>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            class="full-button"
+            :loading="savingTemplate"
+            :disabled="!selectedModel || !placedViews.length"
+            @click="saveAsTemplate"
+          >
+            保存为模板
+          </el-button>
           <pre>{{ drawingDocumentPreview }}</pre>
         </section>
       </aside>
@@ -427,7 +529,8 @@
 <script setup>
 // 组合根:只做各功能域的组合装配、事件总控与跨域编排。
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
 import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
@@ -438,12 +541,20 @@ import { useDimensions } from '@/composables/useDimensions'
 import { useModelPalette } from '@/composables/useModelPalette'
 import { usePaletteDrag } from '@/composables/usePaletteDrag'
 import { buildDrawingDocument } from '@/utils/drawingDocument'
+import { saveDrawingTemplate } from '@/api/drawingApi'
 
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
-  sheetAreaRef, sheetWidth, sheetHeight, sheetZoom, sheetPanning, sheetCardStyle,
-  centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel
+  sheetAreaRef, sheetSize, sheetWidth, sheetHeight, sheetZoom, sheetPanning, sheetCardStyle,
+  setSheetSize, centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel
 } = useCanvasTransform()
+
+const sheetSizeOptions = ['A4', 'A3', 'A2', 'A1', 'A0']
+function onSheetSizeChange(name) {
+  setSheetSize(name)
+  // 视图与标注位置已固定在 sheet 像素坐标,切换尺寸后仍按当前坐标渲染,
+  // 用户可手动调整视图放置位置
+}
 
 // ===== 已放置视图:放置/删除/全局比例 =====
 const {
@@ -464,10 +575,10 @@ const { alignmentGuides, startMoveView, moveViewTo, endMoveView, clearGuides } =
 const {
   activeTool, dimHoveredEdge, dimPending, dimPreview, dimDragging,
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
-  dimHighlightEdges,
+  dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
   toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove, onGlobalDimMouseUp,
-  onKeyDown, selectDim, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
-  clearTransientSelection, removeByView, resetAll
+  onKeyDown, selectDim, onDimClick, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
+  onSvgMouseLeave, clearTransientSelection, removeByView, resetAll
 } = useDimensions({ placedViews, selectedViewId, coords })
 
 // 需要命中圆的标注工具(其余工具下圆不参与命中)
@@ -489,6 +600,7 @@ const {
 
 const drawingDocumentPreview = computed(() => JSON.stringify(
   buildDrawingDocument({
+    sheetSize: sheetSize.value,
     sheetWidth: sheetWidth.value,
     sheetHeight: sheetHeight.value,
     modelId: selectedModel.value,
@@ -497,6 +609,57 @@ const drawingDocumentPreview = computed(() => JSON.stringify(
   }),
   null, 2
 ))
+
+// ===== 模板保存:当前图纸(基准型号 + 视图布局 + 标注)落盘 =====
+
+const savingTemplate = ref(false)
+
+const DIM_TYPE_LABELS = {
+  linear: '线性标注',
+  diameter: '直径标注',
+  angle: '角度标注',
+  'center-mark': '中心标记'
+}
+
+function dimTypeLabel(dim) {
+  if (dim.type === 'linear' && dim.mode) {
+    const modeLabels = { single: '单边', parallel: '平行间距', center: '圆心距', 'circle-edge': '圆心到边' }
+    return `线性标注(${modeLabels[dim.mode] || dim.mode})`
+  }
+  return DIM_TYPE_LABELS[dim.type] || dim.type
+}
+
+async function saveAsTemplate() {
+  if (!selectedModel.value) {
+    ElMessage.warning('请先选择并导入型号')
+    return
+  }
+  if (!placedViews.value.length) {
+    ElMessage.warning('请先从调色板放置视图')
+    return
+  }
+  const doc = buildDrawingDocument({
+    sheetSize: sheetSize.value,
+    sheetWidth: sheetWidth.value,
+    sheetHeight: sheetHeight.value,
+    modelId: selectedModel.value,
+    placedViews: placedViews.value,
+    dimensions: dimensions.value
+  })
+  savingTemplate.value = true
+  try {
+    const res = await saveDrawingTemplate(doc)
+    if (res.ok) {
+      ElMessage.success(`模板已保存: ${res.template_id}(系列 ${res.identity})`)
+    } else {
+      ElMessage.error(res.error || '保存失败')
+    }
+  } catch (e) {
+    ElMessage.error(`保存失败: ${e.message}`)
+  } finally {
+    savingTemplate.value = false
+  }
+}
 
 onMounted(async () => {
   await loadModelList()
@@ -562,6 +725,26 @@ function onGlobalMouseUp() {
   endSheetPan()
   endMoveView()
   onGlobalDimMouseUp()
+}
+
+/** dim-hit-layer 内已放置标注命中副本的事件转发。
+ * 副本位于命中层最顶层,事件冒泡到外层 g,这里反查 data-dim-id 找到 dim。 */
+function resolveDimFromEvent(event) {
+  const el = event.target?.closest?.('[data-dim-id]')
+  if (!el) return null
+  return dimensions.value.find(d => String(d.id) === el.dataset.dimId) || null
+}
+
+function onDimHitMouseDown(event) {
+  const dim = resolveDimFromEvent(event)
+  if (!dim) return
+  onDimMouseDown(event, dim)
+}
+
+function onDimHitClick(event) {
+  const dim = resolveDimFromEvent(event)
+  if (!dim) return
+  onDimClick(dim)
 }
 
 // ===== 跨域编排 =====
@@ -859,6 +1042,12 @@ function onModelChange() {
   color: #909399;
 }
 
+.prop-hint {
+  color: #909399;
+  font-size: 11px;
+  margin-left: 8px;
+}
+
 .prop-value,
 .stat-row .num {
   color: #303133;
@@ -913,6 +1102,23 @@ function onModelChange() {
   vector-effect: non-scaling-stroke;
 }
 
+/* 视图边线(与后端共用 cad_viewer_style.json 配置) */
+.visible-edges line,
+.visible-edges polyline,
+.visible-edges circle {
+  stroke: #333;
+  stroke-width: var(--edge-visible-stroke, 1);
+  vector-effect: non-scaling-stroke;
+}
+.hidden-edges line,
+.hidden-edges polyline,
+.hidden-edges circle {
+  stroke: #999;
+  stroke-width: var(--edge-hidden-stroke, 0.8);
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+
 .dim-highlight-selected {
   stroke: #67c23a;
   stroke-width: 3;
@@ -922,13 +1128,13 @@ function onModelChange() {
 
 .dim-ext-line {
   stroke: var(--dimension-color, #606266);
-  stroke-width: 0.8;
+  stroke-width: var(--dim-ext-stroke, 0.8);
   vector-effect: non-scaling-stroke;
 }
 
 .dim-line {
   stroke: var(--dimension-color, #303133);
-  stroke-width: 1;
+  stroke-width: var(--dim-line-stroke, 1);
   vector-effect: non-scaling-stroke;
 }
 
@@ -947,12 +1153,12 @@ function onModelChange() {
    否则 .dim-center-mark line 优先级更高会把副本染成可见粗线 */
 .dim-center-mark line:not(.dim-hit-stroke) {
   stroke: var(--dimension-color, #303133);
-  stroke-width: 0.8;
+  stroke-width: var(--center-mark-stroke, 0.8);
   vector-effect: non-scaling-stroke;
 }
 
 .dim-text {
-  font-size: 9px;
+  font-size: var(--dim-text-size, 9px);
   fill: var(--dimension-color, #303133);
   font-family: 'Microsoft YaHei', sans-serif;
   user-select: none;
@@ -964,7 +1170,9 @@ function onModelChange() {
   pointer-events: all;
 }
 
-/* 命中加宽的透明副本:不影响视觉,只把命中区从 1px 扩到 ~12px */
+/* 命中加宽的透明副本:不影响视觉,只把命中区从 1px 扩到 ~12px。
+   标注工具激活时整层让路:由 dim-hit-layer 内的"已放置标注副本"统一接管命中,
+   避免 12px 命中带与模型边线/其他标注互相遮挡。 */
 .dim-hit-stroke {
   fill: none;
   stroke: transparent;
@@ -973,18 +1181,8 @@ function onModelChange() {
   vector-effect: non-scaling-stroke;
 }
 
-/* 箭头 fill 命中(父 group 已 visiblePainted,显式声明更稳) */
-.dim-arrow {
-  pointer-events: visiblePainted;
-}
-
-/* 命中加宽的透明副本:不影响视觉,只把命中区从 1px 扩到 ~10px */
-.dim-hit-stroke {
-  fill: none;
-  stroke: transparent;
-  stroke-width: 12;
-  pointer-events: all;
-  vector-effect: non-scaling-stroke;
+.drawing-sheet.dim-active .dim-hit-stroke {
+  pointer-events: none;
 }
 
 /* 箭头 fill 命中(父 group 已 visiblePainted,显式声明更稳) */
@@ -997,6 +1195,26 @@ function onModelChange() {
 }
 
 .dimension-selected .dim-text {
+  font-weight: 600;
+}
+
+/* 悬浮高亮:已放置标注的命中带比可见线宽很多,必须有可见反馈,
+   否则用户无从判断鼠标是否已在尺寸线上(标注工具激活时尤其重要)。
+   放在 .dimension-selected 之后,hover 态优先显示。
+   :not(.dim-hit-stroke) 排除加宽的透明副本,否则会被染成可见粗线。 */
+.dimension-hovered .dim-line,
+.dimension-hovered .dim-ext-line,
+.dimension-hovered .dim-center-mark line:not(.dim-hit-stroke) {
+  stroke: #409eff;
+  stroke-width: 2;
+}
+
+.dimension-hovered .dim-arrow {
+  fill: #409eff;
+}
+
+.dimension-hovered .dim-text {
+  fill: #409eff;
   font-weight: 600;
 }
 
