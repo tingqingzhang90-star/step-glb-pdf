@@ -12,7 +12,7 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
-from dim_geometry import (to_line_seg, to_circle, line_basis, offset_point,
+from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset_point,
                           signed_distance_to_line, closest_point_on_line,
                           project_point_to_line, line_intersection,
                           farthest_endpoint_from, build_arc_points,

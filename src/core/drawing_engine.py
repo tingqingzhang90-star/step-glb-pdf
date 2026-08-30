@@ -14,7 +14,7 @@
     conda run -n pdf1 python ...
 
 调用方式:
-    from drawing_engine import generate_drawing_views
+    from core.drawing_engine import generate_drawing_views
     views = generate_drawing_views("output/250-E-H2K1-L100/assembly.step")
 """
 import os

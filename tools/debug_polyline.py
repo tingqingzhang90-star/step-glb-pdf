@@ -3,7 +3,7 @@
 import sys, os, math
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
-import drawing_engine as d
+from core import drawing_engine as d
 
 step = os.path.join(_PROJECT_ROOT, "output", "250-E-H3K2-L100-D11", "assembly.step")
 shape = d.read_shape_cached(step)

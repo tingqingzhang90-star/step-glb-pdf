@@ -25,7 +25,9 @@ import tempfile
 
 # ---------- 配置 ----------
 # 路径相对于项目根目录 e:\分享代码\step__glb_pdf
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 本文件位于 src/core/,需上溯三级: core → src → 项目根
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
 PARTS_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
 MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
 CONFIG_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")

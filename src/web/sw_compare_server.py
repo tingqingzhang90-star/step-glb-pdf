@@ -19,9 +19,9 @@ import json
 import time
 import threading
 
-# 复用 rebuild_assembly 的选型解析逻辑
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rebuild_assembly import (
+# 复用 rebuild_assembly 的选型解析逻辑(本文件位于 src/web/,需把 src 加入 sys.path)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.rebuild_assembly import (
     parse_model_code, resolve_visibility, load_config,
     compute_cylinder_scale, MOTOR_CODES, _KEY_RE,
 )
@@ -29,7 +29,9 @@ from rebuild_assembly import (
 from flask import Flask, request, jsonify, Response
 
 # ---------- 配置 ----------
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 本文件位于 src/web/,需上溯三级: web → src → 项目根
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
 CONFIG_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")
 LIB_ROOT = os.path.join(_PROJECT_ROOT, "图库项目")
 # 装配体根目录(图库项目下按系列名分子目录)

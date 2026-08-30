@@ -14,7 +14,7 @@ DXF 导出器 — 使用 ezdxf 将工程图数据写入 DXF 文件
 输出 DXF 可被 cad-viewer(前端)或 SolidWorks/AutoCAD 直接打开。
 
 调用方式:
-    from dxf_exporter import export_drawing_to_dxf
+    from drawing.dxf_exporter import export_drawing_to_dxf
     export_drawing_to_dxf(drawing_data, output_path)
 """
 import math
@@ -401,8 +401,9 @@ def generate_dxf_from_step(step_path, output_path, template=None, params=None,
         (output_path, elapsed_time, unmatched_dims)
     """
     import time
-    from drawing_engine import generate_drawing_views_raw
-    from drawing_template import apply_template, load_default_template
+    from core.drawing_engine import generate_drawing_views_raw
+    from drawing.rule_template.drawing_template import (
+        apply_template, load_default_template)
 
     t0 = time.time()
 

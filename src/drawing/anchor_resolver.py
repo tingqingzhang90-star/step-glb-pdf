@@ -10,7 +10,7 @@ drawing_anchors.json 的静态绝对坐标仅对提取时的基准型号有效,�
     主轴坐标大于缸体安装位置的零件,随拉伸量同步平移
 
 调用方式:
-    import anchor_resolver
+    from drawing import anchor_resolver
     profile = anchor_resolver.resolve_anchors("250-E-H2K1-L200-D55")
 """
 import copy
@@ -19,7 +19,7 @@ import os
 import re
 from datetime import date
 
-import rebuild_assembly as rb
+from core import rebuild_assembly as rb
 
 _KEY_RE = re.compile(r"^(.+)-(\d+)$")
 _BASE_VIEWS = ["front", "left", "top"]

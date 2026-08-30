@@ -4,7 +4,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRepBndLib import brepbndlib
-from drawing_engine import read_shape_cached, _project_shape, STANDARD_VIEW_CONFIGS
+from core import read_shape_cached, _project_shape, STANDARD_VIEW_CONFIGS
 
 shape = read_shape_cached('output/250-E-H2K1-L100-D11/assembly.brep')
 

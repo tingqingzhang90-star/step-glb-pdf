@@ -8,7 +8,7 @@ import json
 _src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 sys.path.insert(0, _src)
 
-import drawing_template as dt
+from drawing.rule_template import drawing_template as dt
 
 # 加载模板和锚点
 t = dt.load_default_template()

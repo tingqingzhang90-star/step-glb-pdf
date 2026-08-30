@@ -15,10 +15,11 @@ import os
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 
-# 加载共享样式配置(项目根 cad_viewer_style.json)
-_STYLE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "cad_viewer_style.json")
+# 加载共享样式配置(项目根 cad_viewer_style.json,前后端共用)
+# 本文件位于 src/drawing/dim/,需上溯四级: dim → drawing → src → 项目根
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+_STYLE_PATH = os.path.join(_PROJECT_ROOT, "cad_viewer_style.json")
 with open(_STYLE_PATH, "r", encoding="utf-8") as _f:
     _CFG = json.load(_f)
 
@@ -147,7 +148,7 @@ def _draw_primitives(c, prims, color, mapper):
                    *mapper.pt(x + r * ca, y + r * sa))
             c.line(*mapper.pt(x + r * sa, y - r * ca),
                    *mapper.pt(x - r * sa, y + r * ca))
-    from dim_render import _CN_FONT
+    from drawing.dim.dim_render import _CN_FONT
     # 字号 10.5pt ≈ GB 5号字(3.7mm),不随图纸缩放
     c.setFont(_CN_FONT, _FS_TEXT_PT)
     for t in prims.get("texts", []):
@@ -183,7 +184,7 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
         str: 输出文件绝对路径
     """
     import os
-    from dim_render import _ensure_font, build_dim_primitives
+    from drawing.dim.dim_render import _ensure_font, build_dim_primitives
 
     _ensure_font()
     sheet = template_doc.get("sheet", {})
@@ -219,7 +220,7 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
             _draw_primitives(c, prims, ann.get("color"), mapper)
 
     # 角标:型号 + 失配提示
-    from dim_render import _CN_FONT
+    from drawing.dim.dim_render import _CN_FONT
     c.setFont(_CN_FONT, _FS_TEXT_PT)
     c.setFillColorRGB(0.1, 0.1, 0.1)
     c.drawRightString(sheet_w - m, m + 3, model_code)

@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
 
-import drawing_engine
+from core import drawing_engine
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRepBndLib import brepbndlib
 
@@ -34,7 +34,7 @@ def main():
 
     # 测试左视图配置
     from OCC.Core.gp import gp_Dir
-    from drawing_engine import STANDARD_VIEW_CONFIGS
+    from core import STANDARD_VIEW_CONFIGS
 
     left_cfg = STANDARD_VIEW_CONFIGS['left']
     print(f"\n左视图配置:")

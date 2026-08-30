@@ -26,7 +26,7 @@ from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRepBndLib import brepbndlib
 
-import drawing_engine
+from core import drawing_engine
 
 
 # 250 直连系列参考 PDF 模板路径

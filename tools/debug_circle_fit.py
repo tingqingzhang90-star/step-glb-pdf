@@ -6,8 +6,8 @@ import math
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-import drawing_engine as d
-from drawing_template import _fit_circles_from_polylines
+from core import drawing_engine as d
+from drawing.rule_template import _fit_circles_from_polylines
 
 STEP = os.path.join(os.path.dirname(__file__), "..", "output",
                     "250-E-H3K2-L100-D11", "assembly.step")
