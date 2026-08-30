@@ -18,7 +18,7 @@
   - smallest_circle: 半径最小的圆(用于孔标注)
 
 调用方式:
-    from drawing_template import apply_template
+    from drawing.rule_template.drawing_template import apply_template
     result = apply_template(views_data, template, params)
 """
 import json
@@ -1212,7 +1212,7 @@ def generate_drawing(step_path, template_path=None, anchors_path=None,
         params = {}
 
     # 延迟导入 drawing_engine 避免循环依赖
-    import drawing_engine
+    from core import drawing_engine
 
     if views is None:
         views = ["front", "top", "left"]

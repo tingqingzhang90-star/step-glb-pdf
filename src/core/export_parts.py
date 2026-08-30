@@ -22,8 +22,9 @@ import win32com.client
 import pythoncom
 
 # 配置
-# 项目根目录
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 项目根目录(本文件位于 src/core/,需上溯三级: core → src → 项目根)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
 # 输入：装配体原文件（保持在原位置，不移动）
 ASSEMBLY_PATH = r"E:\分享代码\pdf修改\图库项目\250直连\250直连装配体.SLDASM"
 # 输出：所有产出统一到 step__glb_pdf 工作目录

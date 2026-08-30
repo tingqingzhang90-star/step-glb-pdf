@@ -17,7 +17,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SRC = os.path.join(_PROJECT_ROOT, "src")
 sys.path.insert(0, _SRC)
 
-import drawing_engine
+from core import drawing_engine
 
 
 def generate_test_views():

@@ -1,7 +1,7 @@
 """直接测试 HLR 投影,确认视图方向是否正确"""
 import sys
 sys.path.insert(0, 'src')
-from drawing_engine import read_shape_cached, _project_shape
+from core import read_shape_cached, _project_shape
 from OCC.Core.gp import gp_Dir
 from OCC.Core.Bnd import Bnd_Box
 from OCC.Core.BRepBndLib import brepbndlib

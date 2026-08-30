@@ -9,7 +9,7 @@ import sys
 # 添加 src 到路径
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
 
-import drawing_engine
+from core import drawing_engine
 
 STEP_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          'output', '250-E-H3K2-L100-D11', 'assembly.step')

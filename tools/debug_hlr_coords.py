@@ -3,7 +3,7 @@
 import sys, os
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
-import drawing_engine as d
+from core import drawing_engine as d
 from OCC.Core.gp import gp_Pnt, gp_Ax2, gp_Dir
 from OCC.Core.HLRAlgo import HLRAlgo_Projector
 from OCC.Core.HLRBRep import HLRBRep_Algo, HLRBRep_HLRToShape

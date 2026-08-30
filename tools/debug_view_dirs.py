@@ -3,7 +3,7 @@
 import sys, os
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
-import drawing_engine as d
+from core import drawing_engine as d
 from OCC.Core.gp import gp_Dir
 
 for n, cfg in d.STANDARD_VIEW_CONFIGS.items():

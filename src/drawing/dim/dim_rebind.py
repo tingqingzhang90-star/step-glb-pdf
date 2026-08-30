@@ -13,7 +13,7 @@
 """
 import math
 
-from drawing_template import _anchor_to_2d_point
+from drawing.rule_template.drawing_template import _anchor_to_2d_point
 
 # 各视图投影面坐标轴与模型主轴(Z)的映射(ax2 坐标系,单位 mm)
 AXIAL_MAP = {"left": ("x", 1.0), "right": ("x", -1.0),

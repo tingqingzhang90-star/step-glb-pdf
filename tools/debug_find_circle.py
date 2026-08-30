@@ -2,7 +2,7 @@
 """详细检查 front 视图所有 polyline,找半径接近 122.5 的"""
 import sys, os, math
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-import drawing_engine as d
+from core import drawing_engine as d
 
 STEP = os.path.join(os.path.dirname(__file__), "..", "output",
                     "250-E-H3K2-L100-D11", "assembly.step")

@@ -14,7 +14,7 @@ from OCC.Core.TopAbs import TopAbs_FACE
 from OCC.Core.BRepAdaptor import BRepAdaptor_Surface
 from OCC.Core.TopoDS import topods
 
-import rebuild_assembly as rb
+from core import rebuild_assembly as rb
 from extract_anchors import load_part_brep, get_part_base_name
 
 

@@ -4,7 +4,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-from rebuild_assembly import read_step, shape_bbox
+from core import read_step, shape_bbox
 
 # 鱼眼轴承 STEP 文件
 step_path = r"e:\分享代码\step__glb_pdf\parts_step\250鱼眼轴承.step"

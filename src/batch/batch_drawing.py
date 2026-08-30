@@ -21,21 +21,23 @@ import os
 import sys
 import time
 
-_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+# 本文件位于 src/batch/,需把 src 加入 sys.path 才能导入 core/drawing 包
+_SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ROOT = os.path.dirname(_SRC_DIR)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-import rebuild_assembly as rb
-import drawing_engine
-import drawing_template
-import anchor_resolver
-import frontend_template
-import dim_rebind
-import dim_pdf_sheet
-from drawing_pdf import render_drawing_pdf
+from core import rebuild_assembly as rb
+from core import drawing_engine
+from drawing.rule_template import drawing_template
+from drawing import anchor_resolver
+from drawing import frontend_template
+from drawing.dim import dim_rebind
+from drawing.dim import dim_pdf_sheet
+from drawing.drawing_pdf import render_drawing_pdf
 
-DEFAULT_TEMPLATE = os.path.join(_SRC_DIR, "drawing_template.json")
+DEFAULT_TEMPLATE = os.path.join(
+    _SRC_DIR, "drawing", "rule_template", "drawing_template.json")
 
 
 def discover_models(out_dir):

@@ -21,20 +21,21 @@ import json
 import glob
 import threading
 
-# 确保能 import 同目录模块
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+# 本文件位于 src/web/,需把 src 加入 sys.path 才能导入 core/drawing 包
+_HERE = os.path.dirname(os.path.abspath(__file__))          # src/web
+_SRC_DIR = os.path.dirname(_HERE)                            # src
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 from flask import (Flask, request, jsonify, send_from_directory,
                    send_file, render_template_string)
 
-import rebuild_assembly as rb
+from core import rebuild_assembly as rb
 
-_PROJECT_ROOT = os.path.dirname(_HERE)
+_PROJECT_ROOT = os.path.dirname(_SRC_DIR)
 OUT_DIR = rb.OUT_DIR
 CONFIG_DIR = rb.CONFIG_DIR
-# 3D 查看器相关路径(viewer.html 与 o3dv 静态资源均位于 src/ 下)
+# 3D 查看器相关路径(viewer.html 与 o3dv 静态资源均位于 src/web/ 下)
 _STATIC_DIR = os.path.join(_HERE, "static")
 _VIEWER_HTML = os.path.join(_HERE, "viewer.html")
 _DRAWING_EDITOR_HTML = os.path.join(_HERE, "drawing_editor.html")
@@ -517,7 +518,7 @@ def api_drawing_views(model_code):
 
     从 assembly.step 生成 HLR 投影,返回 JSON 格式的 2D 线框数据。
     """
-    import drawing_engine
+    from core import drawing_engine
     step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
     if not os.path.isfile(step_path):
         return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
@@ -582,7 +583,7 @@ def api_generate_drawing(model_code):
     }
     响应: 生成的 PDF 文件下载
     """
-    import drawing_generator
+    from drawing import drawing_generator
     
     step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
     if not os.path.isfile(step_path):
@@ -642,8 +643,8 @@ def api_drawing_dxf(model_code):
     流程: STEP → HLR投影 → 模板匹配 → 标注计算 → DXF导出
     返回 DXF 文件下载。
     """
-    import dxf_exporter
-    import drawing_template
+    from drawing import dxf_exporter
+    from drawing.rule_template import drawing_template
     from datetime import datetime
 
     step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
@@ -690,8 +691,8 @@ def api_drawing_data(model_code):
 
     供前端 cad-viewer 渲染或调试用。
     """
-    import drawing_engine
-    import drawing_template
+    from core import drawing_engine
+    from drawing.rule_template import drawing_template
     from datetime import datetime
 
     step_path = os.path.join(OUT_DIR, model_code, "assembly.step")
@@ -842,7 +843,7 @@ def api_drawing_view_palette(model_code):
             "elapsed": float
         }
     """
-    import drawing_engine
+    from core import drawing_engine
 
     shape_path = _find_model_shape_path(model_code)
     if not shape_path:
@@ -873,7 +874,7 @@ def api_drawing_view_single(model_code, view_name):
             "view": {"view_name", "label", "visible", "hidden", "bbox", "seg_count"}
         }
     """
-    import drawing_engine
+    from core import drawing_engine
 
     shape_path = _find_model_shape_path(model_code)
     if not shape_path:

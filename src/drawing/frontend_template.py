@@ -8,7 +8,7 @@
 import json
 import os
 
-import drawing_engine
+from core import drawing_engine
 
 
 def load_frontend_template(path):

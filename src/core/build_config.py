@@ -22,7 +22,9 @@ import sys
 import json
 import argparse
 
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# 本文件位于 src/core/,需上溯三级: core → src → 项目根
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))
 LIB_ROOT = os.path.join(_PROJECT_ROOT, "图库项目")
 OUT_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")
 

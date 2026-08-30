@@ -38,7 +38,7 @@ from OCC.Core.BRepBndLib import brepbndlib
 from OCC.Core.gp import gp_Trsf, gp_Pnt, gp_Dir, gp_Ax1
 
 # 复用 rebuild_assembly 的函数
-import rebuild_assembly as rb
+from core import rebuild_assembly as rb
 
 
 # ==================== 零件加载 ====================

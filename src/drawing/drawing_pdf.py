@@ -9,7 +9,7 @@ STSong-Light。
 渲染时统一做 y 翻转: pdf_y = sheet_height - tmpl_y。
 
 调用方式:
-    from drawing_pdf import render_drawing_pdf
+    from drawing.drawing_pdf import render_drawing_pdf
     render_drawing_pdf(template_result, "out.pdf", params)
 """
 import os
