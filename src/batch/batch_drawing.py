@@ -135,9 +135,11 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
     target_profile = anchor_resolver.resolve_anchors(model_code)
     ctx = dim_rebind.compensation_ctx(base_profile, target_profile)
 
-    # 视图放置:模板里 v.scale 是前端 UI 缩放,与后端渲染无关;
-    # segs 已经是画布 px 坐标(由 px_per_mm 归一化得到),直接用模板位置
-    # placement.scale=1,placement.k 留给 _mark_half_px 等少量需要缩放的细节
+    # 视图放置:模板 v.x/v.y 是图纸 mm 坐标(对齐 SVG viewBox),
+    # v.scale 是前端 UI 缩放比例(无量纲);调色板 segs 是 400x300 缩略图的
+    # 画布像素坐标(由后端按 bbox.scale 把模型 mm 归一化得到)。
+    # 后端 PDF 渲染时:边线像素 × v.scale 即得图纸 mm,与前端 SVG 视觉一致。
+    # k 仍保留 bbox.scale(mm→px),留给 _mark_half_px 等需要反向换算的细节。
     placements = {}
     for v in template_doc["views"]:
         src = v["source_view"]
@@ -145,9 +147,10 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         if not pv:
             raise ValueError(f"目标型号不支持视图: {src}")
         k_target = pv.get("bbox", {}).get("scale") or 1.0
+        view_scale = float(v.get("scale") or 1.0)
         placements[v["id"]] = {
             "x": v["x"], "y": v["y"],
-            "scale": 1.0,  # segs 已是画布 px,不再二次缩放
+            "scale": view_scale,  # 边线 px → 图纸 mm,与前端 SVG transform 一致
             "source_view": src,
             "segs": pv.get("edges", []),
             "hidden": pv.get("hidden_edges", []),
