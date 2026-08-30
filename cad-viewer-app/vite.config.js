@@ -162,6 +162,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // 允许 dev server 读取项目根之外的 cad_viewer_style.json
+    // (前后端共用样式配置,见 docs/前后端显示样式一致方案.md)
+    fs: {
+      allow: [path.resolve(__dirname, '..')]
+    },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:5001',
