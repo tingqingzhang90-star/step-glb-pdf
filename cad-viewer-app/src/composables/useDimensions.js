@@ -3,8 +3,8 @@ import { ref, computed } from 'vue'
 import { createDimEngine, coreFactory } from '@/dimensions/index.js'
 import { toCircle, toLineSeg } from '@/dimensions/geometry.js'
 
-export function useDimensions({ placedViews, selectedViewId, coords }) {
-  const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle' | 'center-mark'
+export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope }) {
+  const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle' | 'center-mark' | 'motor-envelope'
   const dimHoveredEdge = ref(null)   // { seg, transform, viewId, idx, type }
   const dimFirstEdge = ref(null)     // 第一选中边线
   const dimPending = ref(null)       // { mode, first, second } 已选齐对象，等点击固定
@@ -28,7 +28,8 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     getViewMmScale: coords.getViewMmScale,
     edgeRefData: coords.edgeRefData,
     getSvgMousePoint: coords.eventToSheetPoint,
-    resolveDimRef: coords.resolveDimRef
+    resolveDimRef: coords.resolveDimRef,
+    getMotorEnvelope
   }, {
     dimensions,
     dimensionColor,
@@ -36,7 +37,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
   })
 
   const {
-    toggleTool, onDimEdgeSelect, updateDimPreviewAt, commitPendingLinear,
+    toggleTool, onDimEdgeSelect, onMotorEnvelopePick, updateDimPreviewAt, commitPendingLinear,
     onDimMouseDown, onDimDragMove,     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
     activeTool,
@@ -53,6 +54,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     resolveDimRef: coords.resolveDimRef,
     getSvgMousePoint: coords.eventToSheetPoint,
     getSheetPoint: coords.getSheetPoint,
+    getMotorEnvelope,
     selectDim,
     selectView: (id) => { selectedViewId.value = id },
     core: dimCore
@@ -149,6 +151,24 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     if (dimHoveredId.value) dimHoveredId.value = null
 
     if (!activeTool.value) return
+
+    // 电机包络:与具体边线无关,鼠标进入视图范围即按该视图的包络出预览
+    if (activeTool.value === 'motor-envelope') {
+      const pt = coords.eventToSheetPoint(event)
+      const v = pt ? coords.findViewAtPoint(pt) : null
+      const env = v && getMotorEnvelope ? getMotorEnvelope(v) : null
+      if (v && env) {
+        if (dimHoveredEdge.value?.viewId !== v.id) {
+          dimHoveredEdge.value = { view: v, viewId: v.id, motorEnvelope: true }
+        }
+        updateDimPreviewAt(event)
+      } else {
+        if (dimHoveredEdge.value) dimHoveredEdge.value = null
+        if (dimPreview.value) dimPreview.value = null
+      }
+      return
+    }
+
     const hit = target?.closest('[data-dim-view]') ?? null
     if (hit) {
       const viewId = hit.dataset.dimView
@@ -193,7 +213,7 @@ export function useDimensions({ placedViews, selectedViewId, coords }) {
     activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
     renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
-    toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove,
+    toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, selectDim, onDimClick,
     onSvgMouseDown, onSvgMouseMove, onSvgMouseLeave,
     clearTransientSelection, removeByView, resetAll

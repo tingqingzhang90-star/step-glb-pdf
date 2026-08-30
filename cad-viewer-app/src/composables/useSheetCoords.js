@@ -23,6 +23,33 @@ export function useSheetCoords({ placedViews }) {
       && event.clientY >= rect.top && event.clientY <= rect.bottom
   }
 
+  /** 视图内容在图纸坐标下的矩形。
+   *  内容包围盒是视图局部坐标(= mm × bbox.scale),需再乘显示比例 view.scale,
+   *  与视图 <g> 的 transform: translate(view.x, view.y) scale(view.scale) 一致。 */
+  function viewSheetRect(view) {
+    const s = view.scale ?? 1
+    const cb = view.contentBBox
+    const bx = cb ? cb.x : 0
+    const by = cb ? cb.y : 0
+    const bw = cb ? cb.width : (view.bbox?.orig_width ?? view.bbox?.width ?? 0) * (view.bbox?.scale ?? 1)
+    const bh = cb ? cb.height : (view.bbox?.orig_height ?? view.bbox?.height ?? 0) * (view.bbox?.scale ?? 1)
+    return { x: view.x + bx * s, y: view.y + by * s, width: bw * s, height: bh * s }
+  }
+
+  /** 图纸坐标 → 命中的视图(重叠时取最上层)。
+   *  供电机包络等"视图级"工具使用:它们只关心落在哪个视图上,不依赖具体边线命中。 */
+  function findViewAtPoint(point) {
+    if (!point) return null
+    const list = placedViews.value
+    for (let i = list.length - 1; i >= 0; i--) {
+      const r = viewSheetRect(list[i])
+      if (r.width <= 0 || r.height <= 0) continue
+      if (point.x >= r.x && point.x <= r.x + r.width
+        && point.y >= r.y && point.y <= r.y + r.height) return list[i]
+    }
+    return null
+  }
+
   /** 根据引用取边线数据 */
   function getEdgeByRef(viewId, idx, type) {
     const view = placedViews.value.find(v => v.id === viewId)
@@ -74,7 +101,7 @@ export function useSheetCoords({ placedViews }) {
   }
 
   return {
-    svgRef, eventToSheetPoint, isPointerOverSheet,
+    svgRef, eventToSheetPoint, isPointerOverSheet, findViewAtPoint, viewSheetRect,
     getEdgeByRef, getViewDisplayScale, getSheetPoint, getViewMmScale,
     edgeRefData, makeEdgeRef, resolveDimRef
   }

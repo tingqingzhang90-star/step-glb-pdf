@@ -33,9 +33,10 @@ export function createDimEngine(deps) {
     makeEdgeRef,
     resolveDimRef,
     getSvgMousePoint,
+    getSheetPoint,
+    getMotorEnvelope,
     selectDim,
     selectView,
-    getSheetPoint,
     core
   } = deps
 
@@ -107,6 +108,23 @@ export function createDimEngine(deps) {
       return
     }
 
+    if (activeTool.value === 'motor-envelope') {
+      // 电机包络：绑定当前视图的电机包络端面，换型号自动跟随
+      const envelope = getMotorEnvelope ? getMotorEnvelope(view) : null
+      if (!envelope) {
+        ElMessage.warning('该视图下无法标注电机包络尺寸')
+        return
+      }
+      const mousePos = getSvgMousePoint(event)
+      const offset = mousePos
+        ? core.getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, mousePos)
+        : 50
+      const id = core.placeMotorEnvelopeDim(view, envelope, edgeRef, offset, '电机减速机尺寸')
+      if (id) selectDim(id)
+      finishDimPlacement(true)
+      return
+    }
+
     if (activeTool.value === 'linear') {
       // 已选齐被测对象：本次点击在光标处落位
       if (dimPending.value) {
@@ -151,6 +169,28 @@ export function createDimEngine(deps) {
     }
   }
 
+  /** 电机包络落位：由视图透明命中层点击触发。
+   *  电机包络来自后端 motor_envelope、与具体边线无关,只需知道落在哪个视图上,
+   *  因此不走 onDimEdgeSelect(那要求命中某条边线)。 */
+  function onMotorEnvelopePick(event, view) {
+    if (activeTool.value !== 'motor-envelope' || !view) return
+    const envelope = getMotorEnvelope ? getMotorEnvelope(view) : null
+    if (!envelope) {
+      ElMessage.warning('该视图下无法标注电机包络尺寸')
+      return
+    }
+    const mousePos = getSvgMousePoint(event)
+    const offset = mousePos
+      ? core.getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, mousePos)
+      : 50
+    // refs 只记录所属视图：idx/type 对电机包络无意义,重绑走 bind_motor 分支
+    const id = core.placeMotorEnvelopeDim(
+      view, envelope, { viewId: view.id, idx: -1, type: 'edges' }, offset, '电机减速机尺寸')
+    if (id) selectDim(id)
+    dimHoveredEdge.value = null
+    finishDimPlacement(true)
+  }
+
   /** 预览更新（跟随鼠标） */
   function updateDimPreviewAt(event) {
     if (!activeTool.value) return
@@ -158,6 +198,20 @@ export function createDimEngine(deps) {
     if (!mousePos) return
 
     const P = core.previewBuilders
+
+    if (activeTool.value === 'motor-envelope') {
+      if (dimHoveredEdge.value) {
+        const view = dimHoveredEdge.value.view
+        const envelope = getMotorEnvelope ? getMotorEnvelope(view) : null
+        if (envelope) {
+          const offset = core.getMotorEnvelopeOffsetFromMouse(
+            view, envelope, getSheetPoint, mousePos)
+          dimPreview.value = core.buildMotorEnvelopeGeometry(
+            view, envelope, getSheetPoint, offset)
+        }
+      }
+      return
+    }
 
     if (activeTool.value === 'linear') {
       // 待固定态：模式已定，只让偏移跟随鼠标
@@ -298,6 +352,7 @@ export function createDimEngine(deps) {
   return {
     toggleTool,
     onDimEdgeSelect,
+    onMotorEnvelopePick,
     updateDimPreviewAt,
     commitPendingLinear,
     onDimMouseDown,

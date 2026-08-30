@@ -29,6 +29,7 @@
           <el-button size="small" :type="activeTool === 'diameter' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('diameter')">直径</el-button>
           <el-button size="small" :type="activeTool === 'angle' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('angle')">角度</el-button>
           <el-button size="small" :type="activeTool === 'center-mark' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('center-mark')">中心</el-button>
+          <el-button size="small" :type="activeTool === 'motor-envelope' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('motor-envelope')">电机包络</el-button>
         </el-button-group>
         <el-color-picker v-model="dimensionColor" size="small" :predefine="dimensionColorPresets" aria-label="标注颜色" />
         <el-divider direction="vertical" />
@@ -211,6 +212,19 @@
 
             <!-- 标注命中层（仅标注工具激活时） -->
             <g v-if="activeTool" class="dim-hit-layer" pointer-events="stroke">
+              <!-- 电机包络:视图级透明命中区(仅该工具激活时)。
+                   电机包络取自后端包络数据、与具体边线无关,
+                   因此按整个视图区域命中:悬浮即出预览,点击即落位。 -->
+              <g v-if="activeTool === 'motor-envelope'" class="dim-hit-motor">
+                <template v-for="pv in placedViews" :key="'motor-'+pv.id">
+                  <rect
+                    :x="viewSheetRect(pv).x" :y="viewSheetRect(pv).y"
+                    :width="viewSheetRect(pv).width" :height="viewSheetRect(pv).height"
+                    fill="transparent" pointer-events="all"
+                    @mousedown.stop="onMotorEnvelopePick($event, pv)"
+                  />
+                </template>
+              </g>
               <!-- 已放置标注的命中副本(只在标注模式下存在)。
                    真实可见的 .dimension-group 此时 .dim-hit-stroke 让路给边线,
                    由这里统一提供命中——已放置标注与模型边线共享同一命中层,
@@ -496,7 +510,7 @@
               @update:model-value="v => setDimField(selectedDim.id, 'customText', v || null)"
             />
           </div>
-          <div v-if="selectedDim.type === 'linear'" class="prop-row stacked">
+          <div v-if="selectedDim.type === 'linear' && selectedDim.mode !== 'motor-envelope'" class="prop-row stacked">
             <span class="prop-label">绑定电机包络</span>
             <el-switch
               :model-value="!!selectedDim.bind_motor"
@@ -580,31 +594,34 @@ const {
 
 // ===== 图纸坐标换算与边线引用 =====
 const coords = useSheetCoords({ placedViews })
-const { svgRef, getViewDisplayScale } = coords
+const { svgRef, getViewDisplayScale, viewSheetRect } = coords
 
 // ===== 视图拖拽移动 + 投影对齐 =====
 const { alignmentGuides, startMoveView, moveViewTo, endMoveView, clearGuides } =
   useViewDrag({ placedViews, selectedViewId, toSheetPoint: coords.eventToSheetPoint })
 
-// ===== 标注:工具状态机与引擎装配 =====
+// ===== 型号选择与视图调色板数据 =====
+// 需在标注引擎之前装配:getMotorEnvelope 依赖其 motorEnvelope
 const {
-  activeTool, dimHoveredEdge, dimPending, dimPreview, dimDragging,
+  models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
+  lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope, standardViews, isometricViews,
+  loadModelList, resetPalette, loadViewPalette
+} = useModelPalette()
+
+// ===== 标注:工具状态机与引擎装配 =====
+const getMotorEnvelope = (view) => motorEnvelope.value[view.name]
+
+const {
+  activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview, dimDragging,
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
   dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
-  toggleTool, onDimEdgeSelect, onDimMouseDown, onDimDragMove, onGlobalDimMouseUp,
+  toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimDragMove, onGlobalDimMouseUp,
   onKeyDown, selectDim, onDimClick, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
   onSvgMouseLeave, clearTransientSelection, removeByView, resetAll
-} = useDimensions({ placedViews, selectedViewId, coords })
+} = useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope })
 
 // 需要命中圆的标注工具(其余工具下圆不参与命中)
 const circleHitTools = ['diameter', 'linear', 'center-mark']
-
-// ===== 型号选择与视图调色板数据 =====
-const {
-  models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
-  lastElapsed, modelBbox, standardViews, isometricViews,
-  loadModelList, resetPalette, loadViewPalette
-} = useModelPalette()
 
 // ===== 调色板拖拽放置 =====
 const {
@@ -637,10 +654,17 @@ const DIM_TYPE_LABELS = {
   'center-mark': '中心标记'
 }
 
+const LINEAR_MODE_LABELS = {
+  single: '单边',
+  parallel: '平行间距',
+  center: '圆心距',
+  'circle-edge': '圆心到边',
+  'motor-envelope': '电机包络'
+}
+
 function dimTypeLabel(dim) {
   if (dim.type === 'linear' && dim.mode) {
-    const modeLabels = { single: '单边', parallel: '平行间距', center: '圆心距', 'circle-edge': '圆心到边' }
-    return `线性标注(${modeLabels[dim.mode] || dim.mode})`
+    return `线性标注(${LINEAR_MODE_LABELS[dim.mode] || dim.mode})`
   }
   return DIM_TYPE_LABELS[dim.type] || dim.type
 }

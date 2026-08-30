@@ -13,6 +13,8 @@ export function useModelPalette() {
   const lastElapsed = ref(null)
   const modelBbox = ref({ width: 0, height: 0, depth: 0 })
   const paletteViews = ref({})
+  const motorEnvelope = ref({})
+  const gearboxEnvelope = ref({})
 
   const standardViews = computed(() =>
     Object.entries(paletteViews.value)
@@ -37,6 +39,8 @@ export function useModelPalette() {
   /** 重置调色板数据(切换型号时由上层编排,同步清空已放置视图) */
   function resetPalette() {
     paletteViews.value = {}
+    motorEnvelope.value = {}
+    gearboxEnvelope.value = {}
     viewsLoaded.value = false
     error.value = ''
     lastElapsed.value = null
@@ -54,6 +58,8 @@ export function useModelPalette() {
         return
       }
       paletteViews.value = data.views
+      motorEnvelope.value = data.motor_envelope || {}
+      gearboxEnvelope.value = data.gearbox_envelope || {}
       modelBbox.value = data.model_bbox
       viewsLoaded.value = true
       lastElapsed.value = data.elapsed
@@ -68,7 +74,7 @@ export function useModelPalette() {
 
   return {
     models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
-    lastElapsed, modelBbox,
+    lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope,
     standardViews, isometricViews,
     loadModelList, resetPalette, loadViewPalette
   }

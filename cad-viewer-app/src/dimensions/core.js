@@ -27,6 +27,10 @@ import {
   buildArcPath
 } from './geometry.js'
 import { buildArrowPoints, buildLinearArrows } from './arrow.js'
+import {
+  buildMotorEnvelopeGeometry,
+  getMotorEnvelopeOffsetFromMouse
+} from './motorEnvelope.js'
 
 export function createDimensionCore(deps, ctx) {
   const {
@@ -35,7 +39,8 @@ export function createDimensionCore(deps, ctx) {
     getViewMmScale,
     edgeRefData,
     getSvgMousePoint,
-    resolveDimRef
+    resolveDimRef,
+    getMotorEnvelope
   } = deps
 
   const formatMm = (value) => `${Number(value || 0).toFixed(1).replace(/\.0$/, '')}mm`
@@ -491,6 +496,28 @@ export function createDimensionCore(deps, ctx) {
     return id
   }
 
+  // ===== 电机包络尺寸 =====
+
+  function placeMotorEnvelopeDim(view, envelope, edgeRef, offset = 50, customText = '') {
+    const geometry = buildMotorEnvelopeGeometry(
+      view, envelope, getSheetPoint, offset, customText)
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'linear',
+      mode: 'motor-envelope',
+      refs: [edgeRefData(edgeRef)],
+      bind_motor: true,
+      customText: customText || null,
+      text: geometry.text,
+      spanMm: envelope.span_mm,
+      offset: geometry.offset ?? offset,
+      color: ctx.dimensionColor.value
+    })
+    return id
+  }
+
   // ===== 直径标注 =====
 
   function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4, leaderLength = 30) {
@@ -643,10 +670,20 @@ export function createDimensionCore(deps, ctx) {
   // ===== 渲染 =====
 
   function renderDimension(dim) {
-    if (!dim?.refs?.length) return null
+    if (!dim) return null
 
     let geometry = null
-    if (dim.type === 'linear') {
+    if (dim.type === 'linear' && dim.mode === 'motor-envelope') {
+      const ref = resolveDimRef(dim.refs?.[0])
+      if (!ref) return null
+      const envelope = getMotorEnvelope ? getMotorEnvelope(ref.view) : null
+      if (!envelope) return null
+      geometry = buildMotorEnvelopeGeometry(
+        ref.view, envelope, getSheetPoint, dim.offset, dim.customText || '')
+      if (geometry) {
+        geometry.text = dim.customText || geometry.text
+      }
+    } else if (dim.type === 'linear') {
       const first = resolveDimRef(dim.refs[0])
       if (!first) return null
       if (dim.mode === 'center') {
@@ -680,7 +717,12 @@ export function createDimensionCore(deps, ctx) {
     if (dim.type === 'linear') {
       const first = resolveDimRef(dim.refs[0])
       if (!first) return
-      if (dim.mode === 'center') {
+      if (dim.mode === 'motor-envelope') {
+        const envelope = getMotorEnvelope ? getMotorEnvelope(first.view) : null
+        if (!envelope) return
+        dim.offset = getMotorEnvelopeOffsetFromMouse(
+          first.view, envelope, getSheetPoint, mousePos)
+      } else if (dim.mode === 'center') {
         const second = resolveDimRef(dim.refs[1])
         if (!second) return
         dim.offset = getCenterOffsetFromMouse(first, second, mousePos)
@@ -731,6 +773,7 @@ export function createDimensionCore(deps, ctx) {
     getParallelOffsetFromMouse,
     getCenterOffsetFromMouse,
     getCircleEdgeOffsetFromMouse,
+    getMotorEnvelopeOffsetFromMouse,
     buildLinearSingleGeometry,
     buildLinearParallelGeometry,
     buildLinearCenterGeometry,
@@ -738,11 +781,13 @@ export function createDimensionCore(deps, ctx) {
     buildCenterMarkGeometry,
     buildDiameterGeometry,
     buildAngleGeometry,
+    buildMotorEnvelopeGeometry,
     // 放置
     placeLinearDimSingle,
     placeLinearDimParallel,
     placeLinearCenterDim,
     placeLinearCircleEdgeDim,
+    placeMotorEnvelopeDim,
     placeCenterMarkDim,
     placeDiameterDim,
     placeAngleDim,
