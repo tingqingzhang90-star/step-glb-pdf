@@ -519,10 +519,24 @@
           >
             保存为模板
           </el-button>
+          <el-button
+            size="small"
+            type="success"
+            plain
+            class="full-button"
+            style="margin-left:0;margin-top:8px"
+            @click="showTemplateDrawing = true"
+          >
+            <el-icon><Printer /></el-icon>
+            模板出图(批量生成 PDF)
+          </el-button>
           <pre>{{ drawingDocumentPreview }}</pre>
         </section>
       </aside>
     </main>
+
+    <!-- 模板出图:导入模板 → 选同系列型号 → 批量生成 PDF → 下载 -->
+    <TemplateDrawingPanel v-model="showTemplateDrawing" />
   </div>
 </template>
 
@@ -531,7 +545,7 @@
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading } from '@element-plus/icons-vue'
+import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
 import { usePlacedViews } from '@/composables/usePlacedViews'
@@ -542,6 +556,7 @@ import { useModelPalette } from '@/composables/useModelPalette'
 import { usePaletteDrag } from '@/composables/usePaletteDrag'
 import { buildDrawingDocument } from '@/utils/drawingDocument'
 import { saveDrawingTemplate } from '@/api/drawingApi'
+import TemplateDrawingPanel from '@/components/TemplateDrawingPanel.vue'
 
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
@@ -613,6 +628,7 @@ const drawingDocumentPreview = computed(() => JSON.stringify(
 // ===== 模板保存:当前图纸(基准型号 + 视图布局 + 标注)落盘 =====
 
 const savingTemplate = ref(false)
+const showTemplateDrawing = ref(false)
 
 const DIM_TYPE_LABELS = {
   linear: '线性标注',

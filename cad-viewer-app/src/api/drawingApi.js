@@ -34,3 +34,44 @@ export async function fetchDrawingTemplates() {
   const res = await fetch('/api/drawing-templates')
   return res.json()
 }
+
+// ===== 模板出图:导入模板 → 选同系列型号 → 生成 → 下载 =====
+
+/** 上传模板文件(前端导出的实例模板 JSON) */
+export async function uploadDrawingTemplate(file) {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/api/template-drawing/upload', {
+    method: 'POST',
+    body: form
+  })
+  return res.json()
+}
+
+/** 列出与模板同系列、且已生成过模型的全部型号 */
+export async function fetchSeriesModels({ identity, templateId } = {}) {
+  const qs = new URLSearchParams()
+  if (identity) qs.set('identity', identity)
+  if (templateId) qs.set('template_id', templateId)
+  const res = await fetch(`/api/template-drawing/series-models?${qs}`)
+  return res.json()
+}
+
+/** 用模板对选定型号批量出图 */
+export async function generateFromTemplate(templateId, models) {
+  const res = await fetch('/api/template-drawing/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template_id: templateId, models })
+  })
+  return res.json()
+}
+
+/** PDF 下载地址(pdf 为相对项目根路径) */
+export function pdfDownloadUrl(pdfRelPath) {
+  return `/api/template-drawing/download/${pdfRelPath}`
+}
+
+export function pdfPreviewUrl(pdfRelPath) {
+  return `/api/template-drawing/preview/${pdfRelPath}`
+}

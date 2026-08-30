@@ -804,6 +804,192 @@ def api_list_drawing_templates():
     return jsonify({"ok": True, "templates": templates})
 
 
+# ===================== 模板出图路由(导入模板 → 选型号 → 生成 → 下载) =====================
+
+@app.route("/api/template-drawing/upload", methods=["POST"])
+def api_upload_drawing_template():
+    """上传前端导出的实例模板 JSON
+
+    支持两种提交方式:
+      1. multipart/form-data,字段 file(模板 .json 文件)
+      2. application/json,请求体即模板文档
+    落盘到 data/templates/engineering/<model_id>.json,并补全模板身份。
+    """
+    doc = None
+    if request.files:
+        f = request.files.get("file")
+        if f is None:
+            return jsonify({"ok": False, "error": "缺少 file 字段"}), 400
+        try:
+            doc = json.loads(f.read().decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            return jsonify({"ok": False, "error": f"模板不是合法 UTF-8 JSON: {e}"}), 400
+    else:
+        doc = request.get_json(silent=True)
+
+    if not isinstance(doc, dict):
+        return jsonify({"ok": False, "error": "模板内容必须是 JSON 对象"}), 400
+    model_id = doc.get("model_id")
+    views = doc.get("views")
+    if not model_id or not isinstance(model_id, str):
+        return jsonify({"ok": False, "error": "模板缺少 model_id 字段"}), 400
+    if not views:
+        return jsonify({"ok": False, "error": "模板 views 为空"}), 400
+
+    doc = dict(doc)
+    doc["template_kind"] = "frontend-instance"
+    doc["template_identity"] = _template_identity(model_id)
+    doc["schema_version"] = 1
+
+    os.makedirs(TEMPLATES_DIR, exist_ok=True)
+    path = os.path.join(TEMPLATES_DIR, f"{model_id}.json")
+    try:
+        with open(path, "w", encoding="utf-8") as fp:
+            json.dump(doc, fp, ensure_ascii=False, indent=2)
+    except OSError as e:
+        return jsonify({"ok": False, "error": f"写入失败: {e}"}), 500
+
+    return jsonify({
+        "ok": True,
+        "template_id": model_id,
+        "identity": doc["template_identity"],
+        "view_count": len(views),
+        "annotation_count": len(doc.get("annotations", [])),
+    })
+
+
+@app.route("/api/template-drawing/series-models")
+def api_series_models():
+    """列出与指定模板身份同系列、且已生成过模型的全部型号
+
+    查询参数:
+        identity  模板系列身份(型号前三段),或
+        template_id  已保存模板的 model_id(二者给其一)
+    """
+    identity = request.args.get("identity", "").strip()
+    template_id = request.args.get("template_id", "").strip()
+    if not identity and template_id:
+        identity = _template_identity(template_id)
+    if not identity:
+        return jsonify({"ok": False, "error": "缺少 identity 或 template_id"}), 400
+
+    if not os.path.isdir(OUT_DIR):
+        return jsonify({"ok": True, "identity": identity, "models": []})
+
+    models = []
+    for name in sorted(os.listdir(OUT_DIR)):
+        model_dir = os.path.join(OUT_DIR, name)
+        if not os.path.isdir(model_dir):
+            continue
+        if _template_identity(name) != identity:
+            continue
+        has_step = os.path.isfile(os.path.join(model_dir, "assembly.step"))
+        has_brep = os.path.isfile(os.path.join(model_dir, "assembly.brep"))
+        if not (has_step or has_brep):
+            continue  # 无形状文件,无法出图
+        models.append({
+            "model_code": name,
+            "has_pdf": os.path.isfile(
+                os.path.join(model_dir, "drawing_frontend.pdf")),
+        })
+    return jsonify({"ok": True, "identity": identity, "models": models})
+
+
+@app.route("/api/template-drawing/generate", methods=["POST"])
+def api_generate_from_template():
+    """用实例模板对选定型号批量生成工程图 PDF
+
+    请求体:
+        template_id  已保存模板的 model_id(必填)
+        models       型号编码数组(必填,可多选)
+    返回每个型号的出图结果(ok / pdf / 标注命中情况 / 失配原因)。
+    """
+    from batch import batch_drawing as bd
+
+    body = request.get_json(silent=True) or {}
+    template_id = body.get("template_id")
+    models = body.get("models") or []
+    if not template_id:
+        return jsonify({"ok": False, "error": "缺少 template_id"}), 400
+    if not isinstance(models, list) or not models:
+        return jsonify({"ok": False, "error": "models 必须是非空数组"}), 400
+
+    tpl_path = os.path.join(TEMPLATES_DIR, f"{template_id}.json")
+    if not os.path.isfile(tpl_path):
+        return jsonify({
+            "ok": False,
+            "error": f"模板不存在: {template_id}(请先上传或保存模板)"}), 404
+
+    try:
+        with open(tpl_path, "r", encoding="utf-8") as f:
+            template_doc = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return jsonify({"ok": False, "error": f"模板读取失败: {e}"}), 500
+
+    tmpl_identity = template_doc.get("template_identity") or \
+        _template_identity(template_doc.get("model_id", ""))
+    # 同系列校验:不同系列的型号几何差异过大,共用模板无意义
+    rejected = [m for m in models if _template_identity(m) != tmpl_identity]
+    if rejected:
+        return jsonify({
+            "ok": False,
+            "error": f"以下型号与模板系列({tmpl_identity})不同: "
+                     f"{', '.join(rejected)}",
+            "rejected": rejected,
+        }), 400
+
+    try:
+        results = bd.run_frontend(models, template_doc, OUT_DIR)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"出图失败: {e}"}), 500
+
+    out = []
+    for r in results:
+        pdf_abs = r.get("pdf") or ""
+        rel = os.path.relpath(pdf_abs, _PROJECT_ROOT).replace("\\", "/") \
+            if pdf_abs else None
+        out.append({
+            "model_code": r.get("model_code"),
+            "ok": bool(r.get("ok")),
+            "error": r.get("error"),
+            "pdf": rel,                       # 相对项目根,供下载接口使用
+            "elapsed": r.get("elapsed"),
+            "dims": r.get("dims", []),
+            "unmatched": r.get("unmatched", []),
+        })
+    return jsonify({
+        "ok": True,
+        "identity": tmpl_identity,
+        "template_id": template_id,
+        "results": out,
+    })
+
+
+@app.route("/api/template-drawing/download/<path:relpath>")
+def api_download_template_pdf(relpath):
+    """下载生成的工程图 PDF(relpath 为相对项目根的路径)"""
+    # 防目录穿越:规范化后必须仍在项目根内
+    abs_path = os.path.abspath(os.path.join(_PROJECT_ROOT, relpath))
+    if not abs_path.startswith(os.path.abspath(_PROJECT_ROOT) + os.sep):
+        return jsonify({"ok": False, "error": "非法路径"}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    return send_file(abs_path, mimetype="application/pdf",
+                     as_attachment=True,
+                     download_name=os.path.basename(abs_path))
+
+
+@app.route("/api/template-drawing/preview/<path:relpath>")
+def api_preview_template_pdf(relpath):
+    """在线预览生成的工程图 PDF(浏览器内嵌打开,非下载)"""
+    abs_path = os.path.abspath(os.path.join(_PROJECT_ROOT, relpath))
+    if not abs_path.startswith(os.path.abspath(_PROJECT_ROOT) + os.sep):
+        return jsonify({"ok": False, "error": "非法路径"}), 400
+    if not os.path.isfile(abs_path):
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    return send_file(abs_path, mimetype="application/pdf")
+
+
 # ===================== SolidWorks 风格视图面板路由 =====================
 
 def _find_model_shape_path(model_code):
