@@ -193,11 +193,6 @@ async function loadOptions(){
   // 系列
   const sel = document.getElementById('series');
   sel.innerHTML = OPTS.series.map(s=>`<option value="${s.name}">${s.name}</option>`).join('');
-  // 电机编号
-  const mc = document.getElementById('motorCode');
-  mc.innerHTML = OPTS.motor_codes.map(m=>`<option value="${m.code}">${m.code} - ${m.name}</option>`).join('')
-    + `<option value="">不编入型号(--motor 回退)</option>`;
-  mc.value = 'D11';
   sel.addEventListener('change', onSeriesChange);
   document.getElementById('type').addEventListener('change', updateCode);
   document.getElementById('motorCode').addEventListener('change', updateCode);
@@ -214,6 +209,10 @@ function onSeriesChange(){
   if(!s) return;
   fillSelect('mount', s.mount.length?s.mount:['H2']);
   fillSelect('load', s.load.length?s.load:['K1']);
+  // 电机按系列填充:250 是三相异步电机,JDG 是汇川伺服,各系列可选电机不同
+  const mc = document.getElementById('motorCode');
+  mc.innerHTML = (s.motor||[]).map(m=>`<option value="${m}">${m}</option>`).join('')
+    + `<option value="">不编入型号</option>`;
   // 行程范围
   const strokes = s.strokes;
   if(strokes.length){
@@ -233,7 +232,8 @@ function fillSelect(id, arr){
 }
 
 function updateCode(){
-  const series = document.getElementById('series').value.replace(/[^\d]/g,'');
+  // 系列号取系列名去掉连接方式后缀:250直连→250,JDG45直连→JDG45
+  const series = document.getElementById('series').value.replace(/(直连|折返)$/,'');
   const type = document.getElementById('type').value;
   const mount = document.getElementById('mount').value;
   const load = document.getElementById('load').value;
@@ -251,16 +251,12 @@ async function doBuild(){
   const area = document.getElementById('resultArea');
   const code = document.getElementById('codePreview').textContent;
   const seriesName = document.getElementById('series').value;
-  const mc = document.getElementById('motorCode').value;
   btn.disabled = true; btn.classList.add('building');
   btn.innerHTML = '<span class="spinner"></span>生成中...';
   area.innerHTML = '<div class="empty"><span class="spinner"></span>正在装配,约 10~20 秒...</div>';
   try{
+    // 未选电机时后端按该系列配置取默认电机,不写死 250 的电机
     const body = {model_code: code, series: seriesName};
-    if(!mc){
-      // 无电机编号,传 motor 回退(取 D11 对应的中文名)
-      body.motor = '11kw电机';
-    }
     const r = await fetch('/api/build',{
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(body)

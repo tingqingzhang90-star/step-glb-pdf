@@ -21,6 +21,9 @@
 # 零件 STEP 目录（导出的中间产物）
 parts_step/
 
+# 零件库（按系列导出的 STEP/BREP 产物，体积大，不入库）
+library/
+
 # 输出目录（STEP/GLB 产物）
 output/
 

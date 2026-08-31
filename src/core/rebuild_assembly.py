@@ -24,15 +24,23 @@ import time
 import tempfile
 
 # ---------- 配置 ----------
-# 路径相对于项目根目录 e:\分享代码\step__glb_pdf
 # 本文件位于 src/core/,需上溯三级: core → src → 项目根
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
-PARTS_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
-MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
-CONFIG_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")
-OUT_DIR = os.path.join(_PROJECT_ROOT, "output")
-CYLINDER_STEP = "250缸体.step"  # 缸体零件（用于拉伸验证）
+# 允许以脚本方式直跑(python src/core/rebuild_assembly.py)
+if os.path.join(_PROJECT_ROOT, "src") not in sys.path:
+    sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
+
+from core import paths  # noqa: E402  依赖上面的 sys.path 补齐
+
+DEFAULT_SERIES = "250直连"
+# 以下三项随 set_series() 切换。anchor_resolver 等模块通过 rb.X 取当前值,
+# 因此切换系列必须在任何零件读取之前完成。
+PARTS_DIR = paths.parts_dir(DEFAULT_SERIES)
+MATRIX_JSON = paths.transform_json(DEFAULT_SERIES)
+PART_SEARCH_PATH = paths.part_search_dirs(DEFAULT_SERIES)
+CONFIG_DIR = paths.CONFIG_DIR
+OUT_DIR = paths.OUT_DIR
 
 # 路径回退修复后，4 个电机/刹车件已能从装配体同目录找到并导出，无需跳过
 # 若某个零件确实导出失败，可在此处添加其 step 文件名
@@ -54,6 +62,39 @@ DEFAULT_MOTOR = "11kw电机"
 def log(msg):
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+def set_series(series_name):
+    """切换当前激活系列,刷新零件目录 / 变换矩阵 / 查找路径"""
+    global PARTS_DIR, MATRIX_JSON, PART_SEARCH_PATH
+    PARTS_DIR = paths.parts_dir(series_name)
+    MATRIX_JSON = paths.transform_json(series_name)
+    PART_SEARCH_PATH = paths.part_search_dirs(series_name)
+
+
+def resolve_part_file(step_file):
+    """按 系列零件目录 → 共享件目录 定位 STEP,都没找到则返回系列目录下的路径"""
+    for d in PART_SEARCH_PATH:
+        p = os.path.join(d, step_file)
+        if os.path.exists(p):
+            return p
+    return os.path.join(PARTS_DIR, step_file)
+
+
+def resolve_motor(config, motor):
+    """确定本系列的电机:指定了要校验在可选范围内,未指定取系列默认
+
+    各系列电机表不同(250 是 kw 三相电机,JDG 是汇川伺服),写死默认值
+    会让新系列拿到别的系列电机。
+    """
+    available = list(config.get("motor", {}).keys())
+    if not available:
+        return motor
+    if motor and motor not in available:
+        raise ValueError(f"本系列没有电机「{motor}」,可选: {available}")
+    if not motor:
+        return DEFAULT_MOTOR if DEFAULT_MOTOR in available else available[0]
+    return motor
 
 
 def check_env():
@@ -340,11 +381,10 @@ def parse_model_code(code):
         stroke = "L" + stroke_raw
     else:
         stroke = stroke_raw
-    # 电机编号(可选,第5段)
+    # 电机段(可选):既可能是编号(D11),也可能直接写电机名
+    # JDG 系列用汇川伺服,不在 MOTOR_CODES 里,此时原样当电机名,由系列配置校验
     motor_code = parts[4] if len(parts) >= 5 else None
-    motor = MOTOR_CODES.get(motor_code) if motor_code else None
-    if motor_code and not motor:
-        raise ValueError(f"未知电机编号: {motor_code} (可选: {', '.join(MOTOR_CODES)})")
+    motor = MOTOR_CODES.get(motor_code, motor_code) if motor_code else None
     return {"series": series, "type": conn_type, "mount": mount,
             "load": load, "stroke": stroke,
             "motor_code": motor_code, "motor": motor}
@@ -682,7 +722,7 @@ def step1_read_all_parts(parts_data):
         if not step_file or step_file in MISSING_PARTS:
             log(f"  ⏭ 跳过 {name} (缺失或无 step_file)")
             continue
-        path = os.path.join(PARTS_DIR, step_file)
+        path = resolve_part_file(step_file)
         if not os.path.exists(path):
             log(f"  ✗ 文件不存在: {path}")
             continue
@@ -1057,9 +1097,9 @@ def build_assembly(model_code, motor=None, series=None):
     os.makedirs(OUT_DIR, exist_ok=True)
 
     sel = parse_model_code(model_code)
-    motor = sel.get("motor") or motor or DEFAULT_MOTOR
     log(f"选型解析: 系列={sel['series']} 类型={sel['type']} "
-        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']} 电机={motor}")
+        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']} "
+        f"电机={sel.get('motor_code') or '(未指定)'}")
 
     # 确定系列目录名
     if series:
@@ -1070,14 +1110,18 @@ def build_assembly(model_code, motor=None, series=None):
         series_name = f"{sel['series']}折返"
 
     # 加载配置
-    config_path = os.path.join(CONFIG_DIR, f"{series_name}.json")
+    config_path = paths.config_path(series_name)
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"配置不存在: {config_path},请先运行 build_config.py")
     config = load_config(series_name)
+    motor = resolve_motor(config, sel.get("motor") or motor)
+    log(f"电机选型: {motor}")
+    # 切换激活系列:后续零件读取与 anchor_resolver(rb.PARTS_DIR)都依赖它
+    set_series(series_name)
 
     # 计算选型显隐
     visibility = resolve_visibility(config, sel['mount'], sel['load'], motor)
-    with open(MATRIX_JSON, "r", encoding="utf-8") as f:
+    with open(paths.transform_json(series_name), "r", encoding="utf-8") as f:
         parts_data = json.load(f)
     shown, hidden = apply_selection(parts_data, visibility)
     log(f"零件显隐: 显示 {shown} 个, 抑制 {hidden} 个 (共 {len(parts_data)})")
@@ -1162,8 +1206,9 @@ def build_assembly(model_code, motor=None, series=None):
     # Step 4: 缸体验证
     t_stretch = 0.0
     cyl_out = None
-    cylinder_src = os.path.join(PARTS_DIR, CYLINDER_STEP)
-    if os.path.exists(cylinder_src) and cyl:
+    cyl_part = config.get("cylinder_part")
+    cylinder_src = resolve_part_file(f"{cyl_part}.step") if cyl_part else ""
+    if cyl_part and os.path.exists(cylinder_src) and cyl:
         cylinder_shape = read_step(cylinder_src)
         _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_path)
         cyl_out = cyl_path

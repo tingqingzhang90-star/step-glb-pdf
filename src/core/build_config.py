@@ -22,11 +22,20 @@ import sys
 import json
 import argparse
 
+# Windows 控制台默认 GBK,打印中文系列名会 UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 # 本文件位于 src/core/,需上溯三级: core → src → 项目根
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
-LIB_ROOT = os.path.join(_PROJECT_ROOT, "图库项目")
-OUT_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")
+# 允许以脚本方式直跑(python src/core/build_config.py)
+if os.path.join(_PROJECT_ROOT, "src") not in sys.path:
+    sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
+
+from core import paths  # noqa: E402  依赖上面的 sys.path 补齐
+
+LIB_ROOT = paths.LIB_ROOT
 
 # "250底部法兰前盖<1>" → ("250底部法兰前盖", 1)
 _FEATURE_RE = re.compile(r"^(.+?)<(\d+)>$")
@@ -82,15 +91,29 @@ def build_mount_or_load(rows, label):
 
 
 def build_motor(rows):
-    """电机表 → {电机型号: {reducer, on:[...], off:[...]}}"""
+    """电机表 → {电机型号: {reducer, on:[...], off:[...]}}
+
+    两种表结构并存:[电机, 减速机, OnFeature, OffFeature] 与
+    [电机减速机, OnFeature, OffFeature]。按表头定位列,不按下标硬取,
+    否则少一列的系列(JDG 等)会 IndexError。
+    """
+    header = [str(c).strip().lower() if c else "" for c in rows[0]]
+    if "onfeature" in header and "offfeature" in header:
+        idx_on = header.index("onfeature")
+        idx_off = header.index("offfeature")
+    else:
+        idx_on, idx_off = (2, 3) if len(rows[0]) >= 4 else (1, 2)
+    idx_reducer = 1 if idx_on >= 2 else None
+
     cfg = {}
     for r in rows[1:]:  # 跳过表头
         if not r or not r[0]:
             continue
+        reducer = r[idx_reducer] if idx_reducer is not None and idx_reducer < len(r) else ""
         cfg[str(r[0]).strip()] = {
-            "reducer": str(r[1]).strip() if r[1] else "",
-            "on": parse_feature_list(r[2]),
-            "off": parse_feature_list(r[3]),
+            "reducer": str(reducer).strip() if reducer else "",
+            "on": parse_feature_list(r[idx_on]) if idx_on < len(r) else [],
+            "off": parse_feature_list(r[idx_off]) if idx_off < len(r) else [],
         }
     return cfg
 
@@ -178,53 +201,45 @@ def detect_cylinder_part(parts_path):
     return None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("series_dir", nargs="?",
-                    default=os.path.join(LIB_ROOT, "250直连"))
-    ap.add_argument("--parts", default=os.path.join(_PROJECT_ROOT, "data", "parts_transform.json"))
-    args = ap.parse_args()
+def _read_tables(series_dir):
+    """读取系列目录下的装配表
 
-    series_dir = args.series_dir
-    series_name = os.path.basename(series_dir.rstrip("\\/"))
-    print(f"系列目录: {series_dir}")
-    print(f"系列名:   {series_name}")
-
-    # 读取 4 张表(文件名固定)
+    电机表在不同系列里叫"电机.xlsx"或"电机减速机.xlsx",两个名字都试。
+    """
     def xlsx(name):
         p = os.path.join(series_dir, name)
         if not os.path.exists(p):
-            print(f"  ⚠ 缺失: {name}")
+            print(f"  [缺失] {name}")
             return None
         return read_xlsx_rows(p)
 
-    mount_rows = xlsx("安装方式.xlsx")
-    load_rows = xlsx("负载连接方式.xlsx")
-    motor_rows = xlsx("电机.xlsx")
-    cyl_rows = xlsx("缸体长度.xlsx")
-    # 部分系列电机表名为"电机减速机.xlsx"
-    if motor_rows is None:
-        motor_rows = xlsx("电机减速机.xlsx")
-        if motor_rows is not None:
-            print("  (使用 电机减速机.xlsx 作为电机表)")
+    motor = xlsx("电机.xlsx")
+    if motor is None:
+        motor = xlsx("电机减速机.xlsx")
+    return {"mount": xlsx("安装方式.xlsx"),
+            "load": xlsx("负载连接方式.xlsx"),
+            "motor": motor,
+            "cylinder": xlsx("缸体长度.xlsx")}
 
-    mount = build_mount_or_load(mount_rows, "mount") if mount_rows else {}
-    load = build_mount_or_load(load_rows, "load") if load_rows else {}
-    motor = build_motor(motor_rows) if motor_rows else {}
-    cylinder = build_cylinder(cyl_rows) if cyl_rows else {}
 
-    # 计算 base_parts(常显件)
+def build_series_config(series_name, parts_json=None):
+    """装配表 + 零件表 → 系列配置字典"""
+    rows = _read_tables(os.path.join(LIB_ROOT, series_name))
+    mount = build_mount_or_load(rows["mount"], "mount") if rows["mount"] else {}
+    load = build_mount_or_load(rows["load"], "load") if rows["load"] else {}
+    motor = build_motor(rows["motor"]) if rows["motor"] else {}
+    cylinder = build_cylinder(rows["cylinder"]) if rows["cylinder"] else {}
+
     controlled = collect_controlled(mount, load, motor)
-    if os.path.exists(args.parts):
-        all_names, _ = load_part_names(args.parts)
+    parts_path = parts_json or paths.transform_json(series_name)
+    if os.path.exists(parts_path):
+        all_names, _ = load_part_names(parts_path)
         base_parts = sorted(n for n in set(all_names) if n not in controlled)
-        cylinder_part = detect_cylinder_part(args.parts)
+        cylinder_part = detect_cylinder_part(parts_path)
     else:
-        base_parts = []
-        cylinder_part = None
-        print(f"  ⚠ 零件表不存在,base_parts 留空: {args.parts}")
-
-    config = {
+        base_parts, cylinder_part = [], None
+        print(f"  [缺失] 零件表,base_parts 留空: {parts_path}")
+    return {
         "series": series_name,
         "cylinder": cylinder,
         "cylinder_part": cylinder_part,
@@ -235,20 +250,40 @@ def main():
         "motor": motor,
     }
 
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out_path = os.path.join(OUT_DIR, f"{series_name}.json")
+
+def write_series_config(config):
+    """落盘 data/configs/<系列>.json,返回写入路径"""
+    os.makedirs(paths.CONFIG_DIR, exist_ok=True)
+    out_path = paths.config_path(config["series"])
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(config, f, ensure_ascii=False, indent=2)
+    return out_path
 
-    print(f"\n✓ 配置已生成: {out_path}")
-    print(f"  安装方式: {list(mount.keys())}")
-    print(f"  负载连接: {list(load.keys())}")
-    print(f"  电机:     {list(motor.keys())}")
-    print(f"  缸体:     C={cylinder.get('C')}, base_D1={cylinder.get('base_D1')}, "
-          f"formula={cylinder.get('formula')}")
-    print(f"  缸体零件: {cylinder_part or '(未检测到,需手动配置)'}")
-    print(f"  常显件({len(base_parts)}): {base_parts}")
-    print(f"  受控件:   {len(controlled)}")
+
+def main():
+    ap = argparse.ArgumentParser(description="系列装配表 → data/configs/<系列>.json")
+    ap.add_argument("series", nargs="?", default="250直连",
+                    help="系列名(图库项目下的子目录名)")
+    ap.add_argument("--all", action="store_true",
+                    help="为所有已导出零件的系列生成配置")
+    ap.add_argument("--parts", default=None,
+                    help="零件表路径,默认 library/series/<系列>/parts_transform.json")
+    args = ap.parse_args()
+
+    targets = paths.list_series() if args.all else [args.series]
+    if not targets:
+        print("没有可处理的系列,先用 part_exporter 导出零件")
+        return
+    for name in targets:
+        print(f"系列: {name}")
+        config = build_series_config(name, args.parts)
+        out_path = write_series_config(config)
+        print(f"  配置: {out_path}")
+        print(f"  安装 {list(config['mount'])}")
+        print(f"  负载 {list(config['load'])}")
+        print(f"  电机 {list(config['motor'])}")
+        print(f"  缸体零件 {config['cylinder_part'] or '(未检测到)'}")
+        print(f"  常显件 {len(config['base_parts'])} 受控件 {config['controlled_count']}")
 
 
 if __name__ == "__main__":

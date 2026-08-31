@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>零件导出面板</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 "Microsoft YaHei", system-ui, sans-serif;
+         background: #f4f6f8; color: #1f2933; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+           background: #1f2933; color: #fff; }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .path { font-size: 12px; color: #9aa5b1; font-family: Consolas, monospace; }
+  header .spacer { flex: 1; }
+  button { padding: 6px 14px; border: 1px solid #cbd2d9; border-radius: 4px;
+           background: #fff; cursor: pointer; font-size: 13px; }
+  button:hover:not(:disabled) { border-color: #52606d; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+  main { display: flex; gap: 16px; padding: 16px 20px; align-items: flex-start; }
+  aside { width: 320px; background: #fff; border: 1px solid #e4e7eb;
+          border-radius: 6px; overflow: hidden; }
+  .toolbar { padding: 10px; border-bottom: 1px solid #e4e7eb;
+             display: flex; gap: 8px; }
+  .toolbar input { flex: 1; padding: 6px 8px; border: 1px solid #cbd2d9;
+                   border-radius: 4px; }
+  #list { max-height: calc(100vh - 220px); overflow-y: auto; }
+  .item { padding: 10px 12px; border-bottom: 1px solid #f0f4f7; cursor: pointer; }
+  .item:hover { background: #f9fafb; }
+  .item.active { background: #e8f0fe; }
+  .item .name { font-weight: 600; }
+  .item .meta { font-size: 12px; color: #7b8794; margin-top: 2px; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
+           font-size: 11px; margin-left: 6px; }
+  .b-done { background: #d3f9d8; color: #1b7f3b; }
+  .b-none { background: #f1f3f5; color: #616e7c; }
+  .b-warn { background: #fff3bf; color: #8d6b00; }
+  .b-err  { background: #ffe3e3; color: #c92a2a; }
+  section.detail { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+  .card { background: #fff; border: 1px solid #e4e7eb; border-radius: 6px;
+          padding: 14px 16px; }
+  .card h2 { margin: 0 0 10px; font-size: 14px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .row select { padding: 6px 8px; border: 1px solid #cbd2d9; border-radius: 4px;
+                min-width: 260px; }
+  label.check { display: flex; align-items: center; gap: 4px; font-size: 13px; }
+  .progress { height: 6px; background: #e4e7eb; border-radius: 3px;
+              overflow: hidden; margin-top: 10px; }
+  .progress > div { height: 100%; background: #2563eb; width: 0;
+                    transition: width .2s; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #f0f4f7; }
+  th { color: #7b8794; font-weight: 500; }
+  .scroll { max-height: 300px; overflow-y: auto; }
+  pre.log { margin: 0; max-height: 260px; overflow-y: auto; background: #1f2933;
+            color: #d8e0e8; padding: 10px; border-radius: 4px; font-size: 12px;
+            font-family: Consolas, monospace; white-space: pre-wrap; }
+  .empty { color: #9aa5b1; padding: 20px; text-align: center; }
+  .card .meta { font-size: 12px; color: #7b8794; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>零件导出面板</h1>
+  <span class="path" id="libRoot"></span>
+  <span class="spacer"></span>
+  <button id="refreshBtn">刷新</button>
+</header>
+<main>
+  <aside>
+    <div class="toolbar">
+      <input id="search" placeholder="搜索系列">
+      <label class="check"><input type="checkbox" id="onlyUnexported"> 未导出</label>
+    </div>
+    <div id="list"></div>
+  </aside>
+  <section class="detail">
+    <div class="card">
+      <h2 id="detailTitle">未选择系列</h2>
+      <div class="row">
+        <select id="asmSelect"></select>
+        <button id="previewBtn" disabled>预览组件</button>
+        <button id="exportBtn" class="primary" disabled>开始导出</button>
+        <button id="cancelBtn" disabled>取消</button>
+        <button id="configBtn" disabled>生成系列配置</button>
+        <label class="check"><input type="checkbox" id="overwrite"> 覆盖已存在</label>
+      </div>
+      <div class="progress"><div id="progressBar"></div></div>
+      <div class="meta" id="taskMeta"></div>
+      <div class="meta" id="configMeta"></div>
+    </div>
+    <div class="card">
+      <h2>组件清单</h2>
+      <div class="scroll"><table id="compTable"><tbody></tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>日志</h2>
+      <pre class="log" id="log"></pre>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let seriesData = [];
+let current = null;
+let poller = null;
+
+async function api(url, options) {
+  const res = await fetch(url, options);
+  return await res.json();
+}
+
+function badge(item) {
+  const n = item.assemblies.length;
+  const st = item.status;
+  if (n === 0) return '<span class="badge b-err">无装配体</span>';
+  let out = n > 1 ? '<span class="badge b-warn">' + n + ' 个装配体</span>' : '';
+  out += st.part_count > 0
+    ? '<span class="badge b-done">已导出 ' + st.part_count + '</span>'
+    : '<span class="badge b-none">未导出</span>';
+  // 没有配置就进不了选型面板的下拉
+  return out + (st.has_config ? '' : '<span class="badge b-warn">缺配置</span>');
+}
+
+function renderList() {
+  const kw = $('search').value.trim().toLowerCase();
+  const onlyUn = $('onlyUnexported').checked;
+  const items = seriesData.filter((s) => {
+    if (kw && !s.series.toLowerCase().includes(kw)) return false;
+    if (onlyUn && s.status.part_count > 0) return false;
+    return true;
+  });
+  $('list').innerHTML = items.length ? items.map((s) => {
+    const meta = s.status.part_count > 0
+      ? '零件 ' + s.status.part_count + ' · ' + (s.status.exported_at || '')
+      : '未导出';
+    return '<div class="item' + (current === s.series ? ' active' : '') +
+      '" data-name="' + s.series + '"><div class="name">' + s.series +
+      badge(s) + '</div><div class="meta">' + meta + '</div></div>';
+  }).join('') : '<div class="empty">没有匹配的系列</div>';
+  $('list').querySelectorAll('.item').forEach((el) => {
+    el.onclick = () => selectSeries(el.dataset.name);
+  });
+}
+
+function selectSeries(name) {
+  current = name;
+  const item = seriesData.find((s) => s.series === name);
+  $('detailTitle').textContent = name;
+  $('asmSelect').innerHTML = (item.assemblies || []).map((a) =>
+    '<option value="' + a.path + '">' + a.name + '</option>').join('');
+  const usable = (item.assemblies || []).length > 0;
+  $('previewBtn').disabled = !usable;
+  $('exportBtn').disabled = !usable;
+  // 生成配置要读零件表,没导出过零件的系列点了也没用
+  $('configBtn').disabled = !(item.status.part_count > 0);
+  $('configMeta').textContent = '';
+  $('compTable').querySelector('tbody').innerHTML = '';
+  renderList();
+}
+
+function renderConfigSummary(cfg) {
+  const join = (a) => (a && a.length ? a.join(' / ') : '-');
+  $('configMeta').textContent = '安装 ' + join(cfg.mount) + ' · 负载 ' + join(cfg.load) +
+    ' · 电机 ' + join(cfg.motor) + ' · 缸体零件 ' + (cfg.cylinder_part || '未检测到') +
+    ' · 常显件 ' + cfg.base_parts + ' · 受控件 ' + cfg.controlled_count;
+}
+
+async function buildConfig() {
+  if (!current) return;
+  $('configBtn').disabled = true;
+  const res = await fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ series: current }),
+  });
+  const data = await res.json();
+  $('configBtn').disabled = false;
+  if (!data.ok) { alert(data.error); return; }
+  renderConfigSummary(data.config);
+  loadSeries();
+}
+
+function renderComponents(comps) {
+  const rows = comps.map((c) => '<tr><td>' + c.name + '</td><td>' + c.file +
+    '</td><td>' + (c.resolved ? '可解析' : '<b>缺失</b>') + '</td><td>' +
+    (c.suppressed ? '抑制' : '常显') + '</td><td>' +
+    (c.has_matrix ? '有' : '无') + '</td></tr>').join('');
+  $('compTable').querySelector('tbody').innerHTML =
+    '<tr><th>组件</th><th>零件文件</th><th>路径</th><th>状态</th><th>矩阵</th></tr>' + rows;
+}
+
+function appendLog(lines) {
+  const box = $('log');
+  box.textContent = (lines || []).join('\n');
+  box.scrollTop = box.scrollHeight;
+}
+
+async function loadSeries() {
+  const data = await api('/api/series');
+  if (!data.ok) { alert(data.error); return; }
+  $('libRoot').textContent = data.lib_root;
+  seriesData = data.series;
+  renderList();
+}
+
+async function loadPreview() {
+  if (!current) return;
+  $('previewBtn').disabled = true;
+  const asm = $('asmSelect').value;
+  const data = await api('/api/preview?series=' + encodeURIComponent(current) +
+    (asm ? '&assembly=' + encodeURIComponent(asm) : ''));
+  $('previewBtn').disabled = false;
+  if (!data.ok) { alert(data.error); return; }
+  renderComponents(data.components);
+}
+
+async function startExport() {
+  const res = await fetch('/api/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      series: current,
+      assembly: $('asmSelect').value || null,
+      overwrite: $('overwrite').checked,
+    }),
+  });
+  const data = await res.json();
+  if (!data.ok) { alert(data.error); return; }
+  $('exportBtn').disabled = true;
+  $('cancelBtn').disabled = false;
+  $('log').textContent = '';
+  poller = setInterval(pollStatus, 1000);
+  pollStatus();
+}
+
+async function pollStatus() {
+  const data = await api('/api/export/status');
+  if (!data.ok) return;
+  const t = data.task;
+  appendLog(t.logs);
+  const pct = t.total ? Math.round(t.done / t.total * 100) : 0;
+  $('progressBar').style.width = pct + '%';
+  const stats = Object.keys(t.stats || {}).map((k) => k + ' ' + t.stats[k]).join(' / ');
+  $('taskMeta').textContent = t.running
+    ? '导出中 ' + t.done + '/' + t.total + ' · ' + stats
+    : (t.error ? '失败: ' + t.error : (t.result ? '已完成 · ' + stats : ''));
+  if (!t.running) {
+    clearInterval(poller);
+    poller = null;
+    $('cancelBtn').disabled = true;
+    $('exportBtn').disabled = !current;
+    loadSeries();
+    if (current) selectSeries(current);
+    if (t.config) renderConfigSummary(t.config);  // 导出结束后自动生成的配置
+  }
+}
+
+$('refreshBtn').onclick = loadSeries;
+$('search').oninput = renderList;
+$('onlyUnexported').onchange = renderList;
+$('previewBtn').onclick = loadPreview;
+$('exportBtn').onclick = startExport;
+$('configBtn').onclick = buildConfig;
+$('cancelBtn').onclick = () => fetch('/api/export/cancel', { method: 'POST' });
+loadSeries();
+</script>
+</body>
+</html>

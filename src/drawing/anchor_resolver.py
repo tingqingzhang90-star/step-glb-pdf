@@ -19,6 +19,7 @@ import os
 import re
 from datetime import date
 
+from core import paths
 from core import rebuild_assembly as rb
 
 _KEY_RE = re.compile(r"^(.+)-(\d+)$")
@@ -101,13 +102,14 @@ def _read_part_shape(step_file):
     from OCC.Core.BRepTools import breptools
     from OCC.Core.TopoDS import TopoDS_Shape
 
-    brep = os.path.join(rb.PARTS_DIR, os.path.splitext(step_file)[0] + ".brep")
+    step_path = rb.resolve_part_file(step_file)
+    brep = os.path.splitext(step_path)[0] + ".brep"
     if os.path.exists(brep):
         shape = TopoDS_Shape()
         breptools.Read(shape, brep, BRep_Builder())
         if not shape.IsNull():
             return shape
-    return rb.read_step(os.path.join(rb.PARTS_DIR, step_file))
+    return rb.read_step(step_path)
 
 
 def _shape_world_bbox(shape, matrix):
@@ -216,7 +218,7 @@ def _load_model_parts(model_code):
     config = rb.load_config(series_name)
     motor = sel.get("motor") or rb.DEFAULT_MOTOR
     visibility = rb.resolve_visibility(config, sel["mount"], sel["load"], motor)
-    with open(rb.MATRIX_JSON, "r", encoding="utf-8") as f:
+    with open(paths.transform_json(series_name), "r", encoding="utf-8") as f:
         parts_data = json.load(f)
     for key, info in parts_data.items():
         info["suppressed"] = not visibility.get(_base_name(key), True)
