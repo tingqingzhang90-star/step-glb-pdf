@@ -15,7 +15,9 @@ import pytest
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
 
+from core import paths  # noqa: E402
 from core import rebuild_assembly as rb  # noqa: E402
+from drawing import anchor_resolver as ar  # noqa: E402
 
 
 def test_parse_model_code_maps_known_motor_code():
@@ -55,3 +57,18 @@ def test_resolve_motor_rejects_motor_of_other_series():
 
 def test_resolve_motor_passthrough_when_series_has_no_motor_table():
     assert rb.resolve_motor({}, "任意电机") == "任意电机"
+
+
+def test_load_model_parts_switches_active_series():
+    """解析非默认系列后必须切换激活系列
+
+    否则零件查找路径停在默认系列(250直连),会去 250直连 目录里找
+    270缸体.step,读取 STEP 直接失败,批量出图接口 500。
+    """
+    if not os.path.exists(paths.config_path("270直连")):
+        pytest.skip("缺少 270直连 系列配置")
+    _, series_name, _, motor, _ = ar._load_model_parts("270-E-H3K2-L100-D11")
+    assert series_name == "270直连"
+    assert motor == "11kw电机"
+    assert rb.PARTS_DIR == paths.parts_dir("270直连")
+    assert rb.PART_SEARCH_PATH[0] == paths.parts_dir("270直连")

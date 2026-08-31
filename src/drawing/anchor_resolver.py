@@ -216,7 +216,10 @@ def _load_model_parts(model_code):
     suffix = "直连" if sel["type"].upper() == "E" else "折返"
     series_name = f"{sel['series']}{suffix}"
     config = rb.load_config(series_name)
-    motor = sel.get("motor") or rb.DEFAULT_MOTOR
+    # 必须切换激活系列:零件查找路径随它变。不切就会去默认系列(250直连)的
+    # 目录里找本系列零件,读取 STEP 直接失败。
+    rb.set_series(series_name)
+    motor = rb.resolve_motor(config, sel.get("motor"))
     visibility = rb.resolve_visibility(config, sel["mount"], sel["load"], motor)
     with open(paths.transform_json(series_name), "r", encoding="utf-8") as f:
         parts_data = json.load(f)
