@@ -1,0 +1,84 @@
+{
+  "sheet": {
+    "size": "A3",
+    "width": 420,
+    "height": 297
+  },
+  "model_id": "160-E-H2K1-L100-4.4kw刹车电机(配115减速机)",
+  "views": [
+    {
+      "id": "view_1",
+      "source_view": "left",
+      "label": "左视",
+      "x": 67,
+      "y": -72,
+      "scale": 0.93,
+      "px_per_mm": 0.2063
+    },
+    {
+      "id": "view_2",
+      "source_view": "front",
+      "label": "前视",
+      "x": -125,
+      "y": -72,
+      "scale": 0.93,
+      "px_per_mm": 0.2063
+    },
+    {
+      "id": "view_3",
+      "source_view": "left_top",
+      "label": "左视上视",
+      "x": 67,
+      "y": 30,
+      "scale": 0.93,
+      "px_per_mm": 0.2063
+    }
+  ],
+  "annotations": [
+    {
+      "id": "dim_1",
+      "type": "linear",
+      "mode": "motor-envelope",
+      "text": "电机减速机尺寸",
+      "customText": "电机减速机尺寸",
+      "bind_motor": true,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 395,
+          "type": "edges"
+        }
+      ],
+      "offset": 45.17991084468049,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_2",
+      "type": "diameter",
+      "mode": null,
+      "text": "ø56mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_2",
+          "idx": 59,
+          "type": "edges"
+        }
+      ],
+      "offset": null,
+      "radius": null,
+      "side": null,
+      "leaderAngle": -0.3547732597474491,
+      "leaderLength": 41.95464079957574,
+      "color": "#303133"
+    }
+  ],
+  "template_kind": "frontend-instance",
+  "template_identity": "160-E-H2K1",
+  "schema_version": 1
+}

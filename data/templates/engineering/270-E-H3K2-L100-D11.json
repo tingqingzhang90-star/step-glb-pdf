@@ -1,0 +1,66 @@
+{
+  "sheet": {
+    "size": "A3",
+    "width": 420,
+    "height": 297
+  },
+  "model_id": "270-E-H3K2-L100-D11",
+  "views": [
+    {
+      "id": "view_5",
+      "source_view": "left",
+      "label": "左视",
+      "x": 47,
+      "y": -60,
+      "scale": 0.93,
+      "px_per_mm": 0.1618
+    }
+  ],
+  "annotations": [
+    {
+      "id": "dim_3",
+      "type": "linear",
+      "mode": "single",
+      "text": "350mm",
+      "customText": null,
+      "bind_motor": true,
+      "refs": [
+        {
+          "viewId": "view_4",
+          "idx": 11,
+          "type": "edges"
+        }
+      ],
+      "offset": -21.93313423167143,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_4",
+      "type": "linear",
+      "mode": "single",
+      "text": "500mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_5",
+          "idx": 1,
+          "type": "edges"
+        }
+      ],
+      "offset": -16.566458491765474,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    }
+  ],
+  "template_kind": "frontend-instance",
+  "template_identity": "270-E-H3K2",
+  "schema_version": 1
+}
