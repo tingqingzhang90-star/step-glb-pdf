@@ -16,20 +16,20 @@
       "px_per_mm": 0.1545
     },
     {
-      "id": "view_3",
-      "source_view": "back",
-      "label": "后视",
-      "x": -113,
-      "y": -59,
-      "scale": 0.93,
-      "px_per_mm": 0.1545
-    },
-    {
       "id": "view_4",
       "source_view": "left_top",
       "label": "左视上视",
       "x": 69,
       "y": 14,
+      "scale": 0.93,
+      "px_per_mm": 0.1545
+    },
+    {
+      "id": "view_5",
+      "source_view": "front",
+      "label": "前视",
+      "x": -123,
+      "y": -59,
       "scale": 0.93,
       "px_per_mm": 0.1545
     }
@@ -50,27 +50,6 @@
         }
       ],
       "offset": -32.5994883000471,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_6",
-      "type": "linear",
-      "mode": "single",
-      "text": "230mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_3",
-          "idx": 12,
-          "type": "edges"
-        }
-      ],
-      "offset": -51.71150549941551,
       "radius": null,
       "side": null,
       "leaderAngle": null,
@@ -115,8 +94,143 @@
       "offset": null,
       "radius": null,
       "side": null,
-      "leaderAngle": 2.87666100759633,
-      "leaderLength": 85.5334452976121,
+      "leaderAngle": 2.5939302869101466,
+      "leaderLength": 63.75232520841685,
+      "color": "#f56c6c"
+    },
+    {
+      "id": "dim_9",
+      "type": "diameter",
+      "mode": null,
+      "text": "ø80mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_2",
+          "idx": 419,
+          "type": "edges"
+        }
+      ],
+      "offset": null,
+      "radius": null,
+      "side": null,
+      "leaderAngle": 1.378025553172484,
+      "leaderLength": 35.14829505402944,
+      "color": "#f56c6c"
+    },
+    {
+      "id": "dim_10",
+      "type": "linear",
+      "mode": "single",
+      "text": "440mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_2",
+          "idx": 0,
+          "type": "edges"
+        }
+      ],
+      "offset": 20.0957893722577,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#f56c6c"
+    },
+    {
+      "id": "dim_11",
+      "type": "linear",
+      "mode": "parallel",
+      "text": "437mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_2",
+          "idx": 51,
+          "type": "edges"
+        },
+        {
+          "viewId": "view_2",
+          "idx": 67,
+          "type": "edges"
+        }
+      ],
+      "offset": 24.68091771665049,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#f56c6c"
+    },
+    {
+      "id": "dim_12",
+      "type": "center-mark",
+      "mode": null,
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_4",
+          "idx": 45,
+          "type": "edges"
+        }
+      ],
+      "offset": null,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#f56c6c"
+    },
+    {
+      "id": "dim_13",
+      "type": "linear",
+      "mode": "single",
+      "text": "350mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_5",
+          "idx": 15,
+          "type": "edges"
+        }
+      ],
+      "offset": 25.692117993483436,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#f56c6c"
+    },
+    {
+      "id": "dim_15",
+      "type": "linear",
+      "mode": "parallel",
+      "text": "205mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_5",
+          "idx": 4,
+          "type": "edges"
+        },
+        {
+          "viewId": "view_5",
+          "idx": 15,
+          "type": "edges"
+        }
+      ],
+      "offset": 22.019510899800423,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
       "color": "#f56c6c"
     }
   ],
