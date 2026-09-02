@@ -10,33 +10,41 @@
       "id": "view_1",
       "source_view": "left",
       "label": "左视",
-      "x": 67,
-      "y": -72,
-      "scale": 0.93,
-      "px_per_mm": 0.2063
-    },
-    {
-      "id": "view_2",
-      "source_view": "front",
-      "label": "前视",
-      "x": -125,
-      "y": -72,
-      "scale": 0.93,
-      "px_per_mm": 0.2063
-    },
-    {
-      "id": "view_3",
-      "source_view": "left_top",
-      "label": "左视上视",
-      "x": 67,
-      "y": 30,
+      "x": 40,
+      "y": -55,
       "scale": 0.93,
       "px_per_mm": 0.2063
     }
   ],
   "annotations": [
     {
-      "id": "dim_1",
+      "id": "dim_5",
+      "type": "linear",
+      "mode": "parallel",
+      "text": "516mm",
+      "customText": "电机",
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 57,
+          "type": "edges"
+        },
+        {
+          "viewId": "view_1",
+          "idx": 680,
+          "type": "edges"
+        }
+      ],
+      "offset": -35.21473151644952,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_6",
       "type": "linear",
       "mode": "motor-envelope",
       "text": "电机减速机尺寸",
@@ -45,11 +53,11 @@
       "refs": [
         {
           "viewId": "view_1",
-          "idx": 395,
+          "idx": -1,
           "type": "edges"
         }
       ],
-      "offset": 45.17991084468049,
+      "offset": -3.0812335569385425,
       "radius": null,
       "side": null,
       "leaderAngle": null,
@@ -57,24 +65,24 @@
       "color": "#303133"
     },
     {
-      "id": "dim_2",
-      "type": "diameter",
-      "mode": null,
-      "text": "ø56mm",
-      "customText": null,
-      "bind_motor": false,
+      "id": "dim_7",
+      "type": "linear",
+      "mode": "motor-envelope",
+      "text": "电机减速机尺寸",
+      "customText": "电机减速机尺寸",
+      "bind_motor": true,
       "refs": [
         {
-          "viewId": "view_2",
-          "idx": 59,
+          "viewId": "view_1",
+          "idx": 499,
           "type": "edges"
         }
       ],
-      "offset": null,
+      "offset": 45.41876499764885,
       "radius": null,
       "side": null,
-      "leaderAngle": -0.3547732597474491,
-      "leaderLength": 41.95464079957574,
+      "leaderAngle": null,
+      "leaderLength": null,
       "color": "#303133"
     }
   ],

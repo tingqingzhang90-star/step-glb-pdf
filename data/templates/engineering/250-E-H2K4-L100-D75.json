@@ -7,57 +7,36 @@
   "model_id": "250-E-H2K4-L100-D75",
   "views": [
     {
-      "id": "view_2",
+      "id": "view_1",
       "source_view": "left",
       "label": "左视",
-      "x": 69,
-      "y": -59,
+      "x": 59,
+      "y": -66,
       "scale": 0.93,
       "px_per_mm": 0.1545
     },
     {
-      "id": "view_4",
-      "source_view": "left_top",
-      "label": "左视上视",
-      "x": 69,
-      "y": 14,
-      "scale": 0.93,
-      "px_per_mm": 0.1545
-    },
-    {
-      "id": "view_5",
+      "id": "view_2",
       "source_view": "front",
       "label": "前视",
-      "x": -123,
-      "y": -59,
+      "x": -125,
+      "y": -66,
+      "scale": 0.93,
+      "px_per_mm": 0.1545
+    },
+    {
+      "id": "view_3",
+      "source_view": "left_top",
+      "label": "左视上视",
+      "x": 59,
+      "y": 1,
       "scale": 0.93,
       "px_per_mm": 0.1545
     }
   ],
   "annotations": [
     {
-      "id": "dim_5",
-      "type": "linear",
-      "mode": "motor-envelope",
-      "text": "电机减速机尺寸",
-      "customText": "电机减速机尺寸",
-      "bind_motor": true,
-      "refs": [
-        {
-          "viewId": "view_2",
-          "idx": 242,
-          "type": "edges"
-        }
-      ],
-      "offset": -32.5994883000471,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_7",
+      "id": "dim_1",
       "type": "linear",
       "mode": "single",
       "text": "440mm",
@@ -65,20 +44,41 @@
       "bind_motor": false,
       "refs": [
         {
-          "viewId": "view_4",
-          "idx": 35,
+          "viewId": "view_1",
+          "idx": 0,
           "type": "edges"
         }
       ],
-      "offset": -21.911523561439253,
+      "offset": 13.427632861119768,
       "radius": null,
       "side": null,
       "leaderAngle": null,
       "leaderLength": null,
-      "color": "#f56c6c"
+      "color": "#303133"
     },
     {
-      "id": "dim_8",
+      "id": "dim_2",
+      "type": "linear",
+      "mode": "single",
+      "text": "137mm",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 5,
+          "type": "edges"
+        }
+      ],
+      "offset": 20.14891805213629,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_3",
       "type": "diameter",
       "mode": null,
       "text": "ø22mm",
@@ -86,7 +86,7 @@
       "bind_motor": false,
       "refs": [
         {
-          "viewId": "view_4",
+          "viewId": "view_3",
           "idx": 57,
           "type": "edges"
         }
@@ -94,12 +94,12 @@
       "offset": null,
       "radius": null,
       "side": null,
-      "leaderAngle": 2.5939302869101466,
-      "leaderLength": 63.75232520841685,
-      "color": "#f56c6c"
+      "leaderAngle": 2.7701100401575376,
+      "leaderLength": 86.90280852866626,
+      "color": "#303133"
     },
     {
-      "id": "dim_9",
+      "id": "dim_4",
       "type": "diameter",
       "mode": null,
       "text": "ø80mm",
@@ -107,7 +107,7 @@
       "bind_motor": false,
       "refs": [
         {
-          "viewId": "view_2",
+          "viewId": "view_1",
           "idx": 419,
           "type": "edges"
         }
@@ -115,79 +115,12 @@
       "offset": null,
       "radius": null,
       "side": null,
-      "leaderAngle": 1.378025553172484,
-      "leaderLength": 35.14829505402944,
-      "color": "#f56c6c"
+      "leaderAngle": 1.3089164791473606,
+      "leaderLength": 30.835304344406705,
+      "color": "#303133"
     },
     {
-      "id": "dim_10",
-      "type": "linear",
-      "mode": "single",
-      "text": "440mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_2",
-          "idx": 0,
-          "type": "edges"
-        }
-      ],
-      "offset": 20.0957893722577,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_11",
-      "type": "linear",
-      "mode": "parallel",
-      "text": "437mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_2",
-          "idx": 51,
-          "type": "edges"
-        },
-        {
-          "viewId": "view_2",
-          "idx": 67,
-          "type": "edges"
-        }
-      ],
-      "offset": 24.68091771665049,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_12",
-      "type": "center-mark",
-      "mode": null,
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_4",
-          "idx": 45,
-          "type": "edges"
-        }
-      ],
-      "offset": null,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_13",
+      "id": "dim_5",
       "type": "linear",
       "mode": "single",
       "text": "350mm",
@@ -195,43 +128,17 @@
       "bind_motor": false,
       "refs": [
         {
-          "viewId": "view_5",
+          "viewId": "view_2",
           "idx": 15,
           "type": "edges"
         }
       ],
-      "offset": 25.692117993483436,
+      "offset": 12.305102451348219,
       "radius": null,
       "side": null,
       "leaderAngle": null,
       "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_15",
-      "type": "linear",
-      "mode": "parallel",
-      "text": "205mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_5",
-          "idx": 4,
-          "type": "edges"
-        },
-        {
-          "viewId": "view_5",
-          "idx": 15,
-          "type": "edges"
-        }
-      ],
-      "offset": 22.019510899800423,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
+      "color": "#303133"
     }
   ],
   "template_kind": "frontend-instance",
