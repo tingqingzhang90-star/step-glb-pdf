@@ -19,7 +19,6 @@ import os
 import sys
 import json
 import glob
-import threading
 
 # 本文件位于 src/web/,需把 src 加入 sys.path 才能导入 core/drawing 包
 _HERE = os.path.dirname(os.path.abspath(__file__))          # src/web
@@ -31,6 +30,7 @@ from flask import (Flask, request, jsonify, send_from_directory,
                    send_file, render_template_string)
 
 from core import rebuild_assembly as rb
+from web import task_pool
 
 _PROJECT_ROOT = os.path.dirname(_SRC_DIR)
 OUT_DIR = rb.OUT_DIR
@@ -42,8 +42,9 @@ _DRAWING_EDITOR_HTML = os.path.join(_HERE, "drawing_editor.html")
 
 app = Flask(__name__)
 
-# pythonOCC 非线程安全,串行化构建请求
-_build_lock = threading.Lock()
+# pythonOCC 非线程安全 → 用进程池隔离:所有 OCC 任务在独立子进程执行,
+# 多用户请求并行推进,不再被单个用户阻塞。详见 web/task_pool.py
+pool = task_pool.get_pool()
 
 
 # ===================== 前端页面(内嵌单文件) =====================
@@ -128,6 +129,20 @@ HTML = r"""<!DOCTYPE html>
           padding:12px;border-radius:8px;font-size:13px;margin-bottom:14px}
   .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;
          background:#1e3a5f;color:#93c5fd;margin-left:6px}
+  .tasks{margin-top:8px;max-height:230px;overflow:auto}
+  .task{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--panel2);
+        border-radius:6px;margin-bottom:6px;font-size:12px}
+  .task .key{flex:1;color:var(--txt);word-break:break-all}
+  .task .tm{color:var(--txt2);font-family:Consolas,monospace;white-space:nowrap}
+  .st{padding:1px 7px;border-radius:9px;font-size:11px;white-space:nowrap}
+  .st.pending{background:#3f3f16;color:#fde047}
+  .st.running{background:#1e3a5f;color:#93c5fd}
+  .st.done{background:#0f2a1a;color:#bbf7d0}
+  .st.error{background:#3b1219;color:#fecaca}
+  .logbox{background:#0b0f14;border:1px solid var(--border);border-radius:7px;
+          padding:10px;margin-top:12px;max-height:200px;overflow:auto;
+          font-family:Consolas,Monaco,monospace;font-size:12px;
+          color:#9aa5b1;white-space:pre-wrap;line-height:1.5}
 </style>
 </head>
 <body>
@@ -179,6 +194,8 @@ HTML = r"""<!DOCTYPE html>
   <div class="card">
     <h2>生成结果</h2>
     <div id="resultArea"><div class="empty">选择参数后点击「生成装配体」</div></div>
+    <h2 style="margin-top:22px">任务队列 <span class="badge" id="poolStat">-</span></h2>
+    <div class="tasks" id="taskList"></div>
     <h2 style="margin-top:22px">已生成文件 <span class="badge" id="fileCount">0</span></h2>
     <div class="files" id="fileList"></div>
   </div>
@@ -201,6 +218,9 @@ async function loadOptions(){
   document.getElementById('strokeNum').addEventListener('input', updateCode);
   onSeriesChange();
   loadFiles();
+  loadTasks();
+  // 任务队列是全局视图(多用户共用),定时刷新看得到别人的排队情况
+  setInterval(loadTasks, 2500);
 }
 
 function onSeriesChange(){
@@ -246,16 +266,31 @@ function updateCode(){
   document.getElementById('d1Val').textContent = (parseInt(strokeNum)||0) + c;
 }
 
+let POLL_TIMER = null;
+const STATUS_TEXT = {pending:'排队',running:'运行中',done:'完成',error:'失败'};
+
+function escapeHtml(s){
+  return String(s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
+function finishBuild(){
+  clearTimeout(POLL_TIMER);
+  const btn = document.getElementById('buildBtn');
+  btn.disabled = false; btn.classList.remove('building');
+  btn.innerHTML = '生成装配体';
+}
+
 async function doBuild(){
   const btn = document.getElementById('buildBtn');
   const area = document.getElementById('resultArea');
   const code = document.getElementById('codePreview').textContent;
   const seriesName = document.getElementById('series').value;
   btn.disabled = true; btn.classList.add('building');
-  btn.innerHTML = '<span class="spinner"></span>生成中...';
-  area.innerHTML = '<div class="empty"><span class="spinner"></span>正在装配,约 10~20 秒...</div>';
+  btn.innerHTML = '<span class="spinner"></span>提交中...';
+  area.innerHTML = '<div class="empty"><span class="spinner"></span>任务提交中...</div>';
   try{
     // 未选电机时后端按该系列配置取默认电机,不写死 250 的电机
+    // 后端异步处理:提交即返回 task_id,随后轮询进度,不阻塞其它用户
     const body = {model_code: code, series: seriesName};
     const r = await fetch('/api/build',{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -263,17 +298,61 @@ async function doBuild(){
     });
     const data = await r.json();
     if(!data.ok){
-      area.innerHTML = `<div class="err-msg">生成失败:\n${data.error||'未知错误'}</div>`;
-    } else {
-      renderResult(data.result);
-      loadFiles();
+      area.innerHTML = `<div class="err-msg">提交失败:\n${data.error||'未知错误'}</div>`;
+      finishBuild(); return;
     }
+    if(data.dedup){
+      area.innerHTML = `<div class="ok-msg">该型号正在生成中,已复用同一任务(不会重复计算)</div>`;
+    }
+    pollTask(data.task_id);
   }catch(e){
     area.innerHTML = `<div class="err-msg">请求异常: ${e}</div>`;
-  }finally{
-    btn.disabled = false; btn.classList.remove('building');
-    btn.innerHTML = '生成装配体';
+    finishBuild();
   }
+}
+
+function pollTask(taskId){
+  const area = document.getElementById('resultArea');
+  clearTimeout(POLL_TIMER);
+  (async ()=>{
+    try{
+      const r = await fetch(`/api/task/${taskId}`);
+      const d = await r.json();
+      if(!d.ok){
+        area.innerHTML = `<div class="err-msg">轮询失败: ${d.error}</div>`;
+        finishBuild(); return;
+      }
+      const t = d.task;
+      if(t.status==='done'){
+        renderResult(t.result);
+        loadFiles(); loadTasks(); finishBuild(); return;
+      }
+      if(t.status==='error'){
+        area.innerHTML = `<div class="err-msg">生成失败:\n${t.error||'未知错误'}</div>`;
+        loadTasks(); finishBuild(); return;
+      }
+      renderProgress(t);
+      loadTasks();
+      POLL_TIMER = setTimeout(()=>pollTask(taskId), 800);
+    }catch(e){
+      area.innerHTML = `<div class="err-msg">轮询异常: ${e}</div>`;
+      finishBuild();
+    }
+  })();
+}
+
+function renderProgress(t){
+  const area = document.getElementById('resultArea');
+  const label = t.status==='running' ? '装配计算中' : '排队中(等待空闲 worker)';
+  const tip = t.status==='pending'
+    ? '· 当前 worker 都在忙,前面的任务完成后自动开始' : '';
+  const log = escapeHtml((t.log||[]).join('\n'));
+  area.innerHTML = `
+    <div class="ok-msg"><span class="spinner"></span>${label} · <b>${escapeHtml(t.key)}</b>
+      · 已耗时 ${t.elapsed}s
+      <div style="font-size:12px;opacity:.75;margin-top:4px">任务 ${t.task_id} ${tip}</div>
+    </div>
+    <div class="logbox">${log || '(等待子进程输出...)'}</div>`;
 }
 
 function renderResult(r){
@@ -311,6 +390,29 @@ function renderResult(r){
       <tr><th>Step 5 GLB 导出</th><td>${t.glb}s</td></tr>
     </table>
   `;
+}
+
+async function loadTasks(){
+  const el = document.getElementById('taskList');
+  if(!el) return;
+  try{
+    const r = await fetch('/api/tasks');
+    const d = await r.json();
+    if(!d.ok) return;
+    const s = d.stats;
+    document.getElementById('poolStat').textContent =
+      `并行 ${s.workers} · 运行 ${s.running} · 排队 ${s.pending}`;
+    if(!d.tasks.length){
+      el.innerHTML = '<div class="empty" style="padding:10px">暂无任务</div>';
+      return;
+    }
+    el.innerHTML = d.tasks.map(t=>`
+      <div class="task">
+        <span class="st ${t.status}">${STATUS_TEXT[t.status]||t.status}</span>
+        <span class="key">${escapeHtml(t.key)}</span>
+        <span class="tm">${t.elapsed}s</span>
+      </div>`).join('');
+  }catch(e){}
 }
 
 async function loadFiles(){
@@ -414,9 +516,21 @@ def api_options():
     return jsonify({"series": series_list, "motor_codes": motor_codes})
 
 
+def _build_result_payload(result):
+    """构建结果里的绝对路径转相对(便于前端下载)"""
+    result = dict(result or {})
+
+    def rel(p):
+        return os.path.relpath(p, OUT_DIR).replace("\\", "/") if p else None
+    result["step_file"] = rel(result.get("step_path"))
+    result["glb_file"] = rel(result.get("glb_path"))
+    result["cylinder_file"] = rel(result.get("cylinder_path"))
+    return result
+
+
 @app.route("/api/build", methods=["POST"])
 def api_build():
-    """按选型生成装配体
+    """提交装配构建任务(多用户并行,异步)
 
     ★ STEP 导出说明:
       装配体 STEP 使用 XCAF 模式导出(rebuild_assembly.step3_export_assembly_step_xcaf),
@@ -426,6 +540,18 @@ def api_build():
       旧版导出(step3_export_assembly_step)使用 STEPControl_Writer + Compound,
       会丢失零件名称,SolidWorks 中显示为 "Open CASCADE STEP translator...",
       该函数已保留但不再在主流程中调用,仅供单零件/单面 STEP 导出或备用回退。
+
+    ★ 并行说明:
+      pythonOCC 非线程安全,任务放进独立子进程执行,由任务池并行调度。
+      默认异步返回 task_id,前端轮询 /api/task/<task_id> 取进度与结果;
+      多个用户同时提交会各自排队到空闲 worker,互不阻塞。
+
+    请求体:
+        model_code  型号编码(必填)
+        motor       电机(可选)
+        series      系列名(可选)
+        wait        true 时阻塞等待,直接返回 {ok, result}(供脚本/测试调用)
+        timeout     wait=true 时的超时秒数(默认 900)
     """
     data = request.get_json(force=True) or {}
     model_code = (data.get("model_code") or "").strip()
@@ -433,20 +559,51 @@ def api_build():
         return jsonify({"ok": False, "error": "model_code 不能为空"}), 400
     motor = (data.get("motor") or "").strip() or None
     series = (data.get("series") or "").strip() or None
+    payload = {"model_code": model_code, "motor": motor, "series": series}
+
+    # 同一型号并发构建会写同一个 output 目录,按型号去重:
+    # 后来者复用同一任务,既省算力也避免产物写坏
+    task_id, dedup = pool.submit("build", model_code, payload)
+
+    if not data.get("wait"):
+        return jsonify({"ok": True, "task_id": task_id, "dedup": dedup}), 202
+
     try:
-        with _build_lock:
-            result = rb.build_assembly(model_code, motor=motor, series=series)
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"ok": False, "error": str(e)}), 500
-    # 路径转相对(便于前端下载)
-    def rel(p):
-        return os.path.relpath(p, OUT_DIR).replace("\\", "/") if p else None
-    result["step_file"] = rel(result.get("step_path"))
-    result["glb_file"] = rel(result.get("glb_path"))
-    result["cylinder_file"] = rel(result.get("cylinder_path"))
-    return jsonify({"ok": True, "result": result})
+        result = pool.wait(task_id, timeout=float(data.get("timeout") or 900))
+    except task_pool.TaskError as e:
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": e.traceback_text,
+                        "task_id": task_id}), 500
+    except TimeoutError as e:
+        return jsonify({"ok": False, "error": str(e), "task_id": task_id}), 504
+    return jsonify({"ok": True, "task_id": task_id,
+                    "result": _build_result_payload(result)})
+
+
+@app.route("/api/task/<task_id>")
+def api_task(task_id):
+    """轮询任务状态与进度
+
+    返回 status(pending/running/done/error)、已耗时、子进程日志尾部。
+    done 时附带 result(构建任务的绝对路径已转成相对下载路径)。
+    """
+    st = pool.status(task_id)
+    if st is None:
+        return jsonify({"ok": False, "error": "任务不存在或已清理: %s"
+                        % task_id}), 404
+    if st["status"] == "done" and st.get("kind") == "build":
+        st["result"] = _build_result_payload(st.get("result"))
+    return jsonify({"ok": True, "task": st})
+
+
+@app.route("/api/tasks")
+def api_tasks():
+    """任务池总览:并行度、各状态任务数、最近任务列表
+
+    多用户场景下可看到彼此的排队情况(谁在跑、谁在等)。
+    """
+    return jsonify({"ok": True, "stats": pool.stats(),
+                    "tasks": pool.list_tasks()})
 
 
 @app.route("/api/files")
@@ -520,9 +677,13 @@ def api_drawing_views(model_code):
         return jsonify({"ok": False, "error": f"未找到 STEP 文件: {model_code}/assembly.step"}), 404
 
     try:
-        with _build_lock:
-            result = drawing_engine.generate_drawing_views_fast(step_path)
+        # OCC 计算放进子进程:多用户同时出图不再互相排队
+        result = pool.run("drawing-views", "views:%s" % model_code,
+                          {"step_path": step_path})
         return jsonify({"ok": True, "result": result})
+    except task_pool.TaskError as e:
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": e.traceback_text}), 500
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -606,10 +767,13 @@ def api_generate_drawing(model_code):
         # 输出路径
         output_pdf = os.path.join(OUT_DIR, model_code, "drawing.pdf")
         
-        # 生成工程图
-        with _build_lock:
-            result = drawing_generator.generate_drawing_pdf(step_path, output_pdf, params)
-        
+        # 生成工程图(OCC 计算在子进程,多用户并行)
+        result = pool.run("drawing-pdf", "pdf:%s" % model_code, {
+            "step_path": step_path,
+            "output_pdf": output_pdf,
+            "params": params,
+        })
+
         if not result["success"]:
             return jsonify({"ok": False, "error": result.get("error", "生成失败")}), 500
         
@@ -661,10 +825,12 @@ def api_drawing_dxf(model_code):
 
         output_dxf = os.path.join(OUT_DIR, model_code, "drawing.dxf")
 
-        with _build_lock:
-            dxf_path, elapsed, unmatched = dxf_exporter.generate_dxf_from_step(
-                step_path, output_dxf, params=params
-            )
+        dxf_path, elapsed, unmatched = pool.run(
+            "drawing-dxf", "dxf:%s" % model_code, {
+                "step_path": step_path,
+                "output_dxf": output_dxf,
+                "params": params,
+            })
 
         return send_file(
             dxf_path,
@@ -672,6 +838,9 @@ def api_drawing_dxf(model_code):
             download_name=f"工程图_{model_code}.dxf"
         )
 
+    except task_pool.TaskError as e:
+        return jsonify({"ok": False, "error": str(e),
+                        "traceback": e.traceback_text}), 500
     except Exception as e:
         import traceback
         return jsonify({
@@ -705,12 +874,13 @@ def api_drawing_data(model_code):
             "scale": "2"
         }
 
-        with _build_lock:
-            views_data = drawing_engine.generate_drawing_views_raw(step_path)
-            template = drawing_template.load_default_template()
-            anchors = drawing_template.load_default_anchors()
-            views_data["anchors"] = anchors
-            drawing_data = drawing_template.apply_template(views_data, template, params)
+        # HLR 投影(OCC)在子进程;模板套用是纯数据运算,留在主进程
+        views_data = pool.run("drawing-views-raw", "raw:%s" % model_code,
+                              {"step_path": step_path})
+        template = drawing_template.load_default_template()
+        anchors = drawing_template.load_default_anchors()
+        views_data["anchors"] = anchors
+        drawing_data = drawing_template.apply_template(views_data, template, params)
 
         return jsonify({
             "ok": True,
@@ -984,11 +1154,17 @@ def api_generate_from_template():
     if err:
         return err
 
-    # 校验通过后才加载出图管线:它顶层依赖 pythonOCC,
-    # 提前 import 会让纯参数校验也背上 OCC 依赖
-    from batch import batch_drawing as bd
+    # 整批作为一个任务丢进子进程:批次内仍串行,但与其它用户的请求并行。
+    # 出图管线顶层依赖 pythonOCC,现在连主进程都不用加载它了
     try:
-        results = bd.run_frontend(models, template_doc, OUT_DIR)
+        results = pool.run("template-batch", "batch:%s" % template_id, {
+            "models": models,
+            "template_doc": template_doc,
+            "out_dir": OUT_DIR,
+        })
+    except task_pool.TaskError as e:
+        return jsonify({"ok": False, "error": f"出图失败: {e}",
+                        "traceback": e.traceback_text}), 500
     except Exception as e:
         return jsonify({"ok": False, "error": f"出图失败: {e}"}), 500
 
@@ -1071,8 +1247,8 @@ def api_drawing_view_palette(model_code):
         return jsonify({"ok": False, "error": f"未找到模型文件(assembly.step 或 assembly.brep): {model_code}"}), 404
 
     try:
-        with _build_lock:
-            result = drawing_engine.generate_all_standard_views(shape_path)
+        result = pool.run("view-palette", "palette:%s" % model_code,
+                          {"shape_path": shape_path})
         # 补充电机/减速机包络投影,供前端"电机包络"标注工具预览
         try:
             from drawing import anchor_resolver
@@ -1133,8 +1309,9 @@ def api_drawing_view_single(model_code, view_name):
         return jsonify({"ok": False, "error": f"未找到模型文件: {model_code}"}), 404
 
     try:
-        with _build_lock:
-            view = drawing_engine.generate_view_by_name(shape_path, view_name)
+        view = pool.run("view-single",
+                        "view:%s:%s" % (model_code, view_name),
+                        {"shape_path": shape_path, "view_name": view_name})
         if view is None:
             return jsonify({"ok": False, "error": f"无效的视图名: {view_name}"}), 400
         return jsonify({"ok": True, "view": view})
@@ -1149,6 +1326,13 @@ if __name__ == "__main__":
     print("  浏览器打开: http://127.0.0.1:5001")
     print("  3D 查看器:   http://127.0.0.1:5001/viewer")
     print("  工程图编辑器: http://127.0.0.1:5001/drawing")
+    print("-" * 56)
+    print(f"  OCC 任务池: {pool.max_workers} 个并行 worker"
+          f" (环境变量 BUILD_POOL_WORKERS 可调)")
     print("=" * 56)
-    # pythonOCC 非线程安全,用单线程串行处理请求
-    app.run(host="127.0.0.1", port=5001, debug=False, threaded=False)
+    # OCC 任务已全部移出主进程(见 web/task_pool.py),这里开多线程:
+    # 请求线程只做提交与轮询,多用户可同时操作,不再互相阻塞
+    try:
+        app.run(host="127.0.0.1", port=5001, debug=False, threaded=True)
+    finally:
+        pool.shutdown(wait=False)
