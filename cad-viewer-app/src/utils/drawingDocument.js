@@ -3,8 +3,8 @@
 // customText: 用户自定义标注文字(如"减速机尺寸"),留空则显示测量值
 // bind_motor: 线性标注绑定电机包络锚点,换电机时两端自动跟随新包络
 
-export function buildDrawingDocument({ sheetSize, sheetWidth, sheetHeight, modelId, placedViews, dimensions }) {
-  return {
+export function buildDrawingDocument({ sheetSize, sheetWidth, sheetHeight, modelId, placedViews, dimensions, placedTables }) {
+  const doc = {
     sheet: {
       size: sheetSize || 'A3',
       width: sheetWidth,
@@ -36,4 +36,18 @@ export function buildDrawingDocument({ sheetSize, sheetWidth, sheetHeight, model
       color: dim.color ?? null
     }))
   }
+  // 表格:独立元素类型,与 views/annotations 并列;空则不写字段
+  if (placedTables && placedTables.length) {
+    doc.tables = placedTables.map(t => ({
+      id: t.id,
+      x: Math.round(t.x),
+      y: Math.round(t.y),
+      col_widths: t.col_widths,
+      row_heights: t.row_heights,
+      border: t.border,
+      text_color: t.text_color,
+      cells: t.cells
+    }))
+  }
+  return doc
 }

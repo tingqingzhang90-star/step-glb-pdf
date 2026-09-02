@@ -10,8 +10,8 @@
       "id": "view_1",
       "source_view": "left",
       "label": "左视",
-      "x": 57,
-      "y": -64,
+      "x": 67,
+      "y": -54,
       "scale": 0.93,
       "px_per_mm": 0.1617
     }
@@ -31,59 +31,12 @@
           "type": "edges"
         }
       ],
-      "offset": 19.012273224372244,
+      "offset": 20.994279069758306,
       "radius": null,
       "side": null,
       "leaderAngle": null,
       "leaderLength": null,
       "color": "#303133"
-    },
-    {
-      "id": "dim_2",
-      "type": "linear",
-      "mode": "parallel",
-      "text": "553mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_1",
-          "idx": 34,
-          "type": "edges"
-        },
-        {
-          "viewId": "view_1",
-          "idx": 88,
-          "type": "edges"
-        }
-      ],
-      "offset": 45.36582527254511,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
-    },
-    {
-      "id": "dim_3",
-      "type": "linear",
-      "mode": "single",
-      "text": "137mm",
-      "customText": null,
-      "bind_motor": false,
-      "refs": [
-        {
-          "viewId": "view_1",
-          "idx": 56,
-          "type": "edges"
-        }
-      ],
-      "offset": 17.33673388775493,
-      "radius": null,
-      "side": null,
-      "leaderAngle": null,
-      "leaderLength": null,
-      "color": "#f56c6c"
     }
   ],
   "template_kind": "frontend-instance",

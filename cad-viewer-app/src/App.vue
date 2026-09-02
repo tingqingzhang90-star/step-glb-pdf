@@ -33,6 +33,21 @@
         </el-button-group>
         <el-color-picker v-model="dimensionColor" size="small" :predefine="dimensionColorPresets" aria-label="标注颜色" />
         <el-divider direction="vertical" />
+        <el-button size="small" :icon="DocumentAdd" @click="insertTechParamsTable">插入表格</el-button>
+        <el-button size="small" :disabled="selectedCells.length < 2" @click="mergeSelected">合并</el-button>
+        <el-button size="small" :disabled="selectedCells.length !== 1" @click="splitSelected">拆分</el-button>
+        <el-input-number v-if="selectedCells.length === 1" size="small" :min="4" :max="40"
+          :model-value="selectedCellFontSize" @update:model-value="onCellFontSizeInput"
+          controls-position="right" style="width:96px" aria-label="字号" />
+        <template v-if="selectedTableId">
+          <el-input-number size="small" :min="0.1" :max="3" :step="0.1"
+            :model-value="selectedTable?.border?.width ?? 0.3" @update:model-value="onBorderWidthInput"
+            controls-position="right" style="width:96px" aria-label="边框宽" />
+          <el-color-picker size="small" :model-value="selectedTable?.border?.color ?? '#303133'"
+            @update:model-value="onBorderColorInput" />
+        </template>
+        <el-button size="small" type="danger" :icon="Delete" :disabled="!selectedTableId" @click="removeSelectedTable">删表</el-button>
+        <el-divider direction="vertical" />
         <el-button size="small" :icon="Delete" :disabled="placedViews.length === 0" @click="clearPlacedViews">清空</el-button>
       </div>
 
@@ -208,6 +223,104 @@
                   />
                 </template>
               </g>
+            </g>
+
+            <!-- 已放置表格:网格 + 合并单元格 + 文字,可拖动整体 -->
+            <g
+              v-for="t in placedTables"
+              :key="t.id"
+              :class="['placed-table', { selected: selectedTableId === t.id }]"
+              @mousedown.stop="onTableMouseDown($event, t)"
+            >
+              <template v-for="lc in tableLogicalCells(t)" :key="`${t.id}-${lc.r}-${lc.c}`">
+                <!-- 左上角格:画边框+文字;被覆盖格:透明只做命中,避免合并区内部出网格线 -->
+                <rect
+                  v-if="lc.isOrigin"
+                  :x="tableColLefts(t)[lc.c]"
+                  :y="tableRowTops(t)[lc.r]"
+                  :width="t.col_widths.slice(lc.c, lc.c + (lc.cell.colspan || 1)).reduce((a, b) => a + b, 0)"
+                  :height="t.row_heights.slice(lc.r, lc.r + (lc.cell.rowspan || 1)).reduce((a, b) => a + b, 0)"
+                  :fill="isCellSelected(t, lc.r, lc.c) ? '#ecf5ff' : 'white'"
+                  :stroke="(t.border && t.border.color) || '#303133'"
+                  :stroke-width="(t.border && t.border.width) || 0.3"
+                  @click.stop="onCellClick($event, t, lc.r, lc.c)"
+                  @dblclick.stop="onCellDblClick($event, t, lc.r, lc.c)"
+                  @contextmenu.prevent.stop="onCellContextMenu($event, t, lc.r, lc.c)"
+                />
+                <rect
+                  v-else
+                  :x="tableColLefts(t)[lc.c]"
+                  :y="tableRowTops(t)[lc.r]"
+                  :width="t.col_widths[lc.c]"
+                  :height="t.row_heights[lc.r]"
+                  fill="transparent"
+                  stroke="none"
+                  @click.stop="onCellClick($event, t, lc.r, lc.c)"
+                  @dblclick.stop="onCellDblClick($event, t, lc.r, lc.c)"
+                  @contextmenu.prevent.stop="onCellContextMenu($event, t, lc.r, lc.c)"
+                />
+                <text
+                  v-if="lc.isOrigin && lc.cell.text"
+                  :x="cellTextX(t, lc)"
+                  :y="cellTextY(t, lc)"
+                  :font-size="(lc.cell.font_size || 13) * 0.2646"
+                  :fill="t.text_color || '#303133'"
+                  :text-anchor="cellTextAnchor(lc.cell)"
+                  :style="{ fontWeight: lc.cell.bold ? 'bold' : 'normal' }"
+                >{{ lc.cell.text }}</text>
+              </template>
+              <!-- 选中态外框:知道当前在操作哪个表 -->
+              <rect
+                v-if="selectedTableId === t.id"
+                :x="t.x" :y="t.y" :width="tableW(t)" :height="tableH(t)"
+                fill="none" stroke="#409eff" stroke-width="1"
+                stroke-dasharray="4,2" vector-effect="non-scaling-stroke"
+                pointer-events="none"
+              />
+              <!-- 四角缩放手柄(仅选中时) -->
+              <template v-if="selectedTableId === t.id">
+                <rect v-for="cr in cornerHandles(t)" :key="`ch-${t.id}-${cr.corner}`"
+                  :x="cr.x - 3" :y="cr.y - 3" width="6" height="6"
+                  fill="#409eff" stroke="#fff" stroke-width="0.5"
+                  vector-effect="non-scaling-stroke"
+                  @mousedown.stop.prevent="startCornerResize($event, t, cr.corner)"
+                  @click.stop
+                />
+              </template>
+              <!-- 列宽/行高手柄:每条内部网格线一个拖点(仅选中时) -->
+              <template v-if="selectedTableId === t.id">
+                <!-- 竖网格线顶端的列宽手柄(c=1..cols-1,拖动调第 c-1 列右边界) -->
+                <circle v-for="c in colResizeHandles(t)" :key="`cr-${t.id}-${c}`"
+                  :cx="tableColLefts(t)[c]" :cy="t.y" r="2.5"
+                  fill="#67c23a" stroke="#fff" stroke-width="0.5"
+                  vector-effect="non-scaling-stroke"
+                  @mousedown.stop.prevent="startColResize($event, t, c - 1)"
+                  @click.stop
+                />
+                <!-- 水平网格线左端的行高手柄(r=1..rows-1) -->
+                <circle v-for="r in rowResizeHandles(t)" :key="`rr-${t.id}-${r}`"
+                  :cx="t.x" :cy="tableRowTops(t)[r]" r="2.5"
+                  fill="#e6a23c" stroke="#fff" stroke-width="0.5"
+                  vector-effect="non-scaling-stroke"
+                  @mousedown.stop.prevent="startRowResize($event, t, r - 1)"
+                  @click.stop
+                />
+              </template>
+              <!-- inline 单元格编辑:双击格子弹出 input -->
+              <foreignObject
+                v-if="editingCell && editingCell.tableId === t.id && editingCell.r === lc0(t).r && editingCell.c === lc0(t).c"
+                :x="lc0(t).x" :y="lc0(t).y" :width="lc0(t).w" :height="lc0(t).h"
+                style="overflow: visible"
+              >
+                <input
+                  ref="cellEditInputRef"
+                  class="cell-edit-input"
+                  :defaultValue="lc0(t).text"
+                  @keyup.enter="commitCellEdit"
+                  @blur="commitCellEdit"
+                  @mousedown.stop
+                />
+              </foreignObject>
             </g>
 
             <!-- 标注命中层（仅标注工具激活时） -->
@@ -549,6 +662,19 @@
       </aside>
     </main>
 
+    <!-- 表格右键菜单:插入/删除行列(fixed 定位,点空白关闭) -->
+    <ul v-if="contextMenu" class="table-ctx-menu"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @click.stop @contextmenu.prevent>
+      <li @click="ctxInsertRow('above')">上方插入行</li>
+      <li @click="ctxInsertRow('below')">下方插入行</li>
+      <li @click="ctxDeleteRow">删除行</li>
+      <li class="ctx-sep"></li>
+      <li @click="ctxInsertCol('left')">左侧插入列</li>
+      <li @click="ctxInsertCol('right')">右侧插入列</li>
+      <li @click="ctxDeleteCol">删除列</li>
+    </ul>
+
     <!-- 模板出图:导入模板 → 选同系列型号 → 批量生成 PDF → 下载 -->
     <TemplateDrawingPanel v-model="showTemplateDrawing" />
   </div>
@@ -557,17 +683,20 @@
 <script setup>
 // 组合根:只做各功能域的组合装配、事件总控与跨域编排。
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
+import { useStyleConfig } from '@/composables/useStyleConfig'
 import { usePlacedViews } from '@/composables/usePlacedViews'
 import { useSheetCoords } from '@/composables/useSheetCoords'
 import { useViewDrag } from '@/composables/useViewDrag'
 import { useDimensions } from '@/composables/useDimensions'
 import { useModelPalette } from '@/composables/useModelPalette'
 import { usePaletteDrag } from '@/composables/usePaletteDrag'
+import { usePlacedTables } from '@/composables/usePlacedTables'
+import { TECH_PARAMS_TABLE } from '@/views/tablePresets'
 import { buildDrawingDocument } from '@/utils/drawingDocument'
 import { saveDrawingTemplate } from '@/api/drawingApi'
 import TemplateDrawingPanel from '@/components/TemplateDrawingPanel.vue'
@@ -577,6 +706,11 @@ const {
   sheetAreaRef, sheetSize, sheetWidth, sheetHeight, sheetZoom, sheetPanning, sheetCardStyle,
   setSheetSize, centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel
 } = useCanvasTransform()
+
+// 注入前后端共享样式(标注字号/线宽等 CSS 变量)到 :root。
+// 必须在此处调用:否则 .dim-text 等一直 fallback 到 9px(=9mm),
+// 前端标注文字会比 PDF 大 2.6 倍
+useStyleConfig().applyToRoot()
 
 const sheetSizeOptions = ['A4', 'A3', 'A2', 'A1', 'A0']
 function onSheetSizeChange(name) {
@@ -630,6 +764,272 @@ const {
   resetPaletteDrag, dispose: disposePaletteDrag
 } = usePaletteDrag({ coords, views: { placedViews, globalScale, placeView }, sheetWidth, sheetHeight })
 
+// ===== 已放置表格:插入/拖拽/编辑/合并 =====
+const {
+  placedTables, selectedTableId, selectedTable, selectedCells,
+  placeTable, selectTable, deleteSelectedTable: removeSelectedTable, clearTables,
+  updateCellText, toggleCellSelect, mergeSelected, splitSelected, findCellAt,
+  insertRow, deleteRow, insertCol, deleteCol,
+  resizeCol, resizeRow, resizeTable,
+  setCellFontSize, setTableBorder
+} = usePlacedTables()
+
+// ===== 表格拖拽状态机:move / corner(四角缩放) / col / row =====
+// 统一管理,避免多种手柄事件互相打架
+const tableDrag = ref(null)       // {type, tableId, start:{...}}
+const editingCell = ref(null)     // {tableId, r, c} inline 编辑中的格
+const contextMenu = ref(null)     // {x, y, tableId, r, c} 右键菜单
+
+function startTableMove(event, table) {
+  const p = coords.eventToSheetPoint(event)
+  tableDrag.value = {
+    type: 'move', tableId: table.id,
+    start: { x: p?.x ?? event.clientX, y: p?.y ?? event.clientY, tx: table.x, ty: table.y }
+  }
+}
+function startCornerResize(event, table, corner) {
+  const p = coords.eventToSheetPoint(event)
+  const w = tableW(table), h = tableH(table)
+  tableDrag.value = {
+    type: 'corner', tableId: table.id, corner,
+    start: { x: p?.x ?? 0, y: p?.y ?? 0, tx: table.x, ty: table.y, w, h }
+  }
+}
+function startColResize(event, table, c) {
+  const p = coords.eventToSheetPoint(event)
+  tableDrag.value = {
+    type: 'col', tableId: table.id, c,
+    start: { x: p?.x ?? 0, w: table.col_widths[c] }
+  }
+}
+function startRowResize(event, table, r) {
+  const p = coords.eventToSheetPoint(event)
+  tableDrag.value = {
+    type: 'row', tableId: table.id, r,
+    start: { y: p?.y ?? 0, h: table.row_heights[r] }
+  }
+}
+function moveTableDrag(event) {
+  const d = tableDrag.value
+  if (!d) return
+  const t = placedTables.value.find(x => x.id === d.tableId)
+  if (!t) return
+  const p = coords.eventToSheetPoint(event)
+  const px = p?.x ?? event.clientX
+  const py = p?.y ?? event.clientY
+  if (d.type === 'move') {
+    t.x = d.start.tx + (px - d.start.x)
+    t.y = d.start.ty + (py - d.start.y)
+  } else if (d.type === 'corner') {
+    const s = d.start
+    let newW = s.w, newH = s.h, dx = 0, dy = 0
+    // 右下角锚定左上;左上角锚定右下并平移
+    if (d.corner === 'se') { newW = Math.max(20, s.w + px - s.x); newH = Math.max(20, s.h + py - s.y) }
+    else if (d.corner === 'ne') { newW = Math.max(20, s.w + px - s.x); newH = Math.max(20, s.h - (py - s.y)); t.y = s.ty + (s.h - newH) }
+    else if (d.corner === 'sw') { newW = Math.max(20, s.w - (px - s.x)); newH = Math.max(20, s.h + py - s.y); t.x = s.tx + (s.w - newW) }
+    else if (d.corner === 'nw') { newW = Math.max(20, s.w - (px - s.x)); newH = Math.max(20, s.h - (py - s.y)); t.x = s.tx + (s.w - newW); t.y = s.ty + (s.h - newH) }
+    resizeTable(t.id, newW, newH)
+  } else if (d.type === 'col') {
+    resizeCol(t.id, d.c, Math.max(2, d.start.w + (px - d.start.x)))
+  } else if (d.type === 'row') {
+    resizeRow(t.id, d.r, Math.max(2, d.start.h + (py - d.start.y)))
+  }
+}
+function endTableDrag() { tableDrag.value = null }
+
+// ---- 手柄几何 ----
+function cornerHandles(t) {
+  const w = tableW(t), h = tableH(t)
+  return [
+    { corner: 'nw', x: t.x, y: t.y },
+    { corner: 'ne', x: t.x + w, y: t.y },
+    { corner: 'sw', x: t.x, y: t.y + h },
+    { corner: 'se', x: t.x + w, y: t.y + h }
+  ]
+}
+function colResizeHandles(t) {
+  return Array.from({ length: t.col_widths.length - 1 }, (_, i) => i + 1)
+}
+function rowResizeHandles(t) {
+  return Array.from({ length: t.row_heights.length - 1 }, (_, i) => i + 1)
+}
+
+// ---- inline 编辑:正在编辑格的几何 + 提交 ----
+const cellEditInputRef = ref(null)
+function lc0(t) {
+  const ec = editingCell.value
+  if (!ec) return { r: 0, c: 0, x: 0, y: 0, w: 0, h: 0, text: '' }
+  const cell = findCellAt(t, ec.r, ec.c)
+  if (!cell) return { r: 0, c: 0, x: 0, y: 0, w: 0, h: 0, text: '' }
+  const cs = cell.colspan || 1, rs = cell.rowspan || 1
+  const lefts = tableColLefts(t), tops = tableRowTops(t)
+  return {
+    r: ec.r, c: ec.c,
+    x: lefts[cell.c], y: tops[cell.r],
+    w: lefts[cell.c + cs] - lefts[cell.c],
+    h: tops[cell.r + rs] - tops[cell.r],
+    text: cell.text || ''
+  }
+}
+function commitCellEdit(event) {
+  const v = event?.target?.value
+  const ec = editingCell.value
+  if (ec && v !== undefined) updateCellText(ec.tableId, ec.r, ec.c, v)
+  editingCell.value = null
+}
+
+// ---- 右键菜单:插入/删除行列 ----
+function onCellContextMenu(event, table, r, c) {
+  event.preventDefault()
+  event.stopPropagation()
+  selectTable(table.id)
+  contextMenu.value = { x: event.clientX, y: event.clientY, tableId: table.id, r, c }
+}
+function closeContextMenu() { contextMenu.value = null }
+function ctxInsertRow(dir) {
+  const m = contextMenu.value; if (!m) return
+  insertRow(m.tableId, m.r, dir); closeContextMenu()
+}
+function ctxDeleteRow() {
+  const m = contextMenu.value; if (!m) return
+  deleteRow(m.tableId, m.r); closeContextMenu()
+}
+function ctxInsertCol(dir) {
+  const m = contextMenu.value; if (!m) return
+  insertCol(m.tableId, m.c, dir); closeContextMenu()
+}
+function ctxDeleteCol() {
+  const m = contextMenu.value; if (!m) return
+  deleteCol(m.tableId, m.c); closeContextMenu()
+}
+
+// ---- 样式工具栏:作用于选中格的字号 / 选中表的边框 ----
+function onCellFontSizeInput(v) {
+  const ec = selectedCells.value
+  const t = selectedTable.value
+  if (!t || ec.length !== 1) return
+  setCellFontSize(t.id, ec[0].r, ec[0].c, Number(v) || 9)
+}
+function onBorderWidthInput(v) {
+  const t = selectedTable.value
+  if (!t) return
+  setTableBorder(t.id, Number(v) || 0.3, t.border?.color || '#303133')
+}
+function onBorderColorInput(v) {
+  const t = selectedTable.value
+  if (!t) return
+  setTableBorder(t.id, t.border?.width ?? 0.3, v)
+}
+
+// ---- Delete 键:删选中表格(编辑中不触发) ----
+function onTableKeyDown(event) {
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return
+  if (editingCell.value) return
+  if (!selectedTableId.value) return
+  // 焦点在 input/textarea 时不拦截(避免删文字时误删表)
+  const tag = event.target?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  event.preventDefault()
+  removeSelectedTable()
+}
+
+// 表格列/行前缀和(算每个逻辑格的左上角坐标,渲染与命中共用)
+function tableColLefts(t) {
+  const a = [t.x]
+  for (const w of t.col_widths) a.push(a[a.length - 1] + w)
+  return a
+}
+function tableRowTops(t) {
+  const a = [t.y]
+  for (const h of t.row_heights) a.push(a[a.length - 1] + h)
+  return a
+}
+
+// 渲染用的"逻辑格"列表:每个 (r,c) 一个,含其所属合并格的信息
+// 被覆盖的格也列出(只画边框不画文字),便于命中与选中高亮
+function tableLogicalCells(t) {
+  const cols = t.col_widths.length
+  const rows = t.row_heights.length
+  const out = []
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = findCellAt(t, r, c)
+      const isOrigin = cell && cell.r === r && cell.c === c
+      out.push({ r, c, cell, isOrigin, cols, rows })
+    }
+  }
+  return out
+}
+
+function insertTechParamsTable() {
+  // 默认放在图纸右上角(标题栏下方),用户可拖动
+  const x = sheetWidth.value - 180
+  const y = 50
+  placeTable(TECH_PARAMS_TABLE, x, y)
+}
+
+async function onCellDblClick(event, table, r, c) {
+  // 双击单元格 inline 编辑:在格子上浮 input,回车/失焦提交
+  event.stopPropagation()
+  selectTable(table.id)
+  editingCell.value = { tableId: table.id, r, c }
+  await nextTick()
+  cellEditInputRef.value?.focus()
+  cellEditInputRef.value?.select()
+}
+
+function onCellClick(event, table, r, c) {
+  event.stopPropagation()
+  selectTable(table.id)
+  toggleCellSelect(r, c, event.shiftKey)
+}
+
+function onTableMouseDown(event, table) {
+  if (activeTool.value) return            // 标注工具激活时不拖表格
+  selectTable(table.id)
+  startTableMove(event, table)
+}
+
+function isCellSelected(table, r, c) {
+  return selectedCells.value.some(s => s.r === r && s.c === c)
+}
+
+function tableW(t) { return t.col_widths.reduce((a, b) => a + b, 0) }
+function tableH(t) { return t.row_heights.reduce((a, b) => a + b, 0) }
+
+const selectedCellFontSize = computed(() => {
+  const t = selectedTable.value
+  const cells = selectedCells.value
+  if (!t || cells.length !== 1) return 9
+  return findCellAt(t, cells[0].r, cells[0].c)?.font_size || 9
+})
+
+// 单元格文字定位:合并格按其完整矩形算中心/边
+function cellTextAnchor(cell) {
+  const a = (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-')) || 'h-left'
+  if (a === 'h-center') return 'middle'
+  if (a === 'h-right') return 'end'
+  return 'start'
+}
+function cellTextX(t, lc) {
+  const cell = lc.cell
+  const cs = cell.colspan || 1
+  const left = tableColLefts(t)[cell.c]
+  const right = tableColLefts(t)[cell.c + cs]
+  const a = (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-')) || 'h-left'
+  if (a === 'h-center') return (left + right) / 2
+  if (a === 'h-right') return right - 1
+  return left + 1
+}
+function cellTextY(t, lc) {
+  const cell = lc.cell
+  const rs = cell.rowspan || 1
+  const top = tableRowTops(t)[cell.r]
+  const bot = tableRowTops(t)[cell.r + rs]
+  const fs = (cell.font_size || 13) * 0.2646   // px→mm,与后端 pt 折算一致
+  return top + (bot - top) / 2 + fs * 0.35   // baseline 近似居中
+}
+
 const drawingDocumentPreview = computed(() => JSON.stringify(
   buildDrawingDocument({
     sheetSize: sheetSize.value,
@@ -637,7 +1037,8 @@ const drawingDocumentPreview = computed(() => JSON.stringify(
     sheetHeight: sheetHeight.value,
     modelId: selectedModel.value,
     placedViews: placedViews.value,
-    dimensions: dimensions.value
+    dimensions: dimensions.value,
+    placedTables: placedTables.value
   }),
   null, 2
 ))
@@ -684,7 +1085,8 @@ async function saveAsTemplate() {
     sheetHeight: sheetHeight.value,
     modelId: selectedModel.value,
     placedViews: placedViews.value,
-    dimensions: dimensions.value
+    dimensions: dimensions.value,
+    placedTables: placedTables.value
   })
   savingTemplate.value = true
   try {
@@ -710,6 +1112,8 @@ onMounted(async () => {
   window.addEventListener('pointerup', onPalettePointerUp)
   window.addEventListener('pointercancel', resetPaletteDrag)
   window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keydown', onTableKeyDown)
+  window.addEventListener('click', closeContextMenu)
 })
 
 onUnmounted(() => {
@@ -719,6 +1123,8 @@ onUnmounted(() => {
   window.removeEventListener('pointerup', onPalettePointerUp)
   window.removeEventListener('pointercancel', resetPaletteDrag)
   window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('keydown', onTableKeyDown)
+  window.removeEventListener('click', closeContextMenu)
   disposePaletteDrag()
 })
 
@@ -736,10 +1142,12 @@ function onSvgMouseDown(event) {
     onSvgMouseDownDim(event)
     return
   }
-  // 普通模式:点击空白处取消选中
+  // 普通模式:点击空白处取消选中(视图/标注/表格)
   if (event.target.tagName === 'rect' || event.target.tagName === 'svg') {
     selectedViewId.value = null
     selectedDimId.value = null
+    selectedTableId.value = null
+    selectedCells.value = []
   }
 }
 
@@ -759,11 +1167,13 @@ function onGlobalMouseMove(event) {
     return
   }
   moveViewTo(event)
+  moveTableDrag(event)
 }
 
 function onGlobalMouseUp() {
   endSheetPan()
   endMoveView()
+  endTableDrag()
   onGlobalDimMouseUp()
 }
 
@@ -798,12 +1208,13 @@ function deleteSelectedView() {
   }
 }
 
-/** 工具栏清空:视图 + 标注 + 全局比例 + 对齐线 */
+/** 工具栏清空:视图 + 标注 + 全局比例 + 对齐线 + 表格 */
 function clearPlacedViews() {
   clearViews()
   resetScale()
   clearGuides()
   resetAll()
+  clearTables()
 }
 
 /** 切换型号:重置调色板并清空已放置视图 */
@@ -1270,5 +1681,26 @@ function onModelChange() {
   .model-select {
     width: 180px;
   }
+}
+
+/* 表格右键菜单 */
+.table-ctx-menu {
+  position: fixed; z-index: 3000; margin: 0; padding: 4px 0;
+  list-style: none; background: #fff; border: 1px solid #dcdfe6;
+  border-radius: 4px; box-shadow: 0 2px 12px rgba(0,0,0,.15);
+  min-width: 120px; font-size: 13px;
+}
+.table-ctx-menu li {
+  padding: 6px 16px; cursor: pointer; color: #303133;
+}
+.table-ctx-menu li:hover { background: #ecf5ff; color: #409eff; }
+.table-ctx-menu .ctx-sep { height: 1px; padding: 0; margin: 4px 0;
+  background: #ebeef5; }
+
+/* inline 单元格编辑(foreignObject 内 input 字号是 px,会随 viewBox 缩放) */
+.cell-edit-input {
+  width: 100%; height: 100%; border: 2px solid #409eff;
+  outline: none; padding: 0 2px; font-size: 9px;
+  background: #fff; box-sizing: border-box;
 }
 </style>
