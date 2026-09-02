@@ -52,6 +52,11 @@ env/
 venv/
 ENV/
 
+# 本地环境配置(可配置项清单见 .env.example)
+.env
+.env.local
+.env.*.local
+
 # 测试产物
 .pytest_cache/
 .coverage
