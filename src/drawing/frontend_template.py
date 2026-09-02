@@ -37,14 +37,37 @@ def find_model_shape(out_dir, model_code):
     raise FileNotFoundError(f"未找到模型文件: {model_dir}/assembly.step|brep")
 
 
-def resolve_base_views(template_doc, out_dir):
+def template_view_names(template_doc):
+    """模板实际用到的标准视图名(去重保序)
+
+    基准型号与目标型号必须共用这个集合:视图子集会决定 uniform_scale,
+    两边用同一子集才能保证缩放基准一致(否则标注重绑会整体错位)。
+    """
+    names = []
+    for v in template_doc.get("views", []):
+        src = v.get("source_view")
+        if src and src not in names:
+            names.append(src)
+    if not names:
+        raise ValueError("模板没有任何视图,无法出图")
+    return names
+
+
+def resolve_base_views(template_doc, out_dir, view_names=None):
     """按 model_id 重新生成调色板,还原每个放置视图的边线语境
+
+    Args:
+        view_names: 只投影这些视图,None 表示按模板视图集自动推导。
+            出图时只需模板用到的那几个,不必生成全部 9+3 个。
 
     Returns:
         dict: view_id -> {"source_view", "edges", "hidden_edges", "bbox"}
     """
+    if view_names is None:
+        view_names = template_view_names(template_doc)
     shape_path = find_model_shape(out_dir, template_doc["model_id"])
-    palette = drawing_engine.generate_all_standard_views(shape_path)
+    palette = drawing_engine.generate_all_standard_views(
+        shape_path, view_names=view_names)
     views = {}
     for v in template_doc["views"]:
         src = v.get("source_view")

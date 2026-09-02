@@ -171,9 +171,11 @@ def test_generate_rejects_cross_series(client, tmp_path, monkeypatch):
     assert body["rejected"] == ["999-X-YYYY-L1-D1"]
 
 
-def test_generate_returns_relative_pdf_path(client, tmp_path, monkeypatch):
+def test_generate_returns_relative_pdf_path(client, srv, tmp_path, monkeypatch):
     """PDF 绝对路径应转换为相对项目根,供下载接口使用"""
     monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    # 出图默认在子进程执行,打桩对子进程无效,故切到 inline 模式(主进程线程)
+    monkeypatch.setattr(srv.pool, "inline", True)
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
 
@@ -202,8 +204,10 @@ def test_generate_returns_relative_pdf_path(client, tmp_path, monkeypatch):
     assert item["dims"][0]["status"] == "matched"
 
 
-def test_generate_reports_pipeline_error(client, tmp_path, monkeypatch):
+def test_generate_reports_pipeline_error(client, srv, tmp_path, monkeypatch):
     monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    # 同上:打桩 run_frontend 需要出图在主进程内执行
+    monkeypatch.setattr(srv.pool, "inline", True)
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
 

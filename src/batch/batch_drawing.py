@@ -117,8 +117,14 @@ def _frontend_dim_summary(rebound):
 
 
 def generate_one_frontend(model_code, template_doc, base_views, base_refs,
-                          base_profile, out_dir):
-    """前端实例模板:重绑 + 渲染单型号,返回结果 dict"""
+                          base_profile, out_dir, view_names=None):
+    """前端实例模板:重绑 + 渲染单型号,返回结果 dict
+
+    Args:
+        view_names: 只投影这些视图,None 表示按模板视图集自动推导。
+            必须与基准型号用的是同一个集合,否则 uniform_scale 基准不同,
+            标注重绑会整体错位。
+    """
     t0 = time.time()
     model_dir = os.path.join(out_dir, model_code)
     pdf_path = os.path.join(model_dir, "drawing_frontend.pdf")
@@ -130,8 +136,12 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
             f"型号 {model_code}(系列 {identity})与模板系列 {tmpl_identity} 不同,"
             "不能共用该模板")
 
+    if view_names is None:
+        view_names = frontend_template.template_view_names(template_doc)
     shape_path = frontend_template.find_model_shape(out_dir, model_code)
-    palette = drawing_engine.generate_all_standard_views(shape_path)
+    # 只投影模板实际用到的视图(通常 1~3 个),HLR 是这里的主要耗时
+    palette = drawing_engine.generate_all_standard_views(
+        shape_path, view_names=view_names)
     target_profile = anchor_resolver.resolve_anchors(model_code)
     ctx = dim_rebind.compensation_ctx(base_profile, target_profile)
 
@@ -185,7 +195,13 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
 def run_frontend(models, template_doc, out_dir):
     """前端实例模板批量生成,返回结果列表"""
     base_model = template_doc["model_id"]
-    base_views = frontend_template.resolve_base_views(template_doc, out_dir)
+    # 基准与目标共用同一视图子集:子集决定 uniform_scale,两边必须一致。
+    # 顺带省掉模板用不到的视图投影(通常 9+3 → 1~3 个)。
+    view_names = frontend_template.template_view_names(template_doc)
+    print(f"模板视图集: {view_names}(共 {len(view_names)} 个,不生成其余标准视图)",
+          flush=True)
+    base_views = frontend_template.resolve_base_views(
+        template_doc, out_dir, view_names)
     base_refs = frontend_template.resolve_base_refs(template_doc, base_views)
     base_profile = anchor_resolver.resolve_anchors(base_model)
 
@@ -194,7 +210,8 @@ def run_frontend(models, template_doc, out_dir):
         print(f"[{i}/{len(models)}] {model_code} ...", flush=True)
         try:
             r = generate_one_frontend(model_code, template_doc, base_views,
-                                      base_refs, base_profile, out_dir)
+                                      base_refs, base_profile, out_dir,
+                                      view_names)
         except Exception as e:  # noqa: BLE001 - 单型号失败不中断批次
             import traceback
             r = {"model_code": model_code, "ok": False, "error": str(e),

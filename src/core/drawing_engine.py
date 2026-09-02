@@ -1379,10 +1379,18 @@ def _project_standard_view_worker(args):
     }
 
 
+# 少于这个视图数就串行投影:进程池 spawn 的固定开销(每个 worker 都要
+# 导入 pythonOCC,约 2s)与单视图投影耗时(约 2s)相当。1 个视图时串行
+# (0 spawn)比并行(2s spawn)快一倍;2 个及以上并行更划算。10 视图全集
+# 也走进程池。
+_MIN_PARALLEL_VIEWS = 2
+
+
 def generate_all_standard_views(step_path, include_hidden=False,
                                 thumb_width=200, thumb_height=150,
-                                canvas_width=400, canvas_height=300):
-    """生成所有 9 个标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
+                                canvas_width=400, canvas_height=300,
+                                view_names=None):
+    """生成标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
 
     使用 HLRBRep_Algo 精确算法 + OutLineVCompound 只提取外轮廓边。
     边线数据保留元数据(方向、位置等),用于关联式标注:
@@ -1396,6 +1404,17 @@ def generate_all_standard_views(step_path, include_hidden=False,
         thumb_height: 缩略图高度(px)
         canvas_width: 画布边线归一化宽度(px)
         canvas_height: 画布边线归一化高度(px)
+        view_names: 只生成这些视图(list),None 表示全部 9+3 个。
+            按模板出图时传模板实际用到的视图即可(通常 1~3 个),
+            HLR 投影是主要耗时,能省掉 70% 以上。
+
+    ★ view_names 与 uniform_scale 的耦合(重要):
+      本函数按"已生成视图里的最大投影尺寸"算统一缩放 uniform_scale,
+      因此生成子集与生成全集的 uniform_scale 可能不同,出图大小随之变化。
+      只要同一份模板的基准型号与目标型号传同一个 view_names,两者比例就
+      一致(实测现有模板都含长轴视图 left,子集与全集倍率 = 1.0000)。
+      若某模板只用了短轴视图(如 front/back),出图会比编辑器预览更大 ——
+      这是预期行为,因为缩放基准就是这么定义的。
 
     Returns:
         {
@@ -1447,52 +1466,72 @@ def generate_all_standard_views(step_path, include_hidden=False,
     # 第一遍: 并行投影所有视图,收集原始2D坐标
     t1 = time.time()
 
-    view_names = list(STANDARD_VIEW_CONFIGS.keys())
+    if view_names is None:
+        view_names = list(STANDARD_VIEW_CONFIGS.keys())
+    else:
+        unknown = [n for n in view_names if n not in STANDARD_VIEW_CONFIGS]
+        if unknown:
+            raise ValueError("未知视图名: %s,可选: %s"
+                             % (unknown, list(STANDARD_VIEW_CONFIGS)))
+        view_names = list(dict.fromkeys(view_names))  # 去重且保序
+    if not view_names:
+        raise ValueError("view_names 不能为空")
     raw_views = {}
     parallel_error = None
     parallel_mode = "process"
     max_workers = min(9, len(view_names), max(1, (os.cpu_count() or 4)))
-    worker_args = [(step_path, view_name, include_hidden, max_extent) for view_name in view_names]
 
-    try:
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_project_standard_view_worker, args) for args in worker_args]
-            for future in as_completed(futures):
-                view_name, view_data = future.result()
-                raw_views[view_name] = view_data
-    except Exception as exc:
-        parallel_error = f"process: {exc}"
-        raw_views = {}
-        parallel_mode = "thread"
+    def project_one_view(view_name):
+        cfg = STANDARD_VIEW_CONFIGS[view_name]
+        t2 = time.time()
+        visible, hidden = _project_shape(
+            shape, cfg["dir"], cfg["up"],
+            show_hidden=include_hidden, max_extent=max_extent
+        )
+        return view_name, {
+            "visible": visible,
+            "hidden": hidden,
+            "label": cfg["label"],
+            "group": cfg["group"],
+            "project_time": round(time.time() - t2, 3)
+        }
 
-        def project_one_view(view_name):
-            cfg = STANDARD_VIEW_CONFIGS[view_name]
-            t2 = time.time()
-            visible, hidden = _project_shape(
-                shape, cfg["dir"], cfg["up"],
-                show_hidden=include_hidden, max_extent=max_extent
-            )
-            return view_name, {
-                "visible": visible,
-                "hidden": hidden,
-                "label": cfg["label"],
-                "group": cfg["group"],
-                "project_time": round(time.time() - t2, 3)
-            }
-
+    if len(view_names) < _MIN_PARALLEL_VIEWS:
+        # 视图很少时,进程池 spawn 的固定开销(每个 worker 都要导入 pythonOCC)
+        # 大于并行收益,直接串行投影更快
+        parallel_mode = "serial"
+        max_workers = 1
+        for view_name in view_names:
+            _, view_data = project_one_view(view_name)
+            raw_views[view_name] = view_data
+    else:
+        worker_args = [(step_path, view_name, include_hidden, max_extent)
+                       for view_name in view_names]
         try:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(project_one_view, view_name) for view_name in view_names]
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_project_standard_view_worker, args)
+                           for args in worker_args]
                 for future in as_completed(futures):
                     view_name, view_data = future.result()
                     raw_views[view_name] = view_data
-        except Exception as thread_exc:
-            parallel_error = f"{parallel_error}; thread: {thread_exc}"
+        except Exception as exc:
+            parallel_error = f"process: {exc}"
             raw_views = {}
-            parallel_mode = "serial"
-            for view_name in view_names:
-                view_name, view_data = project_one_view(view_name)
-                raw_views[view_name] = view_data
+            parallel_mode = "thread"
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [executor.submit(project_one_view, view_name)
+                               for view_name in view_names]
+                    for future in as_completed(futures):
+                        view_name, view_data = future.result()
+                        raw_views[view_name] = view_data
+            except Exception as thread_exc:
+                parallel_error = f"{parallel_error}; thread: {thread_exc}"
+                raw_views = {}
+                parallel_mode = "serial"
+                for view_name in view_names:
+                    _, view_data = project_one_view(view_name)
+                    raw_views[view_name] = view_data
 
     # 保持输出顺序稳定
     raw_views = {name: raw_views[name] for name in STANDARD_VIEW_CONFIGS if name in raw_views}
