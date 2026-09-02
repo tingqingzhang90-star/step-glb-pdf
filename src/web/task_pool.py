@@ -90,7 +90,12 @@ def _run_drawing_dxf(p):
 
 def _run_view_palette(p):
     from core import drawing_engine
-    return drawing_engine.generate_all_standard_views(p["shape_path"])
+    # 调色板要一次投影全部 9+3 个视图,串行太慢。内部并行 worker 数
+    # 按视图数自动(min(9, 视图数, CPU)):视图多 worker 就多,与
+    # generate_all_standard_views 的自动逻辑一致
+    return drawing_engine.generate_all_standard_views(
+        p["shape_path"], view_names=p.get("view_names"),
+        parallel=True)
 
 
 def _run_view_single(p):
@@ -99,9 +104,20 @@ def _run_view_single(p):
         p["shape_path"], p["view_name"])
 
 
-def _run_template_batch(p):
+def _run_template_base(p):
+    """算基准数据(整批一次),结果 JSON 化后供各型号任务复用"""
     from batch import batch_drawing as bd
-    return bd.run_frontend(p["models"], p["template_doc"], p["out_dir"])
+    return bd.prepare_base(p["template_doc"], p["out_dir"])
+
+
+def _run_template_one(p):
+    """单个型号出图:与同批其它型号在不同 worker 上并行"""
+    from batch import batch_drawing as bd
+    base = p["base"]
+    return bd.generate_one_frontend(p["model_code"], p["template_doc"],
+                                    base["views"], base["refs"],
+                                    base["profile"], p["out_dir"],
+                                    base["view_names"])
 
 
 # 注册表:value 必须是模块级函数(子进程按引用反序列化)
@@ -113,7 +129,8 @@ _KINDS = {
     "drawing-dxf": _run_drawing_dxf,
     "view-palette": _run_view_palette,
     "view-single": _run_view_single,
-    "template-batch": _run_template_batch,
+    "template-base": _run_template_base,
+    "template-one": _run_template_one,
 }
 
 

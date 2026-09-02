@@ -171,6 +171,18 @@ def test_generate_rejects_cross_series(client, tmp_path, monkeypatch):
     assert body["rejected"] == ["999-X-YYYY-L1-D1"]
 
 
+def _ok_result(model_code):
+    return {
+        "model_code": model_code, "ok": True,
+        "pdf": os.path.join(_PROJECT_ROOT, "output", model_code,
+                            "drawing_frontend.pdf"),
+        "svg": None, "unmatched": [],
+        "dims": [{"id": "dim_1", "status": "matched", "type": "linear",
+                  "mode": "single", "reason": ""}],
+        "elapsed": 1.0,
+    }
+
+
 def test_generate_returns_relative_pdf_path(client, srv, tmp_path, monkeypatch):
     """PDF 绝对路径应转换为相对项目根,供下载接口使用"""
     monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
@@ -179,20 +191,16 @@ def test_generate_returns_relative_pdf_path(client, srv, tmp_path, monkeypatch):
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
 
-    def fake_run(models, template_doc, out_dir):
-        return [{
-            "model_code": models[0], "ok": True,
-            "pdf": os.path.join(_PROJECT_ROOT, "output", models[0],
-                                "drawing_frontend.pdf"),
-            "svg": None, "unmatched": [],
-            "dims": [{"id": "dim_1", "status": "matched",
-                      "type": "linear", "mode": "single", "reason": ""}],
-            "elapsed": 1.0,
-        }]
-
     # batch_drawing 顶层依赖 pythonOCC,无 OCC 的环境自动跳过
     bd = pytest.importorskip("batch.batch_drawing")
-    monkeypatch.setattr(bd, "run_frontend", fake_run)
+    monkeypatch.setattr(
+        bd, "prepare_base",
+        lambda template_doc, out_dir, parallel_views=False: {
+            "view_names": ["left"], "views": {}, "refs": [], "profile": {}})
+    monkeypatch.setattr(
+        bd, "generate_one_frontend",
+        lambda model_code, template_doc, base_views, base_refs, base_profile,
+               out_dir, view_names=None: _ok_result(model_code))
 
     res = client.post("/api/template-drawing/generate",
                       json={"template_id": "t",
@@ -205,23 +213,64 @@ def test_generate_returns_relative_pdf_path(client, srv, tmp_path, monkeypatch):
 
 
 def test_generate_reports_pipeline_error(client, srv, tmp_path, monkeypatch):
+    """基准任务失败应整体返回 500"""
     monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
-    # 同上:打桩 run_frontend 需要出图在主进程内执行
     monkeypatch.setattr(srv.pool, "inline", True)
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
 
-    def boom(models, template_doc, out_dir):
+    def boom(template_doc, out_dir, parallel_views=False):
         raise RuntimeError("OCC 炸了")
 
     bd = pytest.importorskip("batch.batch_drawing")
-    monkeypatch.setattr(bd, "run_frontend", boom)
+    monkeypatch.setattr(bd, "prepare_base", boom)
 
     res = client.post("/api/template-drawing/generate",
                       json={"template_id": "t",
                             "models": ["250-E-H2K1-L100-D11"]})
     assert res.status_code == 500
     assert "OCC 炸了" in res.get_json()["error"]
+
+
+def test_generate_submits_one_task_per_model(client, srv, tmp_path, monkeypatch):
+    """批次内每个型号各提交一个任务,才能并行而不是排队
+
+    去重 key 按 模板+型号 生成:同型号并发请求合并成同一任务,避免
+    两个用户同时写同一个 output 目录。
+    """
+    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    (tmp_path / "t.json").write_text(
+        json.dumps(_template_doc()), encoding="utf-8")
+
+    submitted = []
+
+    def fake_run(kind, key, payload, timeout=None):
+        submitted.append((kind, key))
+        return {"view_names": ["left"], "views": {}, "refs": [], "profile": {}}
+
+    def fake_submit(kind, key, payload, client=None):
+        submitted.append((kind, key))
+        return "tpl-one-%d" % len(submitted), False
+
+    def fake_wait(task_id, timeout=None):
+        return _ok_result("250-E-H2K1-L100-D11")
+
+    monkeypatch.setattr(srv.pool, "run", fake_run)
+    monkeypatch.setattr(srv.pool, "submit", fake_submit)
+    monkeypatch.setattr(srv.pool, "wait", fake_wait)
+
+    models = ["250-E-H2K1-L100-D11", "250-E-H2K1-L200-D55"]
+    res = client.post("/api/template-drawing/generate",
+                      json={"template_id": "t", "models": models})
+    assert res.status_code == 200
+    assert len(res.get_json()["results"]) == 2
+
+    # 1 个基准任务 + 每型号各 1 个出图任务
+    assert submitted == [
+        ("template-base", "tpl-base:t"),
+        ("template-one", "tpl:t:250-E-H2K1-L100-D11"),
+        ("template-one", "tpl:t:250-E-H2K1-L200-D55"),
+    ]
 
 
 # -------------------- 下载 / 预览 --------------------

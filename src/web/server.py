@@ -31,6 +31,7 @@ from flask import (Flask, request, jsonify, send_from_directory,
 
 from core import rebuild_assembly as rb
 from web import task_pool
+from web import env_settings
 
 _PROJECT_ROOT = os.path.dirname(_SRC_DIR)
 OUT_DIR = rb.OUT_DIR
@@ -41,6 +42,11 @@ _VIEWER_HTML = os.path.join(_HERE, "viewer.html")
 _DRAWING_EDITOR_HTML = os.path.join(_HERE, "drawing_editor.html")
 
 app = Flask(__name__)
+
+# 必须在创建任务池之前读 .env:BUILD_POOL_WORKERS 在 TaskPool 构造时就已定型
+_env_keys = env_settings.load_env(_PROJECT_ROOT)
+if _env_keys:
+    app.logger.info("已从 .env 载入: %s", ", ".join(_env_keys))
 
 # pythonOCC 非线程安全 → 用进程池隔离:所有 OCC 任务在独立子进程执行,
 # 多用户请求并行推进,不再被单个用户阻塞。详见 web/task_pool.py
@@ -1154,19 +1160,9 @@ def api_generate_from_template():
     if err:
         return err
 
-    # 整批作为一个任务丢进子进程:批次内仍串行,但与其它用户的请求并行。
-    # 出图管线顶层依赖 pythonOCC,现在连主进程都不用加载它了
-    try:
-        results = pool.run("template-batch", "batch:%s" % template_id, {
-            "models": models,
-            "template_doc": template_doc,
-            "out_dir": OUT_DIR,
-        })
-    except task_pool.TaskError as e:
-        return jsonify({"ok": False, "error": f"出图失败: {e}",
-                        "traceback": e.traceback_text}), 500
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"出图失败: {e}"}), 500
+    results, err = _generate_frontend_batch(template_id, template_doc, models)
+    if err:
+        return err
 
     return jsonify({
         "ok": True,
@@ -1174,6 +1170,56 @@ def api_generate_from_template():
         "template_id": template_id,
         "results": _to_client_results(results),
     })
+
+
+def _generate_frontend_batch(template_id, template_doc, models):
+    """按型号并行出图,返回 (结果列表, 错误响应)
+
+    拆两步:基准数据整批算一次(同模板去重,多用户共享),之后每个型号
+    各提交一个任务,由任务池并行调度——批次内型号不再是串行排队。
+    """
+    # 1) 基准数据:同模板去重,并发请求共用同一次计算
+    try:
+        base = pool.run("template-base", "tpl-base:%s" % template_id, {
+            "template_doc": template_doc,
+            "out_dir": OUT_DIR,
+        })
+    except task_pool.TaskError as e:
+        return None, (jsonify({"ok": False, "error": f"基准视图生成失败: {e}",
+                               "traceback": e.traceback_text}), 500)
+    except Exception as e:
+        return None, (jsonify({"ok": False,
+                               "error": f"基准视图生成失败: {e}"}), 500)
+
+    # 2) 每个型号一个任务并行跑;同型号并发请求靠去重合并成同一个任务
+    submitted = []
+    for model_code in models:
+        try:
+            task_id, _ = pool.submit("template-one",
+                                     "tpl:%s:%s" % (template_id, model_code),
+                                     {"model_code": model_code,
+                                      "template_doc": template_doc,
+                                      "base": base,
+                                      "out_dir": OUT_DIR})
+        except Exception as e:
+            submitted.append((model_code, None, str(e)))
+        else:
+            submitted.append((model_code, task_id, None))
+
+    # 3) 逐个收结果:任务本身并发推进,等待顺序不影响并行度
+    results = []
+    for model_code, task_id, submit_error in submitted:
+        if task_id is None:
+            results.append({"model_code": model_code, "ok": False,
+                            "error": submit_error, "elapsed": 0})
+            continue
+        try:
+            results.append(pool.wait(task_id))
+        except task_pool.TaskError as e:
+            results.append({"model_code": model_code, "ok": False,
+                            "error": str(e), "traceback": e.traceback_text,
+                            "elapsed": 0})
+    return results, None
 
 
 @app.route("/api/template-drawing/download/<path:relpath>")

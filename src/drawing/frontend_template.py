@@ -53,12 +53,13 @@ def template_view_names(template_doc):
     return names
 
 
-def resolve_base_views(template_doc, out_dir, view_names=None):
+def resolve_base_views(template_doc, out_dir, view_names=None, parallel=True):
     """按 model_id 重新生成调色板,还原每个放置视图的边线语境
 
     Args:
         view_names: 只投影这些视图,None 表示按模板视图集自动推导。
             出图时只需模板用到的那几个,不必生成全部 9+3 个。
+        parallel: 调用方已在 OCC 任务池子进程内时传 False,避免嵌套建池。
 
     Returns:
         dict: view_id -> {"source_view", "edges", "hidden_edges", "bbox"}
@@ -67,7 +68,7 @@ def resolve_base_views(template_doc, out_dir, view_names=None):
         view_names = template_view_names(template_doc)
     shape_path = find_model_shape(out_dir, template_doc["model_id"])
     palette = drawing_engine.generate_all_standard_views(
-        shape_path, view_names=view_names)
+        shape_path, view_names=view_names, parallel=parallel)
     views = {}
     for v in template_doc["views"]:
         src = v.get("source_view")

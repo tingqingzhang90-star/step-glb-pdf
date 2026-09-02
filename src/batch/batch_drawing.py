@@ -139,9 +139,10 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
     if view_names is None:
         view_names = frontend_template.template_view_names(template_doc)
     shape_path = frontend_template.find_model_shape(out_dir, model_code)
-    # 只投影模板实际用到的视图(通常 1~3 个),HLR 是这里的主要耗时
+    # 只投影模板实际用到的视图(通常 1~3 个),HLR 是这里的主要耗时;
+    # 本函数在 OCC 任务池子进程内执行,parallel=False 防嵌套建池
     palette = drawing_engine.generate_all_standard_views(
-        shape_path, view_names=view_names)
+        shape_path, view_names=view_names, parallel=False)
     target_profile = anchor_resolver.resolve_anchors(model_code)
     ctx = dim_rebind.compensation_ctx(base_profile, target_profile)
 
@@ -192,8 +193,16 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
     }
 
 
-def run_frontend(models, template_doc, out_dir):
-    """前端实例模板批量生成,返回结果列表"""
+def prepare_base(template_doc, out_dir, parallel_views=False):
+    """算基准型号的视图/标注引用/锚点档案,返回可 JSON 序列化的 dict
+
+    整批只算一次,结果发给每个型号的出图任务。抽出来是为了让多型号能在
+    任务池里并行:基准数据若不共享,每个型号都得重投影一遍基准型号。
+
+    Args:
+        parallel_views: 基准视图投影是否内部并行。调用方已在任务池子进程
+            内时保持 False,避免嵌套建池。
+    """
     base_model = template_doc["model_id"]
     # 基准与目标共用同一视图子集:子集决定 uniform_scale,两边必须一致。
     # 顺带省掉模板用不到的视图投影(通常 9+3 → 1~3 个)。
@@ -201,9 +210,25 @@ def run_frontend(models, template_doc, out_dir):
     print(f"模板视图集: {view_names}(共 {len(view_names)} 个,不生成其余标准视图)",
           flush=True)
     base_views = frontend_template.resolve_base_views(
-        template_doc, out_dir, view_names)
-    base_refs = frontend_template.resolve_base_refs(template_doc, base_views)
-    base_profile = anchor_resolver.resolve_anchors(base_model)
+        template_doc, out_dir, view_names, parallel=parallel_views)
+    return {
+        "view_names": view_names,
+        "views": base_views,
+        "refs": frontend_template.resolve_base_refs(template_doc, base_views),
+        "profile": anchor_resolver.resolve_anchors(base_model),
+    }
+
+
+def run_frontend(models, template_doc, out_dir):
+    """前端实例模板批量生成,返回结果列表
+
+    供 CLI 使用(进程内串行)。Web 端走 server 的按型号并行提交。
+    """
+    base = prepare_base(template_doc, out_dir)
+    view_names = base["view_names"]
+    base_views = base["views"]
+    base_refs = base["refs"]
+    base_profile = base["profile"]
 
     results = []
     for i, model_code in enumerate(models, 1):

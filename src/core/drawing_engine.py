@@ -1389,7 +1389,8 @@ _MIN_PARALLEL_VIEWS = 2
 def generate_all_standard_views(step_path, include_hidden=False,
                                 thumb_width=200, thumb_height=150,
                                 canvas_width=400, canvas_height=300,
-                                view_names=None):
+                                view_names=None, parallel=True,
+                                max_workers=None):
     """生成标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
 
     使用 HLRBRep_Algo 精确算法 + OutLineVCompound 只提取外轮廓边。
@@ -1407,6 +1408,12 @@ def generate_all_standard_views(step_path, include_hidden=False,
         view_names: 只生成这些视图(list),None 表示全部 9+3 个。
             按模板出图时传模板实际用到的视图即可(通常 1~3 个),
             HLR 投影是主要耗时,能省掉 70% 以上。
+        parallel: 视图间是否用进程池并行投影。默认自动。已在 OCC 任务池
+            子进程内时,高频任务(出图)传 False 防嵌套;低频任务(调色板)
+            可保留并行但收紧 max_workers,避免并发用户×worker 爆炸。
+        max_workers: 并行投影的内部进程数上限;None 表示自动
+            (min(9, 视图数, CPU 核数))。池内并行时给一个较小的值,
+            防止嵌套池在多用户并发时进程数失控。
 
     ★ view_names 与 uniform_scale 的耦合(重要):
       本函数按"已生成视图里的最大投影尺寸"算统一缩放 uniform_scale,
@@ -1479,7 +1486,10 @@ def generate_all_standard_views(step_path, include_hidden=False,
     raw_views = {}
     parallel_error = None
     parallel_mode = "process"
-    max_workers = min(9, len(view_names), max(1, (os.cpu_count() or 4)))
+    if max_workers is not None:
+        max_workers = max(1, int(max_workers))
+    else:
+        max_workers = min(9, len(view_names), max(1, (os.cpu_count() or 4)))
 
     def project_one_view(view_name):
         cfg = STANDARD_VIEW_CONFIGS[view_name]
@@ -1496,9 +1506,9 @@ def generate_all_standard_views(step_path, include_hidden=False,
             "project_time": round(time.time() - t2, 3)
         }
 
-    if len(view_names) < _MIN_PARALLEL_VIEWS:
-        # 视图很少时,进程池 spawn 的固定开销(每个 worker 都要导入 pythonOCC)
-        # 大于并行收益,直接串行投影更快
+    if not parallel or len(view_names) < _MIN_PARALLEL_VIEWS:
+        # 视图很少或调用方已在任务池子进程内:进程池 spawn 的固定开销
+        # (每个 worker 都要导入 pythonOCC)大于并行收益,直接串行投影更快
         parallel_mode = "serial"
         max_workers = 1
         for view_name in view_names:
