@@ -12,7 +12,13 @@ export function useStyleConfig() {
     root.style.setProperty('--edge-hidden-stroke', config.edge.hidden.stroke_px)
     root.style.setProperty('--dim-line-stroke', config.dim.line.stroke_px)
     root.style.setProperty('--dim-ext-stroke', config.dim.ext.stroke_px)
-    root.style.setProperty('--dim-text-size', `${config.dim.text.font_px}px`)
+    // 字号折算:font_px 是"印刷在图纸上的像素尺寸",后端按 96dpi 折成 pt
+    // (7px→5.25pt≈1.85mm)。SVG viewBox 单位就是 mm,而 SVG 里 CSS px
+    // 数值=用户单位,所以这里要把 px 折成 mm 数值再标 px 单位,
+    // 否则 7 直接当 7mm 用,前端预览比 PDF 大 3.8 倍
+    root.style.setProperty(
+      '--dim-text-size',
+      `${(config.dim.text.font_px * config._px_to_mm_at_96dpi).toFixed(3)}px`)
     root.style.setProperty('--center-mark-stroke', config.center_mark.stroke_px)
     root.style.setProperty('--frame-stroke', config.frame.stroke_px)
     root.style.setProperty('--title-block-stroke', config.title_block.stroke_px)
