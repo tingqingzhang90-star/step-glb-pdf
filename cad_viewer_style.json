@@ -10,7 +10,7 @@
     "line":  { "stroke_px": 1.0, "color": "#303133" },
     "ext":   { "stroke_px": 0.8, "color": "#606266" },
     "text":  { "font_px": 18,    "color": "#303133" },
-    "arrow": { "len_px": 3.5,   "half_px": 0.5 }
+    "arrow": { "len_px": 3,   "half_px": 0.3 }
   },
 
   "center_mark": {

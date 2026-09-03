@@ -2,6 +2,7 @@
 // 与 usePlacedViews 并列,表格是独立元素类型,不混进 views
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
+import { findCellAt } from '@/tables/tableGeometry'
 
 let tableIdCounter = 0
 
@@ -31,9 +32,19 @@ export function usePlacedTables() {
     return t
   }
 
+  /** 选中表格并清空格选择。用于切换表格、移动、改样式等整体操作 */
   function selectTable(id) {
     selectedTableId.value = id
     selectedCells.value = []
+  }
+
+  /** 聚焦到某表但不清空格选择:仅当切换到不同表时才清空。
+   *  用于单元格点击/框选,避免切换表格前已选中的格被误清空 */
+  function focusTable(id) {
+    if (selectedTableId.value !== id) {
+      selectedTableId.value = id
+      selectedCells.value = []
+    }
   }
 
   function deleteSelectedTable() {
@@ -48,18 +59,6 @@ export function usePlacedTables() {
     placedTables.value = []
     selectedTableId.value = null
     selectedCells.value = []
-  }
-
-  /** (r,c) 所属的左上角 cell(可能是自身);被覆盖返回覆盖它的合并格 */
-  function findCellAt(table, r, c) {
-    for (const cell of table.cells) {
-      const cs = cell.colspan || 1
-      const rs = cell.rowspan || 1
-      if (r >= cell.r && r < cell.r + rs && c >= cell.c && c < cell.c + cs) {
-        return cell
-      }
-    }
-    return null
   }
 
   function updateCellText(tableId, r, c, text) {
@@ -247,7 +246,7 @@ export function usePlacedTables() {
 
   return {
     placedTables, selectedTableId, selectedTable, selectedCells,
-    placeTable, selectTable, deleteSelectedTable, clearTables,
+    placeTable, selectTable, focusTable, deleteSelectedTable, clearTables,
     updateCellText, toggleCellSelect, mergeSelected, splitSelected,
     findCellAt,
     insertRow, deleteRow, insertCol, deleteCol,
