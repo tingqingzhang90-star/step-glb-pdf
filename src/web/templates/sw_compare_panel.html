@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SW 选型对比面板</title>
+<style>
+:root{--bg:#0f1115;--card:#181b21;--border:#2a2e37;--txt:#e4e6eb;--txt2:#9aa0a8;
+      --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--code:#1e2228}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg);
+     color:var(--txt);padding:20px;max-width:1100px;margin:0 auto;font-size:14px}
+h1{font-size:20px;margin-bottom:4px}
+h2{font-size:15px;margin:18px 0 10px;color:var(--accent);border-bottom:1px solid var(--border);padding-bottom:6px}
+.sub{color:var(--txt2);font-size:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px}
+.form-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.field{flex:1;min-width:140px}
+.field label{display:block;font-size:12px;color:var(--txt2);margin-bottom:4px}
+.field select,.field input{width:100%;padding:7px 9px;background:var(--code);border:1px solid var(--border);
+  border-radius:5px;color:var(--txt);font-size:13px}
+.field select:focus,.field input:focus{outline:none;border-color:var(--accent)}
+.preview{background:var(--code);border:1px solid var(--border);border-radius:5px;padding:10px 14px;
+         font-family:'Consolas',monospace;font-size:14px;margin:10px 0}
+.preview .mc{color:var(--green);font-weight:600}
+.preview .d1{color:var(--yellow);font-size:12px;margin-left:12px}
+.btn{padding:9px 20px;background:var(--accent);color:#fff;border:none;border-radius:5px;
+     font-size:14px;font-weight:600;cursor:pointer;width:100%}
+.btn:hover{opacity:.9}
+.btn:disabled{opacity:.5;cursor:wait}
+.result{margin-top:12px}
+.stat{display:inline-block;background:var(--code);border:1px solid var(--border);border-radius:5px;
+      padding:6px 14px;margin-right:8px;margin-bottom:6px;font-size:13px}
+.stat .n{font-weight:700;color:var(--accent)}
+.stat.ok .n{color:var(--green)}
+.stat.bad .n{color:var(--red)}
+table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--border)}
+th{color:var(--txt2);font-weight:600;font-size:12px}
+tr:hover td{background:var(--code)}
+.tag{display:inline-block;padding:1px 8px;border-radius:3px;font-size:11px;font-weight:600}
+.tag.on{background:rgba(63,185,80,.15);color:var(--green)}
+.tag.off{background:rgba(248,81,73,.15);color:var(--red)}
+.tag.err{background:rgba(210,153,34,.15);color:var(--yellow)}
+.hint{background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.3);border-radius:5px;
+      padding:8px 12px;font-size:12px;color:var(--accent);margin-top:10px}
+.err-box{background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.3);border-radius:5px;
+         padding:10px;color:var(--red);font-size:13px;white-space:pre-wrap;margin-top:10px}
+</style>
+</head>
+<body>
+<h1>SW 选型对比面板</h1>
+<div class="sub">在 SolidWorks 中切换选型(抑制/取消抑制),与自研方案比对 · 每次重新打开装配体</div>
+
+<div class="card">
+  <h2 style="margin-top:0">选型参数</h2>
+  <div class="form-row">
+    <div class="field"><label>系列</label><select id="series"></select></div>
+    <div class="field"><label>连接类型</label><select id="connType">
+      <option value="E">E - 直连</option><option value="F">F - 折返</option>
+    </select></div>
+    <div class="field"><label>电机编号</label><select id="motorCode"></select></div>
+  </div>
+  <div class="form-row">
+    <div class="field"><label>安装方式</label><select id="mount"></select></div>
+    <div class="field"><label>负载连接</label><select id="load"></select></div>
+    <div class="field"><label>行程</label><select id="stroke"></select></div>
+  </div>
+  <div class="preview" id="preview"></div>
+  <button class="btn" id="btnApply" onclick="doApply()">在 SolidWorks 中切换选型</button>
+</div>
+
+<div class="card result" id="resultBox" style="display:none">
+  <h2 style="margin-top:0">SW 操作结果</h2>
+  <div id="resultBody"></div>
+</div>
+
+<script>
+const MOTOR_OPTS = [
+  {v:'D11',  t:'D11 - 11kw电机'},
+  {v:'D55',  t:'D55 - 5.5KW电机'},
+  {v:'D55B', t:'D55B - 5.5KW刹车电机'},
+  {v:'D75',  t:'D75 - 7.5kw电机'},
+  {v:'D75B', t:'D75B - 7.5kw电机刹车'},
+  {v:'',     t:'不编入型号(--motor 回退)'},
+];
+let OPTS = [];
+
+async function init(){
+  // 电机选项
+  document.getElementById('motorCode').innerHTML =
+    MOTOR_OPTS.map(o=>`<option value="${o.v}">${o.t}</option>`).join('');
+
+  const r = await fetch('/api/options');
+  const data = await r.json();
+  OPTS = data.options;
+  if(!OPTS.length){ alert('未找到配置,请先运行 build_config.py'); return; }
+
+  const sel = document.getElementById('series');
+  sel.innerHTML = OPTS.map(o=>`<option value="${o.series}">${o.series}</option>`).join('');
+  sel.onchange = () => fillOpts(sel.value);
+  fillOpts(OPTS[0].series);
+  updatePreview();
+
+  ['connType','motorCode','mount','load','stroke'].forEach(id=>{
+    document.getElementById(id).onchange = updatePreview;
+  });
+}
+
+function fillOpts(series){
+  const o = OPTS.find(x=>x.series===series);
+  if(!o) return;
+  document.getElementById('mount').innerHTML = o.mounts.map(m=>`<option>${m}</option>`).join('');
+  document.getElementById('load').innerHTML = o.loads.map(l=>`<option>${l}</option>`).join('');
+  document.getElementById('stroke').innerHTML = o.strokes.map(s=>`<option>${s}</option>`).join('');
+  updatePreview();
+}
+
+function getMotorName(code){
+  const m = {D11:'11kw电机',D55:'5.5KW电机',D55B:'5.5KW刹车电机',D75:'7.5kw电机',D75B:'7.5kw电机刹车'};
+  return m[code] || '';
+}
+
+function updatePreview(){
+  const series = document.getElementById('series').value;
+  const conn = document.getElementById('connType').value;
+  const mc = document.getElementById('motorCode').value;
+  const mount = document.getElementById('mount').value;
+  const load = document.getElementById('load').value;
+  const stroke = document.getElementById('stroke').value;
+
+  // 型号: 系列-类型-H*K*-行程[-电机]
+  let code = `${series.split('直连')[0]}-${conn}-${mount}${load}-${stroke}`;
+  if(mc) code += `-${mc}`;
+
+  // D1 预览: stroke 数字 + 340
+  const sm = stroke.match(/L?(\d+)/);
+  const d1 = sm ? (parseInt(sm[1]) + 340) : null;
+
+  document.getElementById('preview').innerHTML =
+    `型号: <span class="mc">${code}</span>` +
+    (d1 ? `<span class="d1">D1 = ${d1} mm (stroke+340)</span>` : '');
+}
+
+async function doApply(){
+  const btn = document.getElementById('btnApply');
+  btn.disabled = true; btn.textContent = '正在 SW 中操作...';
+  const box = document.getElementById('resultBox');
+  const body = document.getElementById('resultBody');
+  box.style.display = 'block';
+  body.innerHTML = '<div class="hint">正在连接 SolidWorks 并切换选型,请稍候...</div>';
+
+  const series = document.getElementById('series').value;
+  const conn = document.getElementById('connType').value;
+  const mc = document.getElementById('motorCode').value;
+  const mount = document.getElementById('mount').value;
+  const load = document.getElementById('load').value;
+  const stroke = document.getElementById('stroke').value;
+  let code = `${series.split('直连')[0]}-${conn}-${mount}${load}-${stroke}`;
+  if(mc) code += `-${mc}`;
+
+  try{
+    const r = await fetch('/api/sw-apply',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model_code:code, motor:getMotorName(mc), series:series})
+    });
+    const data = await r.json();
+    renderResult(data);
+  }catch(e){
+    body.innerHTML = `<div class="err-box">请求失败: ${e}</div>`;
+  }finally{
+    btn.disabled = false; btn.textContent = '在 SolidWorks 中切换选型';
+  }
+}
+
+function renderResult(d){
+  const body = document.getElementById('resultBody');
+  if(!d.ok){
+    body.innerHTML = `<div class="err-box">${d.error||'未知错误'}${d.trace?'\n\n'+d.trace:''}</div>`;
+    return;
+  }
+  let html = '';
+  html += `<div class="stat ok">显示 <span class="n">${d.resolved}</span></div>`;
+  html += `<div class="stat bad">抑制 <span class="n">${d.suppressed}</span></div>`;
+  html += `<div class="stat">总计 <span class="n">${d.total}</span></div>`;
+  if(d.errors>0) html += `<div class="stat bad">错误 <span class="n">${d.errors}</span></div>`;
+  if(d.d1) html += `<div class="stat">D1 <span class="n">${d.d1}</span> mm</div>`;
+  html += `<div class="hint">${d.elapsed_hint}</div>`;
+  if(d.cyl_msg) html += `<div class="hint">缸体 D1: ${d.cyl_msg}</div>`;
+
+  // 详情表
+  html += `<table><thead><tr><th>#</th><th>组件名</th><th>基础名</th><th>状态</th></tr></thead><tbody>`;
+  d.details.forEach((it,i)=>{
+    let cls = it.state==='显示'?'on':(it.state==='抑制'?'off':'err');
+    html += `<tr><td>${i+1}</td><td>${it.name}</td><td>${it.base}</td>`+
+            `<td><span class="tag ${cls}">${it.state}</span></td></tr>`;
+  });
+  html += `</tbody></table>`;
+  body.innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

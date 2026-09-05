@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>装配体生成面板</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2029; --panel2:#222b36; --border:#2d3744;
+    --txt:#e4e7eb; --txt2:#9aa5b1; --accent:#3b82f6; --accent2:#10b981;
+    --warn:#f59e0b; --err:#ef4444; --ok:#22c55e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--txt);min-height:100vh;padding:20px}
+  h1{font-size:20px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
+  h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2)}
+  .wrap{max-width:1200px;margin:0 auto;display:grid;grid-template-columns:420px 1fr;gap:20px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:18px}
+  .card h2{font-size:15px;color:var(--txt2);margin-bottom:14px;font-weight:600;
+           text-transform:uppercase;letter-spacing:.5px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;color:var(--txt2);margin-bottom:6px}
+  .field select,.field input{width:100%;padding:9px 11px;background:var(--panel2);
+       border:1px solid var(--border);border-radius:7px;color:var(--txt);font-size:14px;outline:none}
+  .field select:focus,.field input:focus{border-color:var(--accent)}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .code-box{background:var(--panel2);border:1px dashed var(--border);border-radius:8px;
+            padding:14px;margin:6px 0 16px;text-align:center}
+  .code-box .lbl{font-size:12px;color:var(--txt2);margin-bottom:6px}
+  .code-box .code{font-size:20px;font-weight:700;color:var(--accent2);
+                  font-family:Consolas,Monaco,monospace;word-break:break-all}
+  .hint{font-size:12px;color:var(--txt2);margin-top:6px}
+  .hint b{color:var(--accent)}
+  .btn{width:100%;padding:12px;background:var(--accent);color:#fff;border:none;
+       border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;transition:.15s}
+  .btn:hover{background:#2563eb}
+  .btn:disabled{background:#475569;cursor:not-allowed}
+  .btn.building{background:var(--warn)}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #fff3;
+           border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .result{margin-top:16px}
+  .result .empty{color:var(--txt2);font-size:13px;text-align:center;padding:30px 0}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .stat{background:var(--panel2);border-radius:8px;padding:12px;text-align:center}
+  .stat .v{font-size:22px;font-weight:700;color:var(--accent2)}
+  .stat .v.err{color:var(--err)}
+  .stat .l{font-size:11px;color:var(--txt2);margin-top:4px}
+  .times{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px}
+  .times td,.times th{padding:7px 10px;text-align:left;border-bottom:1px solid var(--border)}
+  .times th{color:var(--txt2);font-weight:600;width:60%}
+  .times td{text-align:right;font-family:Consolas,monospace}
+  .files{margin-top:10px}
+  .file{display:flex;align-items:center;justify-content:space-between;
+        padding:9px 12px;background:var(--panel2);border-radius:7px;margin-bottom:7px;font-size:13px}
+  .file .nm{font-family:Consolas,monospace;color:var(--txt);word-break:break-all}
+  .file .sz{color:var(--txt2);font-size:12px;margin-left:8px;white-space:nowrap}
+  .file a{color:var(--accent);text-decoration:none;font-size:12px;margin-left:10px;white-space:nowrap}
+  .file a:hover{text-decoration:underline}
+  .file a.view-link{color:var(--accent2)}
+  .grp{margin-bottom:14px}
+  .grp-hd{font-size:13px;font-weight:600;color:var(--accent);margin-bottom:7px;
+          padding-bottom:5px;border-bottom:1px solid var(--border);
+          cursor:pointer;user-select:none;transition:.15s}
+  .grp-hd:hover{background:#1e2a3a;border-radius:4px;padding:4px 6px;margin:-4px -6px 3px}
+  .grp-hd.clickable::after{content:' 📋';font-size:11px;opacity:.5}
+  .grp-cnt{font-size:11px;color:var(--txt2);font-weight:400;margin-left:6px}
+  .dl-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+  .dl-row a{flex:1;min-width:140px;text-align:center;padding:10px;background:var(--panel2);
+            border:1px solid var(--border);border-radius:7px;color:var(--accent);text-decoration:none;font-size:13px}
+  .dl-row a:hover{border-color:var(--accent);background:#1e2a3a}
+  .dl-row a.view-link{color:var(--accent2);border-color:var(--accent2)}
+  .dl-row a.view-link:hover{background:#0f2a1a}
+  .err-msg{background:#3b1219;border:1px solid var(--err);color:#fecaca;
+           padding:12px;border-radius:8px;font-size:13px;margin-top:12px;white-space:pre-wrap}
+  .ok-msg{background:#0f2a1a;border:1px solid var(--ok);color:#bbf7d0;
+          padding:12px;border-radius:8px;font-size:13px;margin-bottom:14px}
+  .badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;
+         background:#1e3a5f;color:#93c5fd;margin-left:6px}
+  .tasks{margin-top:8px;max-height:230px;overflow:auto}
+  .task{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--panel2);
+        border-radius:6px;margin-bottom:6px;font-size:12px}
+  .task .key{flex:1;color:var(--txt);word-break:break-all}
+  .task .tm{color:var(--txt2);font-family:Consolas,monospace;white-space:nowrap}
+  .st{padding:1px 7px;border-radius:9px;font-size:11px;white-space:nowrap}
+  .st.pending{background:#3f3f16;color:#fde047}
+  .st.running{background:#1e3a5f;color:#93c5fd}
+  .st.done{background:#0f2a1a;color:#bbf7d0}
+  .st.error{background:#3b1219;color:#fecaca}
+  .logbox{background:#0b0f14;border:1px solid var(--border);border-radius:7px;
+          padding:10px;margin-top:12px;max-height:200px;overflow:auto;
+          font-family:Consolas,Monaco,monospace;font-size:12px;
+          color:#9aa5b1;white-space:pre-wrap;line-height:1.5}
+</style>
+</head>
+<body>
+<h1><span class="dot"></span>装配体生成面板 <span class="badge">pythonOCC</span></h1>
+<div class="wrap">
+  <!-- 左:参数表单 -->
+  <div class="card">
+    <h2>选型参数</h2>
+    <div class="field">
+      <label>系列</label>
+      <select id="series"></select>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>连接类型</label>
+        <select id="type">
+          <option value="E">E - 直连</option>
+          <option value="F">F - 折返</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>电机编号</label>
+        <select id="motorCode"></select>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>安装方式</label>
+        <select id="mount"></select>
+      </div>
+      <div class="field">
+        <label>负载连接</label>
+        <select id="load"></select>
+      </div>
+    </div>
+    <div class="field">
+      <label>行程 (mm)</label>
+      <input id="strokeNum" type="number" min="100" max="2000" step="1" value="100">
+      <div class="hint">行程范围 100~714，D1 = 行程 + <b id="cVal">340</b> = <b id="d1Val">440</b> mm</div>
+    </div>
+    <div class="code-box">
+      <div class="lbl">型号编码</div>
+      <div class="code" id="codePreview">250-E-H2K1-L100-D11</div>
+    </div>
+    <button class="btn" id="buildBtn" onclick="doBuild()">生成装配体</button>
+  </div>
+
+  <!-- 右:结果 + 文件列表 -->
+  <div class="card">
+    <h2>生成结果</h2>
+    <div id="resultArea"><div class="empty">选择参数后点击「生成装配体」</div></div>
+    <h2 style="margin-top:22px">任务队列 <span class="badge" id="poolStat">-</span></h2>
+    <div class="tasks" id="taskList"></div>
+    <h2 style="margin-top:22px">已生成文件 <span class="badge" id="fileCount">0</span></h2>
+    <div class="files" id="fileList"></div>
+  </div>
+</div>
+
+<script>
+let OPTS = null;
+
+async function loadOptions(){
+  const r = await fetch('/api/options');
+  OPTS = await r.json();
+  // 系列
+  const sel = document.getElementById('series');
+  sel.innerHTML = OPTS.series.map(s=>`<option value="${s.name}">${s.name}</option>`).join('');
+  sel.addEventListener('change', onSeriesChange);
+  document.getElementById('type').addEventListener('change', updateCode);
+  document.getElementById('motorCode').addEventListener('change', updateCode);
+  document.getElementById('mount').addEventListener('change', updateCode);
+  document.getElementById('load').addEventListener('change', updateCode);
+  document.getElementById('strokeNum').addEventListener('input', updateCode);
+  onSeriesChange();
+  loadFiles();
+  loadTasks();
+  // 任务队列是全局视图(多用户共用),定时刷新看得到别人的排队情况
+  setInterval(loadTasks, 2500);
+}
+
+function onSeriesChange(){
+  const name = document.getElementById('series').value;
+  const s = OPTS.series.find(x=>x.name===name);
+  if(!s) return;
+  fillSelect('mount', s.mount.length?s.mount:['H2']);
+  fillSelect('load', s.load.length?s.load:['K1']);
+  // 电机按系列填充:250 是三相异步电机,JDG 是汇川伺服,各系列可选电机不同
+  const mc = document.getElementById('motorCode');
+  mc.innerHTML = (s.motor||[]).map(m=>`<option value="${m}">${m}</option>`).join('')
+    + `<option value="">不编入型号</option>`;
+  // 行程范围
+  const strokes = s.strokes;
+  if(strokes.length){
+    const nums = strokes.map(x=>parseInt(x.replace(/^L/,''))).filter(x=>!isNaN(x));
+    const inp = document.getElementById('strokeNum');
+    inp.min = Math.min(...nums);
+    inp.max = Math.max(...nums);
+    if(parseInt(inp.value) < inp.min) inp.value = inp.min;
+    if(parseInt(inp.value) > inp.max) inp.value = inp.max;
+  }
+  updateCode();
+}
+
+function fillSelect(id, arr){
+  const el = document.getElementById(id);
+  el.innerHTML = arr.map(v=>`<option value="${v}">${v}</option>`).join('');
+}
+
+function updateCode(){
+  // 系列号取系列名去掉连接方式后缀:250直连→250,JDG45直连→JDG45
+  const series = document.getElementById('series').value.replace(/(直连|折返)$/,'');
+  const type = document.getElementById('type').value;
+  const mount = document.getElementById('mount').value;
+  const load = document.getElementById('load').value;
+  const strokeNum = document.getElementById('strokeNum').value || '100';
+  const mc = document.getElementById('motorCode').value;
+  const code = `${series}-${type}-${mount}${load}-L${strokeNum}` + (mc?`-${mc}`:'');
+  document.getElementById('codePreview').textContent = code;
+  // D1 预览
+  const c = parseInt(document.getElementById('cVal').textContent) || 340;
+  document.getElementById('d1Val').textContent = (parseInt(strokeNum)||0) + c;
+}
+
+let POLL_TIMER = null;
+const STATUS_TEXT = {pending:'排队',running:'运行中',done:'完成',error:'失败'};
+
+function escapeHtml(s){
+  return String(s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+}
+
+function finishBuild(){
+  clearTimeout(POLL_TIMER);
+  const btn = document.getElementById('buildBtn');
+  btn.disabled = false; btn.classList.remove('building');
+  btn.innerHTML = '生成装配体';
+}
+
+async function doBuild(){
+  const btn = document.getElementById('buildBtn');
+  const area = document.getElementById('resultArea');
+  const code = document.getElementById('codePreview').textContent;
+  const seriesName = document.getElementById('series').value;
+  btn.disabled = true; btn.classList.add('building');
+  btn.innerHTML = '<span class="spinner"></span>提交中...';
+  area.innerHTML = '<div class="empty"><span class="spinner"></span>任务提交中...</div>';
+  try{
+    // 未选电机时后端按该系列配置取默认电机,不写死 250 的电机
+    // 后端异步处理:提交即返回 task_id,随后轮询进度,不阻塞其它用户
+    const body = {model_code: code, series: seriesName};
+    const r = await fetch('/api/build',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if(!data.ok){
+      area.innerHTML = `<div class="err-msg">提交失败:\n${data.error||'未知错误'}</div>`;
+      finishBuild(); return;
+    }
+    if(data.dedup){
+      area.innerHTML = `<div class="ok-msg">该型号正在生成中,已复用同一任务(不会重复计算)</div>`;
+    }
+    pollTask(data.task_id);
+  }catch(e){
+    area.innerHTML = `<div class="err-msg">请求异常: ${e}</div>`;
+    finishBuild();
+  }
+}
+
+function pollTask(taskId){
+  const area = document.getElementById('resultArea');
+  clearTimeout(POLL_TIMER);
+  (async ()=>{
+    try{
+      const r = await fetch(`/api/task/${taskId}`);
+      const d = await r.json();
+      if(!d.ok){
+        area.innerHTML = `<div class="err-msg">轮询失败: ${d.error}</div>`;
+        finishBuild(); return;
+      }
+      const t = d.task;
+      if(t.status==='done'){
+        renderResult(t.result);
+        loadFiles(); loadTasks(); finishBuild(); return;
+      }
+      if(t.status==='error'){
+        area.innerHTML = `<div class="err-msg">生成失败:\n${t.error||'未知错误'}</div>`;
+        loadTasks(); finishBuild(); return;
+      }
+      renderProgress(t);
+      loadTasks();
+      POLL_TIMER = setTimeout(()=>pollTask(taskId), 800);
+    }catch(e){
+      area.innerHTML = `<div class="err-msg">轮询异常: ${e}</div>`;
+      finishBuild();
+    }
+  })();
+}
+
+function renderProgress(t){
+  const area = document.getElementById('resultArea');
+  const label = t.status==='running' ? '装配计算中' : '排队中(等待空闲 worker)';
+  const tip = t.status==='pending'
+    ? '· 当前 worker 都在忙,前面的任务完成后自动开始' : '';
+  const log = escapeHtml((t.log||[]).join('\n'));
+  area.innerHTML = `
+    <div class="ok-msg"><span class="spinner"></span>${label} · <b>${escapeHtml(t.key)}</b>
+      · 已耗时 ${t.elapsed}s
+      <div style="font-size:12px;opacity:.75;margin-top:4px">任务 ${t.task_id} ${tip}</div>
+    </div>
+    <div class="logbox">${log || '(等待子进程输出...)'}</div>`;
+}
+
+function renderResult(r){
+  const t = r.times;
+  const dlLinks = [];
+  if(r.step_file) dlLinks.push(`<a href="/download/${encodeURIComponent(r.step_file)}" download>↓ 装配体 STEP</a>`);
+  if(r.glb_file) dlLinks.push(`<a href="/download/${encodeURIComponent(r.glb_file)}" download>↓ 装配体 GLB</a>`);
+  if(r.cylinder_file) dlLinks.push(`<a href="/download/${encodeURIComponent(r.cylinder_file)}" download>↓ 缸体 STEP</a>`);
+  // 查看模型按钮(仅 GLB 可被 o3dv 渲染),新标签页打开 3D 查看器
+  const viewLinks = [];
+  if(r.glb_file){
+    const modelUrl = encodeURIComponent('/download/' + r.glb_file);
+    const productName = encodeURIComponent(r.model_code || '装配体');
+    viewLinks.push(`<a class="view-link" href="/viewer?modelUrl=${modelUrl}&productName=${productName}" target="_blank">👁 查看模型</a>`);
+  }
+  // 工程图按钮(新标签页打开工程图编辑器)
+  if(r.step_file){
+    viewLinks.push(`<a class="view-link" href="/drawing" target="_blank">📐 工程图</a>`);
+  }
+  document.getElementById('resultArea').innerHTML = `
+    <div class="ok-msg">✓ 生成完成: <b>${r.model_code}</b> · 系列 ${r.series} · 电机 ${r.motor}</div>
+    <div class="dl-row">${dlLinks.join('')}${viewLinks.join('')}</div>
+    <div class="stats">
+      <div class="stat"><div class="v">${r.total_time}s</div><div class="l">总耗时</div></div>
+      <div class="stat"><div class="v">${r.shown}</div><div class="l">显示件数</div></div>
+      <div class="stat"><div class="v">${r.hidden}</div><div class="l">抑制件数</div></div>
+      <div class="stat"><div class="v">${r.d1!=null?r.d1:'-'}</div><div class="l">缸体 D1</div></div>
+    </div>
+    <table class="times">
+      <tr><th>Step 1 读取零件 STEP</th><td>${t.read}s</td></tr>
+      <tr><th>缸体拉伸(主流程)</th><td>${(t.stretch*1000)|0}ms</td></tr>
+      <tr><th>Step 2 应用变换+合并</th><td>${(t.merge*1000)|0}ms</td></tr>
+      <tr><th>Step 3 导出装配体 STEP</th><td>${t.step}s</td></tr>
+      <tr><th>Step 4 缸体拉伸验证</th><td>${(t.cylinder*1000)|0}ms</td></tr>
+      <tr><th>Step 5 GLB 导出</th><td>${t.glb}s</td></tr>
+    </table>
+  `;
+}
+
+async function loadTasks(){
+  const el = document.getElementById('taskList');
+  if(!el) return;
+  try{
+    const r = await fetch('/api/tasks');
+    const d = await r.json();
+    if(!d.ok) return;
+    const s = d.stats;
+    document.getElementById('poolStat').textContent =
+      `并行 ${s.workers} · 运行 ${s.running} · 排队 ${s.pending}`;
+    if(!d.tasks.length){
+      el.innerHTML = '<div class="empty" style="padding:10px">暂无任务</div>';
+      return;
+    }
+    el.innerHTML = d.tasks.map(t=>`
+      <div class="task">
+        <span class="st ${t.status}">${STATUS_TEXT[t.status]||t.status}</span>
+        <span class="key">${escapeHtml(t.key)}</span>
+        <span class="tm">${t.elapsed}s</span>
+      </div>`).join('');
+  }catch(e){}
+}
+
+async function loadFiles(){
+  const r = await fetch('/api/files');
+  const data = await r.json();
+  const list = document.getElementById('fileList');
+  document.getElementById('fileCount').textContent = data.total;
+  if(!data.groups.length){
+    list.innerHTML = '<div class="empty" style="padding:14px">暂无文件</div>';
+    return;
+  }
+  list.innerHTML = data.groups.map(g=>`
+    <div class="grp">
+      <div class="grp-hd${g.has_info?' clickable':''}" onclick="${g.has_info?`loadHistory('${g.model}')`:''}">${g.model} <span class="grp-cnt">${g.files.length} 件</span></div>
+      ${g.files.map(f=>{
+        const isGlb = f.name.toLowerCase().endsWith('.glb');
+        const viewLink = isGlb
+          ? `<a class="view-link" href="/viewer?modelUrl=${encodeURIComponent('/download/'+f.rel)}&productName=${encodeURIComponent(f.name)}" target="_blank">查看</a>`
+          : '';
+        return `
+        <div class="file">
+          <span><span class="nm">${f.name}</span><span class="sz">${fmtSize(f.size)}</span></span>
+          <a href="/download/${encodeURIComponent(f.rel)}" download>下载</a>${viewLink}
+        </div>`;
+      }).join('')}
+    </div>`).join('');
+}
+
+async function loadHistory(model){
+  const area = document.getElementById('resultArea');
+  area.innerHTML = '<div class="empty"><span class="spinner"></span>加载历史记录...</div>';
+  try{
+    const r = await fetch(`/api/build-info/${encodeURIComponent(model)}`);
+    const data = await r.json();
+    if(!data.ok){
+      area.innerHTML = `<div class="err-msg">加载失败: ${data.error||'未知错误'}</div>`;
+      return;
+    }
+    renderResult(data.result);
+  }catch(e){
+    area.innerHTML = `<div class="err-msg">请求异常: ${e}</div>`;
+  }
+}
+
+function fmtSize(b){
+  if(b>1048576) return (b/1048576).toFixed(2)+' MB';
+  if(b>1024) return (b/1024).toFixed(1)+' KB';
+  return b+' B';
+}
+
+loadOptions();
+</script>
+</body>
+</html>

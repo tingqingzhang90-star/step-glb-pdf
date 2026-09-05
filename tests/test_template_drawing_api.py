@@ -8,7 +8,6 @@ pythonOCC 与真实模型文件(那属于集成测试范畴)。
 运行:
     C:\\Users\\<user>\\.conda\\envs\\pdf1\\python.exe -m pytest tests/ -v
 """
-import importlib.util
 import io
 import json
 import os
@@ -19,27 +18,27 @@ import pytest
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
 
-_SERVER = os.path.join(_PROJECT_ROOT, "src", "web", "server.py")
-
-
-def _load_server():
-    """按文件路径加载 Flask 服务模块
-
-    注册进 sys.modules,否则 monkeypatch.setattr("cad_server.X") 这种
-    字符串形式的目标无法解析。
-    """
-    if "cad_server" in sys.modules:
-        return sys.modules["cad_server"]
-    spec = importlib.util.spec_from_file_location("cad_server", _SERVER)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["cad_server"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+from web import app as web_app
+from web import common as web_common
+from web import task_pool
+from web.blueprints import template_helpers as th
 
 
 @pytest.fixture(scope="module")
 def srv():
-    return _load_server()
+    """聚合路由实际读取的对象,供 monkeypatch 打桩
+
+    模板出图路由读 web.common(OUT_DIR / PROJECT_ROOT)与
+    web.blueprints.template_helpers(TEMPLATES_DIR),打桩要打到这些模块上,
+    否则路由仍读真实目录。
+    """
+    class _Srv:
+        app = web_app.app
+        pool = task_pool.get_pool()
+        _template_identity = staticmethod(th.template_identity)
+        _reject_cross_series = staticmethod(th.reject_cross_series)
+
+    return _Srv()
 
 
 @pytest.fixture
@@ -61,7 +60,7 @@ def _template_doc(model_id="250-E-H2K1-L100-D11"):
 # -------------------- 上传 --------------------
 
 def test_upload_json_body_ok(client, tmp_path, monkeypatch):
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     res = client.post("/api/template-drawing/upload",
                       json=_template_doc("250-E-H2K1-L900-D99"))
     assert res.status_code == 200
@@ -73,7 +72,7 @@ def test_upload_json_body_ok(client, tmp_path, monkeypatch):
 
 
 def test_upload_multipart_ok(client, tmp_path, monkeypatch):
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     data = {"file": (io.BytesIO(json.dumps(_template_doc()).encode("utf-8")),
                      "tpl.json")}
     res = client.post("/api/template-drawing/upload", data=data,
@@ -95,7 +94,7 @@ def test_upload_rejects_empty_views(client):
 
 
 def test_upload_rejects_bad_json(client, tmp_path, monkeypatch):
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     data = {"file": (io.BytesIO(b"{ not json"), "bad.json")}
     res = client.post("/api/template-drawing/upload", data=data,
                       content_type="multipart/form-data")
@@ -119,7 +118,7 @@ def test_series_models_filters_by_identity(client, tmp_path, monkeypatch):
         (d / "assembly.step").write_bytes(b"")
     # 无形状文件的目录应被跳过
     (out / "250-E-H2K1-EMPTY-D1").mkdir()
-    monkeypatch.setattr("cad_server.OUT_DIR", str(out))
+    monkeypatch.setattr(web_common, "OUT_DIR", str(out))
 
     res = client.get(
         "/api/template-drawing/series-models?identity=250-E-H2K1")
@@ -132,7 +131,7 @@ def test_series_models_filters_by_identity(client, tmp_path, monkeypatch):
 
 
 def test_series_models_accepts_template_id(client, tmp_path, monkeypatch):
-    monkeypatch.setattr("cad_server.OUT_DIR", str(tmp_path))
+    monkeypatch.setattr(web_common, "OUT_DIR", str(tmp_path))
     res = client.get(
         "/api/template-drawing/series-models"
         "?template_id=250-E-H2K1-L100-D11")
@@ -154,14 +153,14 @@ def test_generate_rejects_empty_models(client):
 
 
 def test_generate_rejects_unknown_template(client, tmp_path, monkeypatch):
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     res = client.post("/api/template-drawing/generate",
                       json={"template_id": "nope", "models": ["a"]})
     assert res.status_code == 404
 
 
 def test_generate_rejects_cross_series(client, tmp_path, monkeypatch):
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
     res = client.post("/api/template-drawing/generate", json={
@@ -185,7 +184,7 @@ def _ok_result(model_code):
 
 def test_generate_returns_relative_pdf_path(client, srv, tmp_path, monkeypatch):
     """PDF 绝对路径应转换为相对项目根,供下载接口使用"""
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     # 出图默认在子进程执行,打桩对子进程无效,故切到 inline 模式(主进程线程)
     monkeypatch.setattr(srv.pool, "inline", True)
     (tmp_path / "t.json").write_text(
@@ -214,7 +213,7 @@ def test_generate_returns_relative_pdf_path(client, srv, tmp_path, monkeypatch):
 
 def test_generate_reports_pipeline_error(client, srv, tmp_path, monkeypatch):
     """基准任务失败应整体返回 500"""
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     monkeypatch.setattr(srv.pool, "inline", True)
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
@@ -238,7 +237,7 @@ def test_generate_submits_one_task_per_model(client, srv, tmp_path, monkeypatch)
     去重 key 按 模板+型号 生成:同型号并发请求合并成同一任务,避免
     两个用户同时写同一个 output 目录。
     """
-    monkeypatch.setattr("cad_server.TEMPLATES_DIR", str(tmp_path))
+    monkeypatch.setattr(th, "TEMPLATES_DIR", str(tmp_path))
     (tmp_path / "t.json").write_text(
         json.dumps(_template_doc()), encoding="utf-8")
 
@@ -288,7 +287,7 @@ def test_download_returns_404_for_missing_file(client):
 def test_download_sends_attachment(client, tmp_path, monkeypatch):
     pdf = tmp_path / "a.pdf"
     pdf.write_bytes(b"%PDF-1.4 fake")
-    monkeypatch.setattr("cad_server._PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(web_common, "PROJECT_ROOT", str(tmp_path))
     res = client.get("/api/template-drawing/download/a.pdf")
     assert res.status_code == 200
     assert res.headers["Content-Type"] == "application/pdf"
@@ -298,7 +297,7 @@ def test_download_sends_attachment(client, tmp_path, monkeypatch):
 def test_preview_is_inline_not_attachment(client, tmp_path, monkeypatch):
     pdf = tmp_path / "b.pdf"
     pdf.write_bytes(b"%PDF-1.4 fake")
-    monkeypatch.setattr("cad_server._PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(web_common, "PROJECT_ROOT", str(tmp_path))
     res = client.get("/api/template-drawing/preview/b.pdf")
     assert res.status_code == 200
     assert res.headers["Content-Type"] == "application/pdf"
