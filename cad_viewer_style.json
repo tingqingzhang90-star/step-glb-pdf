@@ -28,5 +28,13 @@
     "color": "#555555"
   },
 
+  "table": {
+    "_comment": "表格绘制在 SVG viewBox 内,长度单位即 mm,不经 _px_to_mm_at_96dpi 折算;font_px 例外,沿用 96dpi 折算(与 dim.text 一致)",
+    "text":   { "font_px": 13,    "color": "#303133" },
+    "border": { "stroke_mm": 0.3, "color": "#303133" },
+    "col_width_mm": 30,
+    "row_height_mm": 8
+  },
+
   "_px_to_mm_at_96dpi": 0.2645833
 }

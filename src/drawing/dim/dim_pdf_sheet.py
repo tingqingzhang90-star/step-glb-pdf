@@ -39,6 +39,12 @@ _ARROW_LEN_MM = _CFG["dim"]["arrow"]["len_px"] * _PX2MM
 _ARROW_HALF_MM = _CFG["dim"]["arrow"]["half_px"] * _PX2MM
 _C_EDGE = (0.1, 0.1, 0.1)
 _C_HIDDEN = (0.45, 0.45, 0.45)
+# 表格默认值:表格画在 SVG viewBox 内,长度单位即 mm,不经 _PX2MM 折算;
+# 只有字号沿用 96dpi 折算(与 dim.text 一致)
+_TBL_FONT_PX = _CFG["table"]["text"]["font_px"]
+_TBL_TEXT_COLOR = _CFG["table"]["text"]["color"]
+_TBL_BORDER_W = _CFG["table"]["border"]["stroke_mm"]
+_TBL_BORDER_COLOR = _CFG["table"]["border"]["color"]
 
 
 def _hex_rgb(color):
@@ -129,9 +135,9 @@ def _draw_table_placement(c, table, mapper):
         row_top.append(row_top[-1] + h)
 
     border = table.get("border", {})
-    bw = border.get("width", 0.3)
-    bc = _hex_rgb(border.get("color"))
-    tc = _hex_rgb(table.get("text_color", "#303133"))
+    bw = border.get("width", _TBL_BORDER_W)
+    bc = _hex_rgb(border.get("color", _TBL_BORDER_COLOR))
+    tc = _hex_rgb(table.get("text_color", _TBL_TEXT_COLOR))
 
     try:
         from drawing.dim.dim_render import _CN_FONT
@@ -157,7 +163,7 @@ def _draw_table_placement(c, table, mapper):
         text = cell.get("text") or ""
         if not text:
             continue
-        fs_mm = cell.get("font_size", 13) * _PX2MM
+        fs_mm = cell.get("font_size", _TBL_FONT_PX) * _PX2MM
         c.setFont(_CN_FONT, fs_mm)
         c.setFillColorRGB(*tc)
         # 水平对齐:left/center/right;padding 1mm

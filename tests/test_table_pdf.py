@@ -143,3 +143,41 @@ def test_render_frontend_pdf_passes_tables_through(tmp_path, monkeypatch):
     out = tmp_path / "t.pdf"
     mod.render_frontend_pdf([], {}, doc, "M1", str(out))
     assert out.exists() and out.stat().st_size > 0
+
+
+def _bare_table():
+    """单格表,不指定 font_size / border / text_color,走默认值分支"""
+    return {"x": 0, "y": 0, "col_widths": [10], "row_heights": [8],
+            "cells": [{"r": 0, "c": 0, "text": "a"}]}
+
+
+def test_default_font_size_uses_shared_config():
+    """cell 未指定 font_size 时,字号取 cad_viewer_style.json 的 table.text.font_px"""
+    from drawing.dim import dim_pdf_sheet as mod
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _bare_table(), m)
+    fonts = [a[1] for k, a in c.calls if k == "font"]
+    assert fonts == [round(mod._TBL_FONT_PX * mod._PX2MM, 2)]
+
+
+def test_default_border_uses_shared_config():
+    """table 未指定 border 时,线宽取 cad_viewer_style.json 的 table.border.stroke_mm"""
+    from drawing.dim import dim_pdf_sheet as mod
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _bare_table(), m)
+    widths = [a for k, a in c.calls if k == "lineWidth"]
+    assert widths == [round(mod._TBL_BORDER_W, 2)]
+
+
+def test_table_style_constants_match_shared_config():
+    """后端常量必须等于 cad_viewer_style.json 的 table 段——前端读同一份,
+    两者一旦不同源就会出现预览与 PDF 字号/线宽不一致"""
+    import json
+    from drawing.dim import dim_pdf_sheet as mod
+    with open(os.path.join(_PROJECT_ROOT, "cad_viewer_style.json"),
+              encoding="utf-8") as f:
+        tbl = json.load(f)["table"]
+    assert mod._TBL_FONT_PX == tbl["text"]["font_px"]
+    assert mod._TBL_TEXT_COLOR == tbl["text"]["color"]
+    assert mod._TBL_BORDER_W == tbl["border"]["stroke_mm"]
+    assert mod._TBL_BORDER_COLOR == tbl["border"]["color"]

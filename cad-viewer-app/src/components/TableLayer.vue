@@ -37,7 +37,7 @@
           :x="cellTextX(t, lc.cell)"
           :y="cellTextY(t, lc.cell)"
           :font-size="cellFontSize(lc.cell)"
-          :fill="t.text_color || '#303133'"
+          :fill="t.text_color || TABLE_STYLE.textColor"
           :text-anchor="cellTextAnchor(lc.cell)"
           :style="{ fontWeight: lc.cell.bold ? 'bold' : 'normal' }"
         >{{ lc.cell.text }}</text>
@@ -104,6 +104,7 @@
 <script setup>
 // 表格 SVG 渲染层:只负责画与事件转发,状态与逻辑在 composable 里
 import { nextTick, ref, watch } from 'vue'
+import { TABLE_STYLE } from '@/composables/useStyleConfig'
 import {
   tableColLefts, tableRowTops, tableW, tableH, tableLogicalCells,
   cornerHandles, colResizeHandles, rowResizeHandles,
@@ -149,8 +150,8 @@ function originRectAttrs(t, lc) {
   return {
     x: rect.x, y: rect.y, width: rect.w, height: rect.h,
     fill: isCellActive(lc.r, lc.c) ? '#ecf5ff' : 'white',
-    stroke: (t.border && t.border.color) || '#303133',
-    'stroke-width': (t.border && t.border.width) || 0.3
+    stroke: (t.border && t.border.color) || TABLE_STYLE.borderColor,
+    'stroke-width': (t.border && t.border.width) || TABLE_STYLE.borderWidth
   }
 }
 
@@ -202,7 +203,7 @@ function editCellStyleFor(t, ac) {
   const align = (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-')) || 'h-left'
   const editing = isEditingCell(ac)
   return {
-    color: t.text_color || '#303133',
+    color: t.text_color || TABLE_STYLE.textColor,
     // foreignObject 内 CSS px 等价于 SVG 用户单位(mm),故字号须用 mm 值,与单元格文字一致
     fontSize: `${cellFontSize(cell)}px`,
     fontWeight: cell.bold ? 'bold' : 'normal',

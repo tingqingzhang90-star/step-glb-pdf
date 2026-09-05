@@ -161,7 +161,9 @@ export default defineConfig({
     cssMinify: false
   },
   server: {
-    port: 5173,
+    host: '127.0.0.1',
+    port: 5174,
+    allowedHosts: ['jdg.zg-yrj.com'],
     // 允许 dev server 读取项目根之外的 cad_viewer_style.json
     // (前后端共用样式配置,见 docs/前后端显示样式一致方案.md)
     fs: {
@@ -173,6 +175,11 @@ export default defineConfig({
         changeOrigin: true
       }
     }
+  },
+  preview: {
+    host: '127.0.0.1',
+    port: 5174,
+    allowedHosts: ['jdg.zg-yrj.com']
   },
   optimizeDeps: {
     // Vite 8 用 Rolldown 做依赖优化，Vite 插件的 resolveId 不在此阶段生效，

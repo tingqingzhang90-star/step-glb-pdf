@@ -2,6 +2,8 @@
 // 坐标单位:mm。表格 x/y 是 SVG 左上角,与 views 同坐标系。
 // 合并格只在其左上角声明 colspan/rowspan,被覆盖格由 findCellAt 反查。
 
+import { PX_TO_MM, TABLE_STYLE } from '@/composables/useStyleConfig'
+
 /** 各列左边的 x(长度 = 列数+1,末位是表格右边界) */
 export function tableColLefts(t) {
   const a = [t.x]
@@ -94,7 +96,7 @@ export function cellRectAt(t, r, c) {
   return { r, c, ...rect, text: cell.text || '' }
 }
 
-const PX_TO_MM = 0.2645833   // 与后端 96dpi 折算一致
+
 
 /** 单元格文字水平对齐 → SVG text-anchor */
 export function cellTextAnchor(cell) {
@@ -116,13 +118,13 @@ export function cellTextX(t, cell) {
 /** 单元格文字 y(baseline,垂直居中近似) */
 export function cellTextY(t, cell) {
   const r = cellRect(t, cell)
-  const fs = (cell.font_size || 13) * PX_TO_MM
+  const fs = cellFontSize(cell)
   return r.y + r.h / 2 + fs * 0.35
 }
 
-/** 单元格文字字号(mm) */
+/** 单元格文字字号(mm)。cell 未指定 font_size 时取 cad_viewer_style.json 的 table.text.font_px */
 export function cellFontSize(cell) {
-  return (cell.font_size || 13) * PX_TO_MM
+  return (cell.font_size || TABLE_STYLE.fontPx) * PX_TO_MM
 }
 
 function hAlign(cell) {

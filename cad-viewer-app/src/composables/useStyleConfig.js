@@ -4,6 +4,19 @@
 
 import config from '../../../cad_viewer_style.json'
 
+// 96dpi 折算:px → mm。SVG viewBox 单位即 mm,标注/表格字号都要走这个换算
+export const PX_TO_MM = config._px_to_mm_at_96dpi
+
+// 表格默认值。表格画在 SVG viewBox 内(长度单位即 mm),只有字号沿用 96dpi 折算
+export const TABLE_STYLE = {
+  fontPx: config.table.text.font_px,
+  textColor: config.table.text.color,
+  borderWidth: config.table.border.stroke_mm,
+  borderColor: config.table.border.color,
+  colWidth: config.table.col_width_mm,
+  rowHeight: config.table.row_height_mm
+}
+
 export function useStyleConfig() {
   // 1) 写 CSS 自定义属性到 :root,样式表里用 var(--xxx)
   function applyToRoot(doc = document) {

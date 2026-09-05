@@ -39,6 +39,22 @@
           </template>
           <TableSizePicker :max-rows="20" :max-cols="20" :cell="14" @confirm="onPickTableSize" />
         </el-popover>
+        <el-button size="small" :disabled="!placedTables.length" @click="onSaveTablePreset">存为表格模板</el-button>
+        <el-dropdown v-if="tablePresets.length" trigger="click" @command="onApplyTablePreset">
+          <el-button size="small">
+            表格模板<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+          </el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="p in tablePresets" :key="p.id" :command="p.id">
+                <span class="preset-row">
+                  <span class="preset-name">{{ p.name }}</span>
+                  <el-icon class="preset-del" @click.stop="onRemoveTablePreset(p.id)"><Delete /></el-icon>
+                </span>
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-button size="small" :disabled="selectedCells.length < 2" @click="mergeSelected">合并</el-button>
         <el-button size="small" :disabled="selectedCells.length !== 1" @click="splitSelected">拆分</el-button>
         <TableStyleBar
@@ -613,11 +629,12 @@
 // 组合根:只做各功能域的组合装配、事件总控与跨域编排。
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
-import { useStyleConfig } from '@/composables/useStyleConfig'
+import { useStyleConfig, TABLE_STYLE } from '@/composables/useStyleConfig'
+import { useTablePresets } from '@/composables/useTablePresets'
 import { usePlacedViews } from '@/composables/usePlacedViews'
 import { useSheetCoords } from '@/composables/useSheetCoords'
 import { useViewDrag } from '@/composables/useViewDrag'
@@ -758,8 +775,8 @@ function onCellMouseEnter(event, table, r, c) {
 const selectedCellFontSize = computed(() => {
   const t = selectedTable.value
   const cells = selectedCells.value
-  if (!t || cells.length !== 1) return 9
-  return findCellAt(t, cells[0].r, cells[0].c)?.font_size || 9
+  if (!t || cells.length !== 1) return TABLE_STYLE.fontPx
+  return findCellAt(t, cells[0].r, cells[0].c)?.font_size || TABLE_STYLE.fontPx
 })
 
 // 插入表格:尺寸选择器 → 空表格(Office 风格,无占位文字)
@@ -767,6 +784,40 @@ const showTablePicker = ref(false)
 function onPickTableSize(rows, cols) {
   showTablePicker.value = false
   insertEmptyTable(rows, cols)
+}
+
+// 表格预设:整套表格存 localStorage,按原坐标灌回(幅面一致,坐标可直接复用)
+const {
+  presets: tablePresets, load: loadTablePresets,
+  save: saveTablePreset, apply: applyTablePreset, remove: removeTablePreset
+} = useTablePresets()
+
+async function onSaveTablePreset() {
+  let name
+  try {
+    ({ value: name } = await ElMessageBox.prompt(
+      '保存当前图纸上的全部表格,之后可一键按原坐标放入', '存为表格模板', {
+        inputPlaceholder: '模板名称',
+        inputValidator: v => (v && v.trim()) ? true : '名称不能为空'
+      }))
+  } catch (e) {
+    // 点取消时 ElMessageBox 以 'cancel' reject,不是异常
+    if (e !== 'cancel') ElMessage.error(`保存失败:${e?.message || e}`)
+    return
+  }
+  if (saveTablePreset(name, placedTables.value)) {
+    ElMessage.success(`已保存模板「${(name || '').trim()}」`)
+  }
+}
+
+function onApplyTablePreset(id) {
+  const n = applyTablePreset(id, placeTable)
+  if (n > 0) ElMessage.success(`已放入 ${n} 张表格`)
+}
+
+function onRemoveTablePreset(id) {
+  removeTablePreset(id)
+  ElMessage.success('已删除模板')
 }
 
 const drawingDocumentPreview = computed(() => JSON.stringify(
@@ -844,6 +895,7 @@ async function saveAsTemplate() {
 
 onMounted(async () => {
   await loadModelList()
+  loadTablePresets()
   centerSheet()
   window.addEventListener('mousemove', onGlobalMouseMove)
   window.addEventListener('mouseup', onGlobalMouseUp)
@@ -1286,6 +1338,27 @@ function onModelChange() {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ===== 表格预设下拉:名称与删除图标分列两端 ===== */
+.preset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.preset-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preset-del {
+  flex-shrink: 0;
+  color: #c0c4cc;
+}
+.preset-del:hover {
+  color: #f56c6c;
 }
 
 /* ===== 标注工具样式 ===== */

@@ -1,9 +1,10 @@
 // 表格编辑交互:inline 编辑 / 右键行列菜单 / 样式 / 键盘 / 插入
 // 依赖 usePlacedTables 的能力,由外部注入
 import { ref } from 'vue'
+import { TABLE_STYLE } from '@/composables/useStyleConfig'
 
-const DEFAULT_COL_W = 30
-const DEFAULT_ROW_H = 8
+const DEFAULT_COL_W = TABLE_STYLE.colWidth
+const DEFAULT_ROW_H = TABLE_STYLE.rowHeight
 
 export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
   const {
@@ -128,17 +129,18 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     const t = selectedTable.value
     const cells = selectedCells.value
     if (!t || cells.length !== 1) return
-    setCellFontSize(t.id, cells[0].r, cells[0].c, Number(v) || 13)
+    setCellFontSize(t.id, cells[0].r, cells[0].c, Number(v) || TABLE_STYLE.fontPx)
   }
   function setBorderWidth(v) {
     const t = selectedTable.value
     if (!t) return
-    setTableBorder(t.id, Number(v) || 0.3, t.border?.color || '#303133')
+    setTableBorder(t.id, Number(v) || TABLE_STYLE.borderWidth,
+      t.border?.color || TABLE_STYLE.borderColor)
   }
   function setBorderColor(v) {
     const t = selectedTable.value
     if (!t) return
-    setTableBorder(t.id, t.border?.width ?? 0.3, v)
+    setTableBorder(t.id, t.border?.width ?? TABLE_STYLE.borderWidth, v)
   }
 
   // ---- 键盘:Delete 删选中表(编辑中或焦点在输入框时不拦截) ----
@@ -162,8 +164,8 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     const preset = {
       col_widths: Array(cols).fill(DEFAULT_COL_W),
       row_heights: Array(rows).fill(DEFAULT_ROW_H),
-      border: { width: 0.3, color: '#303133' },
-      text_color: '#303133',
+      border: { width: TABLE_STYLE.borderWidth, color: TABLE_STYLE.borderColor },
+      text_color: TABLE_STYLE.textColor,
       cells
     }
     const w = DEFAULT_COL_W * cols, h = DEFAULT_ROW_H * rows
