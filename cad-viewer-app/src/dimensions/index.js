@@ -311,6 +311,14 @@ export function createDimEngine(deps) {
     dimDragging.value = { id: dim.id, type: dim.type, startMouse: mousePos, startOffset: dim.offset }
   }
 
+  /** 文字标签 mousedown:开始拖动文字(只改 textSlide,不动尺寸线) */
+  function onDimTextMouseDown(event, dim) {
+    const mousePos = getSvgMousePoint(event)
+    if (!mousePos) return
+    selectDim(dim.id)
+    dimDragging.value = { id: dim.id, type: dim.type, part: 'text' }
+  }
+
   /** 全局 mouseup：结束标注拖拽 */
   function onGlobalDimMouseUp() {
     dimDragging.value = null
@@ -346,7 +354,11 @@ export function createDimEngine(deps) {
     const dim = dimensions.value.find(item => item.id === drag?.id)
     const mousePos = getSvgMousePoint(event)
     if (!dim || !mousePos) return
-    core.updateDimDrag(dim, mousePos)
+    if (drag.part === 'text') {
+      core.updateDimTextDrag(dim, mousePos)
+    } else {
+      core.updateDimDrag(dim, mousePos)
+    }
   }
 
   return {
@@ -356,6 +368,7 @@ export function createDimEngine(deps) {
     updateDimPreviewAt,
     commitPendingLinear,
     onDimMouseDown,
+    onDimTextMouseDown,
     onDimDragMove,
     onGlobalDimMouseUp,
     deleteSelectedDim,

@@ -2,7 +2,7 @@
 // 输入 envelope 来自后端 /api/drawing-view-palette 的 motor_envelope 字段,
 // 各字段为模型 mm 投影坐标,与 palette 边线 meta.mm_coords 同源。
 
-import { lineBasis, signedDistanceToLine } from './geometry.js'
+import { lineBasis, extendExtEnd, linearTextAngle, linearTextPos } from './geometry.js'
 import { buildLinearArrows } from './arrow.js'
 
 function pickEnvelopeEndpoint(face, orientation, offset) {
@@ -66,7 +66,7 @@ function faceToSheet(face, view, getSheetPoint) {
   return face.map(([x, y]) => getSheetPoint(view, x * k + ox, y * k + oy))
 }
 
-export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset = 50, customText = '') {
+export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset = 50, customText = '', arrowMode = 'auto') {
   const face1 = faceToSheet(envelope.face_min, view, getSheetPoint)
   const face2 = faceToSheet(envelope.face_max, view, getSheetPoint)
   const orientation = envelope.orientation
@@ -99,36 +99,60 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
   const dimEnd = { x: ext2.x + normal.x * offset, y: ext2.y + normal.y * offset }
 
   const text = customText || `${envelope.span_mm}mm`
-  const arrows = buildLinearArrows(dimStart, dimEnd, basis.unit, text)
+  const arrows = buildLinearArrows(dimStart, dimEnd, basis.unit, text, arrowMode)
   const mid = { x: (dimStart.x + dimEnd.x) / 2, y: (dimStart.y + dimEnd.y) / 2 }
 
   return {
     type: 'linear',
     mode: 'motor-envelope',
     ext1,
-    ext1End: dimStart,
+    ext1End: extendExtEnd(ext1, dimStart),
     ext2,
-    ext2End: dimEnd,
+    ext2End: extendExtEnd(ext2, dimEnd),
     dimStart,
     dimEnd,
     ...arrows,
-    textPos: { x: mid.x, y: mid.y - 3 },
+    textPos: linearTextPos(basis.unit, mid),
+    textAngle: linearTextAngle(basis.unit),
     text,
     centerMarks: [],
     spanMm: envelope.span_mm
   }
 }
 
+// 计算渲染时尺寸线所依附的包络外侧边：
+// offset 为负时尺寸线在包络上/左侧，offset 为正时在下/右侧。
+function envelopeBaseLine(view, face1, face2, orientation, sign) {
+  const s = sign >= 0 ? 1 : -1
+  let e1 = pickEnvelopeEndpoint(face1, orientation, s)
+  let e2 = pickEnvelopeEndpoint(face2, orientation, s)
+  e1 = snapEndpointToViewEdge(view, e1, orientation, s)
+  e2 = snapEndpointToViewEdge(view, e2, orientation, s)
+  return orientation === 'horizontal'
+    ? Math.max(e1.y, e2.y)
+    : Math.max(e1.x, e2.x)
+}
+
 export function getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, mousePos) {
   const face1 = faceToSheet(envelope.face_min, view, getSheetPoint)
   const face2 = faceToSheet(envelope.face_max, view, getSheetPoint)
-  const mid1 = { x: (face1[0].x + face1[1].x) / 2, y: (face1[0].y + face1[1].y) / 2 }
-  // 法向统一朝下/朝右,与 buildMotorEnvelopeGeometry 一致:
-  // horizontal:鼠标在包络下方 → offset 正 → 尺寸线在下方
-  // vertical:  鼠标在包络右侧 → offset 正 → 尺寸线在右方
-  const normal = envelope.orientation === 'horizontal'
-    ? { x: 0, y: 1 }
-    : { x: 1, y: 0 }
-  const raw = signedDistanceToLine(mousePos, mid1, normal)
+  const orientation = envelope.orientation
+
+  // 渲染时尺寸线基准边随 offset 符号变化：
+  // horizontal 为负 → 依附顶边，为正 → 依附底边；
+  // vertical   为负 → 依附左边，为正 → 依附右边。
+  // 拖拽按鼠标位于包络中线的哪一侧决定符号，保证尺寸线精确跟随鼠标。
+  const baseNear = envelopeBaseLine(view, face1, face2, orientation, -1)
+  const baseFar = envelopeBaseLine(view, face1, face2, orientation, 1)
+
+  if (orientation === 'horizontal') {
+    const mid = (baseNear + baseFar) / 2
+    const base = mousePos.y < mid ? baseNear : baseFar
+    const raw = mousePos.y - base
+    return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+  }
+  const mid = (baseNear + baseFar) / 2
+  const base = mousePos.x < mid ? baseNear : baseFar
+  const raw = mousePos.x - base
   return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
 }

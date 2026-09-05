@@ -4,6 +4,7 @@
 挂载到 /api/drawing-template、/api/drawing-templates、
 /api/template-drawing/{upload,series-models,generate,download,preview}。
 """
+import json
 import os
 
 from flask import Blueprint, jsonify, request, send_file

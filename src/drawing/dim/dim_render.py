@@ -18,6 +18,7 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           farthest_endpoint_from, build_arc_points,
                           build_linear_arrows, build_arrow_points,
                           format_mm, format_deg)
+from drawing.dim.dim_style import dim_ext_overshoot_mm, dim_text_gap_mm
 
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
@@ -105,6 +106,57 @@ def _texts_and_final(prims, text, custom_text):
     return prims
 
 
+def _arrow_mode(ann):
+    """读取前端标注数据中的箭头方向模式(outward/inward/auto)"""
+    return ann.get("arrowMode") or ann.get("arrow_mode") or "auto"
+
+
+# 标注外观几何量取自前后端共用样式配置(cad_viewer_style.json)
+EXT_OVERSHOOT = dim_ext_overshoot_mm()   # 尺寸界线越过尺寸线的长度(mm)
+TEXT_GAP = dim_text_gap_mm()             # 文字与尺寸线的间距(mm)
+
+
+def _ext_line(p, e):
+    """延伸线从被测点 p 画到尺寸线点 e,并越过尺寸线一小段"""
+    dx, dy = e[0] - p[0], e[1] - p[1]
+    ln = math.hypot(dx, dy)
+    if ln < 1e-6:
+        return (p, e)
+    return (p, (e[0] + dx / ln * EXT_OVERSHOOT,
+                e[1] + dy / ln * EXT_OVERSHOOT))
+
+
+def _pdf_text_angle(unit):
+    """linear 文字的 PDF 旋转角:跟随尺寸线方向,且不倒置
+
+    视觉规范:水平线水平排,竖直线字头朝左(GB)。图纸坐标(y 向下)
+    角度取反即 PDF(y 向上)角度。
+    """
+    a = math.atan2(unit[1], unit[0])
+    if math.cos(a) < -1e-9:
+        a += math.pi
+    if math.isclose(abs(a), math.pi / 2, abs_tol=1e-9):
+        a = -math.pi / 2
+    return -a
+
+
+def _linear_text(unit, mid, text, slide=0.0):
+    """文字置于尺寸线上,沿线滑动 slide,再沿法向偏移 TEXT_GAP
+
+    水平尺寸线文字在上方,竖直在左侧(GB,且避开旋转字身压线),
+    斜线法向统一朝视觉上方,避免文字落到线下。
+    """
+    nx, ny = -unit[1], unit[0]
+    if abs(unit[0]) < 1e-9:      # 竖直尺寸线:文字在左侧
+        nx, ny = -1.0, 0.0
+    elif ny > 0:                 # 其余:法向统一朝视觉上方(y 向下坐标)
+        nx, ny = -nx, -ny
+    return {"pos": (mid[0] + unit[0] * slide + nx * TEXT_GAP,
+                    mid[1] + unit[1] * slide + ny * TEXT_GAP),
+            "text": text, "angle": _pdf_text_angle(unit),
+            "anchor": "middle"}
+
+
 def build_dim_primitives(ann, segs, views):
     """按 core.js 对应 build*Geometry 在图纸坐标系重建标注几何
 
@@ -149,19 +201,20 @@ def _linear_single(ann, segs, views):
     if not basis:
         return None
     offset = ann.get("offset") or 50
+    slide = ann.get("textSlide") or 0.0
     e1 = offset_point(p1, basis["perp"], offset)
     e2 = offset_point(p2, basis["perp"], offset)
     mm_val = _line_mm_length(line)
     if mm_val is None:
         mm_val = basis["len"] / (view["scale"] * (view["k"] or 1.0))
     text = format_mm(mm_val)
-    arrows = build_linear_arrows(e1, e2, basis["unit"], text)
+    arrows = build_linear_arrows(e1, e2, basis["unit"], text, _arrow_mode(ann))
+    mid = ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2)
     return {
-        "lines": [(p1, e1), (p2, e2)],
+        "lines": [_ext_line(p1, e1), _ext_line(p2, e2)],
         "dim_lines": [(e1, e2)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
-        "texts": [{"pos": ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2 - 3),
-                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "texts": [_linear_text(basis["unit"], mid, text, slide)],
         "center_marks": [], "text": text,
     }
 
@@ -190,6 +243,7 @@ def _linear_motor_envelope(ann, segs, views):
         return None
 
     offset = ann.get("offset") or 50
+    slide = ann.get("textSlide") or 0.0
     # 与前端一致:offset 正 → 尺寸线画在包络下方/右方,延伸线向上/左;
     # offset 负 → 尺寸线在上方/左方,延伸线向下/右。
     if o1 == "vertical":  # 包络水平(端面线竖直)
@@ -242,14 +296,13 @@ def _linear_motor_envelope(ann, segs, views):
     dim_base = offset_point(ext1, normal, abs(offset))
     dim_end = offset_point(ext2, normal, abs(offset))
 
-    arrows = build_linear_arrows(dim_base, dim_end, unit, text)
+    arrows = build_linear_arrows(dim_base, dim_end, unit, text, _arrow_mode(ann))
     mid = ((dim_base[0] + dim_end[0]) / 2.0, (dim_base[1] + dim_end[1]) / 2.0)
     return {
-        "lines": [(ext1, dim_base), (ext2, dim_end)],
+        "lines": [_ext_line(ext1, dim_base), _ext_line(ext2, dim_end)],
         "dim_lines": [(dim_base, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
-        "texts": [{"pos": (mid[0], mid[1] - 3),
-                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "texts": [_linear_text(unit, mid, text, slide)],
         "center_marks": [], "text": text,
     }
 
@@ -276,22 +329,20 @@ def _linear_parallel(ann, segs, views):
     start = closest_point_on_line(q1[0], q1[1], p1[0], p1[1], p2[0], p2[1])
     end = offset_point(start, normal, distance)
     offset = ann.get("offset") or 50
+    slide = ann.get("textSlide") or 0.0
     dim_base = offset_point(start, basis["unit"], offset)
     dim_end = offset_point(dim_base, normal, distance)
     mm_val = _parallel_mm_distance(line1, line2)
     if mm_val is None:
         mm_val = distance / (v1["scale"] * (v1["k"] or 1.0))
     text = format_mm(mm_val)
-    arrows = build_linear_arrows(dim_base, dim_end, normal, text)
-    shift = 10 if arrows["outward"] else 14
+    arrows = build_linear_arrows(dim_base, dim_end, normal, text, _arrow_mode(ann))
     mid = ((dim_base[0] + dim_end[0]) / 2, (dim_base[1] + dim_end[1]) / 2)
     return {
-        "lines": [(start, dim_base), (end, dim_end)],
+        "lines": [_ext_line(start, dim_base), _ext_line(end, dim_end)],
         "dim_lines": [(dim_base, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
-        "texts": [{"pos": (mid[0] + basis["unit"][0] * shift,
-                           mid[1] + basis["unit"][1] * shift),
-                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "texts": [_linear_text(normal, mid, text, slide)],
         "center_marks": [], "text": text,
     }
 
@@ -308,6 +359,7 @@ def _linear_center(ann, segs, views):
     if not basis:
         return None
     offset = ann.get("offset") or 50
+    slide = ann.get("textSlide") or 0.0
     e1 = offset_point(c1, basis["perp"], offset)
     e2 = offset_point(c2, basis["perp"], offset)
     m1 = (to_circle(segs[0]).get("meta") or {}).get("center_mm")
@@ -317,13 +369,13 @@ def _linear_center(ann, segs, views):
     else:
         mm_val = basis["len"] / (v1["scale"] * (v1["k"] or 1.0))
     text = format_mm(mm_val)
-    arrows = build_linear_arrows(e1, e2, basis["unit"], text)
+    arrows = build_linear_arrows(e1, e2, basis["unit"], text, _arrow_mode(ann))
+    mid = ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2)
     return {
-        "lines": [(c1, e1), (c2, e2)],
+        "lines": [_ext_line(c1, e1), _ext_line(c2, e2)],
         "dim_lines": [(e1, e2)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
-        "texts": [{"pos": ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2 - 3),
-                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "texts": [_linear_text(basis["unit"], mid, text, slide)],
         "center_marks": [
             {"pos": c1, "r": _mark_half_px(segs[0], v1), "angle": None},
             {"pos": c2, "r": _mark_half_px(segs[1], v2), "angle": None},
@@ -346,6 +398,7 @@ def _linear_circle_edge(ann, segs, views):
         return None
     u = basis["unit"]
     offset = ann.get("offset") or 50
+    slide = ann.get("textSlide") or 0.0
     f = project_point_to_line(c, q1, u)
     foot_c = offset_point(c, u, offset)
     foot_f = offset_point(f, u, offset)
@@ -358,14 +411,13 @@ def _linear_circle_edge(ann, segs, views):
         d = abs(signed_distance_to_line(c, q1, basis["perp"]))
         mm_val = d / (vc["scale"] * (vc["k"] or 1.0))
     text = format_mm(mm_val)
-    arrows = build_linear_arrows(foot_c, foot_f, basis["perp"], text)
+    arrows = build_linear_arrows(foot_c, foot_f, basis["perp"], text, _arrow_mode(ann))
+    mid = ((foot_c[0] + foot_f[0]) / 2, (foot_c[1] + foot_f[1]) / 2)
     return {
-        "lines": [(c, foot_c), (f, foot_f)],
+        "lines": [_ext_line(c, foot_c), _ext_line(f, foot_f)],
         "dim_lines": [(foot_c, foot_f)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
-        "texts": [{"pos": ((foot_c[0] + foot_f[0]) / 2,
-                           (foot_c[1] + foot_f[1]) / 2 - 3),
-                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "texts": [_linear_text(basis["perp"], mid, text, slide)],
         "center_marks": [{"pos": c, "r": _mark_half_px(segs[0], vc),
                           "angle": math.atan2(u[1], u[0])}],
         "text": text,

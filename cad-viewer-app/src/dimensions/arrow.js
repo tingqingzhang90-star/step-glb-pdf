@@ -1,8 +1,11 @@
+import styleConfig from '../../../cad_viewer_style.json'
+
 // 标注箭头几何：长尖实心箭头，支持沿尺寸线向外(常态)与向内(小尺寸)
 // 返回 SVG <polygon> 的 points 字符串，图纸坐标。
 
-const ARROW_LEN = 14 // 箭头长度(图纸像素)
-const ARROW_HALF = 1.6 // 箭头底部半宽，越小越尖锐
+// 箭头尺寸由 cad_viewer_style.json 的 dim.arrow 控制(与后端共用)
+const ARROW_LEN = styleConfig.dim.arrow.len_px
+const ARROW_HALF = styleConfig.dim.arrow.half_px
 
 function invert(dir) {
   return { x: -dir.x, y: -dir.y }
@@ -42,11 +45,18 @@ export function linearArrowDirs(start, end, text) {
   return { outward: false, unit }
 }
 
-// 线性标注两端箭头：start→end 为尺寸线方向。
-// outward=true：箭头尖端在端点，方向朝外(指向延伸线/被测边)；
-// 空间不足(小尺寸)翻转：箭头尖端相对，文字放到外侧。
-export function buildLinearArrows(start, end, unit, text) {
+function resolveOutward(start, end, text, mode) {
+  if (mode === 'outward') return true
+  if (mode === 'inward') return false
   const { outward } = linearArrowDirs(start, end, text)
+  return outward
+}
+
+// 线性标注两端箭头：start→end 为尺寸线方向。
+// mode='auto' 按空间自动；'outward' 强制尖端朝外(由中间指向两边)；
+// 'inward' 强制尖端相对(由两边指向中间)，尾部自然出头尺寸线。
+export function buildLinearArrows(start, end, unit, text, mode = 'auto') {
+  const outward = resolveOutward(start, end, text, mode)
   const dir1 = outward ? invert(unit) : unit
   const dir2 = outward ? unit : invert(unit)
   return {

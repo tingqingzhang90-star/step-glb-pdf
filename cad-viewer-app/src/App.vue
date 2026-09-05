@@ -398,7 +398,7 @@
                   <line :x1="dimPreview.dimStart.x" :y1="dimPreview.dimStart.y" :x2="dimPreview.dimEnd.x" :y2="dimPreview.dimEnd.y" class="dim-line" />
                   <polygon v-if="dimPreview.arrow1" :points="dimPreview.arrow1" class="dim-arrow" />
                   <polygon v-if="dimPreview.arrow2" :points="dimPreview.arrow2" class="dim-arrow" />
-                  <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dimPreview.text }}</text>
+                  <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" :transform="`rotate(${(dimPreview.textAngle || 0) * 180 / Math.PI}, ${dimPreview.textPos.x}, ${dimPreview.textPos.y})`" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dimPreview.text }}</text>
                 </template>
               </template>
               <template v-if="dimPreview.type === 'diameter'">
@@ -416,7 +416,7 @@
 
             <!-- 已放置标注 -->
             <g class="dimensions-layer">
-              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id, 'dimension-hovered': dimHoveredId === String(dim.id) }]" :data-dim-id="dim.id" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="onDimClick(dim)">
+              <g v-for="dim in renderedDimensions" :key="dim.id" :class="['dimension-group', { 'dimension-selected': selectedDimId === dim.id, 'dimension-hovered': dimHoveredId === String(dim.id) }]" :data-dim-id="dim.id" :style="{ '--dimension-color': dim.color }" @mousedown.stop="onDimMouseDown($event, dim)" @click.stop="onDimClick(dim)" @contextmenu.prevent.stop="openDimContextMenu($event, dim)">
                 <!-- 线性标注 -->
                 <template v-if="dim.type === 'linear'">
                   <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dim.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dim.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
@@ -431,7 +431,7 @@
                   <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-hit-stroke" />
                   <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
                   <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
-                  <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dim.text }}</text>
+                  <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${(dim.textAngle || 0) * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" style="cursor: move" text-anchor="middle" dominant-baseline="auto" @mousedown.stop="onDimTextMouseDown($event, dim)">{{ dim.text }}</text>
                 </template>
                 <!-- 直径标注 -->
                 <template v-if="dim.type === 'diameter'">
@@ -620,6 +620,12 @@
       @delete-col="ctxDeleteCol"
     />
 
+    <!-- 标注右键菜单：切换箭头方向 -->
+    <DimContextMenu
+      :menu="dimContextMenu"
+      @set-mode="setDimArrowMode"
+    />
+
     <!-- 模板出图:导入模板 → 选同系列型号 → 批量生成 PDF → 下载 -->
     <TemplateDrawingPanel v-model="showTemplateDrawing" />
   </div>
@@ -650,6 +656,7 @@ import TemplateDrawingPanel from '@/components/TemplateDrawingPanel.vue'
 import TableLayer from '@/components/TableLayer.vue'
 import TableSnapGuides from '@/components/TableSnapGuides.vue'
 import TableContextMenu from '@/components/TableContextMenu.vue'
+import DimContextMenu from '@/components/DimContextMenu.vue'
 import TableSizePicker from '@/components/TableSizePicker.vue'
 import TableStyleBar from '@/components/TableStyleBar.vue'
 
@@ -701,10 +708,16 @@ const {
   activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview, dimDragging,
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
   dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
-  toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimDragMove, onGlobalDimMouseUp,
+  dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
+  toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimDragMove, onGlobalDimMouseUp,
   onKeyDown, selectDim, onDimClick, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
   onSvgMouseLeave, clearTransientSelection, removeByView, resetAll
 } = useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope })
+
+function closeAllContextMenus() {
+  closeContextMenu()
+  closeDimContextMenu()
+}
 
 // 需要命中圆的标注工具(其余工具下圆不参与命中)
 const circleHitTools = ['diameter', 'linear', 'center-mark']
@@ -904,7 +917,7 @@ onMounted(async () => {
   window.addEventListener('pointercancel', resetPaletteDrag)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keydown', handleKeydown)
-  window.addEventListener('click', closeContextMenu)
+  window.addEventListener('click', closeAllContextMenus)
 })
 
 onUnmounted(() => {
@@ -915,7 +928,7 @@ onUnmounted(() => {
   window.removeEventListener('pointercancel', resetPaletteDrag)
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keydown', handleKeydown)
-  window.removeEventListener('click', closeContextMenu)
+  window.removeEventListener('click', closeAllContextMenus)
   disposePaletteDrag()
 })
 

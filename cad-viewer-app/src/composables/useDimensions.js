@@ -38,7 +38,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
 
   const {
     toggleTool, onDimEdgeSelect, onMotorEnvelopePick, updateDimPreviewAt, commitPendingLinear,
-    onDimMouseDown, onDimDragMove,     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
+    onDimMouseDown, onDimTextMouseDown, onDimDragMove,     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
     activeTool,
     dimHoveredEdge,
@@ -73,6 +73,33 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   function setDimField(id, field, value) {
     const dim = dimensions.value.find(d => d.id === id)
     if (dim) dim[field] = value
+  }
+
+  /** 标注右键菜单 */
+  const dimContextMenu = ref(null)
+
+  function openDimContextMenu(event, dim) {
+    event.preventDefault()
+    event.stopPropagation()
+    selectDim(dim.id)
+    dimContextMenu.value = {
+      x: event.clientX,
+      y: event.clientY,
+      dimId: dim.id,
+      currentMode: dim.arrowMode || 'auto'
+    }
+  }
+
+  function closeDimContextMenu() {
+    dimContextMenu.value = null
+  }
+
+  function setDimArrowMode(mode) {
+    const m = dimContextMenu.value
+    if (!m) return
+    const dim = dimensions.value.find(d => d.id === m.dimId)
+    if (dim) dim.arrowMode = mode
+    closeDimContextMenu()
   }
 
   /** 待高亮的选中对象：第一边 + 待固定态的第二边，附带圆拟合与图纸坐标半径 */
@@ -213,7 +240,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
     renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
-    toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimDragMove,
+    dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
+    toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, selectDim, onDimClick,
     onSvgMouseDown, onSvgMouseMove, onSvgMouseLeave,
     clearTransientSelection, removeByView, resetAll

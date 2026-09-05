@@ -1,6 +1,8 @@
 // 标注几何与边线识别工具（纯函数，无 Vue 依赖）
 // 从 App.vue 抽离：toLineSeg / toCircle / 圆拟合 / 平行判断 / 点线运算 / 圆弧 path 等。
 
+import styleConfig from '../../../cad_viewer_style.json'
+
 /**
  * 将 line/polyline 规整为可标注的两点线段。
  * 后端对 BSpline 面的 HLR 剪影线会离散为 polyline(气缸等模型占大多数),
@@ -222,4 +224,37 @@ export function buildArcPath(cx, cy, r, startAngle, endAngle) {
 /** polyline 点数组 → SVG points 字符串 */
 export function polylinePoints(points) {
   return points.map(p => `${p[0]},${p[1]}`).join(' ')
+}
+
+// ===== 尺寸标注外观(与后端 drawing/dim/dim_render.py 保持一致) =====
+
+/** 尺寸界线越过尺寸线的长度(图纸 mm,取自共用样式配置) */
+export const EXT_OVERSHOOT = styleConfig.dim.ext.overshoot_mm ?? 2.5
+
+/** 延伸线终点越过尺寸线一小段 */
+export function extendExtEnd(p, e) {
+  const dx = e.x - p.x
+  const dy = e.y - p.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-6) return { ...e }
+  return { x: e.x + (dx / len) * EXT_OVERSHOOT, y: e.y + (dy / len) * EXT_OVERSHOOT }
+}
+
+/** linear 文字旋转角(SVG 屏幕坐标):跟随尺寸线方向且不倒置,竖直统一字头朝左 */
+export function linearTextAngle(unit) {
+  let a = Math.atan2(unit.y, unit.x)
+  if (Math.cos(a) < -1e-9) a += Math.PI
+  if (Math.abs(Math.abs(a) - Math.PI / 2) < 1e-9) a = -Math.PI / 2
+  return a
+}
+
+/** 文字与尺寸线的间距(图纸 mm,取自共用样式配置) */
+export const DIM_TEXT_GAP = styleConfig.dim.text.gap_mm ?? 4
+
+/** linear 文字位置:沿线滑动 slide,法向偏移 gap;水平在线上方,竖直在左侧 */
+export function linearTextPos(unit, mid, gap = DIM_TEXT_GAP, slide = 0) {
+  let nx = -unit.y, ny = unit.x
+  if (Math.abs(unit.x) < 1e-9) { nx = -1; ny = 0 }
+  else if (ny > 0) { nx = -nx; ny = -ny }
+  return { x: mid.x + unit.x * slide + nx * gap, y: mid.y + unit.y * slide + ny * gap }
 }

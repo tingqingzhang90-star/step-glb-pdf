@@ -10,8 +10,8 @@
       "id": "view_1",
       "source_view": "left",
       "label": "左视",
-      "x": 67,
-      "y": -54,
+      "x": 37,
+      "y": -70,
       "scale": 0.93,
       "px_per_mm": 0.1617
     }
@@ -21,7 +21,7 @@
       "id": "dim_1",
       "type": "linear",
       "mode": "single",
-      "text": "440mm",
+      "text": "440",
       "customText": null,
       "bind_motor": false,
       "refs": [
@@ -31,7 +31,80 @@
           "type": "edges"
         }
       ],
-      "offset": 20.994279069758306,
+      "offset": 22.99896364209532,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_2",
+      "type": "linear",
+      "mode": "parallel",
+      "text": "440",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 53,
+          "type": "edges"
+        },
+        {
+          "viewId": "view_1",
+          "idx": 44,
+          "type": "edges"
+        }
+      ],
+      "offset": -20.836657361519997,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_3",
+      "type": "linear",
+      "mode": "single",
+      "text": "72.5",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 74,
+          "type": "edges"
+        }
+      ],
+      "offset": -56.46108169041355,
+      "radius": null,
+      "side": null,
+      "leaderAngle": null,
+      "leaderLength": null,
+      "color": "#303133"
+    },
+    {
+      "id": "dim_4",
+      "type": "linear",
+      "mode": "parallel",
+      "text": "290",
+      "customText": null,
+      "bind_motor": false,
+      "refs": [
+        {
+          "viewId": "view_1",
+          "idx": 50,
+          "type": "edges"
+        },
+        {
+          "viewId": "view_1",
+          "idx": 3,
+          "type": "edges"
+        }
+      ],
+      "offset": 77.371215441125,
       "radius": null,
       "side": null,
       "leaderAngle": null,

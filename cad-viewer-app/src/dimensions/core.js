@@ -24,7 +24,11 @@ import {
   projectPointToLine,
   lineIntersection,
   farthestEndpointFrom,
-  buildArcPath
+  buildArcPath,
+  extendExtEnd,
+  linearTextAngle,
+  linearTextPos,
+  DIM_TEXT_GAP
 } from './geometry.js'
 import { buildArrowPoints, buildLinearArrows } from './arrow.js'
 import {
@@ -43,7 +47,7 @@ export function createDimensionCore(deps, ctx) {
     getMotorEnvelope
   } = deps
 
-  const formatMm = (value) => `${Number(value || 0).toFixed(1).replace(/\.0$/, '')}mm`
+  const formatMm = (value) => Number(value || 0).toFixed(1).replace(/\.0$/, '')
   const formatDeg = (value) => `${Number(value || 0).toFixed(1).replace(/\.0$/, '')}°`
 
   // 从 CAD 原始 mm 坐标(后端 meta.mm_coords)直接计算线段真实长度,
@@ -151,7 +155,7 @@ export function createDimensionCore(deps, ctx) {
 
   }
 
-  function buildLinearSingleGeometry(edgeRef, offset = 50) {
+  function buildLinearSingleGeometry(edgeRef, offset = 50, arrowMode = 'auto') {
     if (!edgeRef) return null
     const { seg, view } = edgeRef
     const line = toLineSeg(seg)
@@ -170,16 +174,18 @@ export function createDimensionCore(deps, ctx) {
       refs: [edgeRefData(edgeRef)],
       offset,
       ext1: p1,
-      ext1End: extEnd1,
+      ext1End: extendExtEnd(p1, extEnd1),
       ext2: p2,
-      ext2End: extEnd2,
+      ext2End: extendExtEnd(p2, extEnd2),
       dimStart: extEnd1,
       dimEnd: extEnd2,
       ...(() => {
-        const r = buildLinearArrows(extEnd1, extEnd2, dir.unit, formatMm(mmVal))
+        const r = buildLinearArrows(extEnd1, extEnd2, dir.unit, formatMm(mmVal), arrowMode)
+        const mid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 }
         return {
           ...r,
-          textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 3 }
+          textPos: linearTextPos(dir.unit, mid),
+          textAngle: linearTextAngle(dir.unit)
         }
       })(),
       text: formatMm(mmVal)
@@ -206,7 +212,7 @@ export function createDimensionCore(deps, ctx) {
     return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
   }
 
-  function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50) {
+  function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto') {
     if (!edgeRef1 || !edgeRef2) return null
     const { seg: seg1, view: view1 } = edgeRef1
     const { seg: seg2, view: view2 } = edgeRef2
@@ -230,8 +236,8 @@ export function createDimensionCore(deps, ctx) {
     const end = offsetPoint(start, normal, distance)
     const dimBase = offsetPoint(start, basis.unit, offset)
     const dimEnd = offsetPoint(dimBase, normal, distance)
-    const ext1End = dimBase
-    const ext2End = dimEnd
+    const extTip1 = extendExtEnd(start, dimBase)
+    const extTip2 = extendExtEnd(end, dimEnd)
     // 优先用两条线的 CAD 原始 mm 坐标直接算平行间距真值(无像素缩放误差)
     const mmVal = parallelSegMmDistance(line1, line2) ?? distance / (view1.scale * getViewMmScale(view1))
     return {
@@ -240,17 +246,18 @@ export function createDimensionCore(deps, ctx) {
       refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
       offset,
       ext1: start,
-      ext1End,
+      ext1End: extTip1,
       ext2: end,
-      ext2End,
-      dimStart: ext1End,
-      dimEnd: ext2End,
+      ext2End: extTip2,
+      dimStart: dimBase,
+      dimEnd,
       ...(() => {
-        const r = buildLinearArrows(ext1End, ext2End, normal, formatMm(mmVal))
-        const shift = r.outward ? 10 : 14
+        const r = buildLinearArrows(dimBase, dimEnd, normal, formatMm(mmVal), arrowMode)
+        const mid = { x: (dimBase.x + dimEnd.x) / 2, y: (dimBase.y + dimEnd.y) / 2 }
         return {
           ...r,
-          textPos: { x: (ext1End.x + ext2End.x) / 2 + basis.unit.x * shift, y: (ext1End.y + ext2End.y) / 2 + basis.unit.y * shift }
+          textPos: linearTextPos(normal, mid),
+          textAngle: linearTextAngle(normal)
         }
       })(),
       text: formatMm(mmVal)
@@ -275,7 +282,7 @@ export function createDimensionCore(deps, ctx) {
     return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
   }
 
-  function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50) {
+  function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto') {
     if (!edgeRef1 || !edgeRef2) return null
     const { view: view1 } = edgeRef1
     const c1 = getCircleCenterSheet(edgeRef1)
@@ -297,16 +304,18 @@ export function createDimensionCore(deps, ctx) {
       refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
       offset,
       ext1: c1,
-      ext1End: extEnd1,
+      ext1End: extendExtEnd(c1, extEnd1),
       ext2: c2,
-      ext2End: extEnd2,
+      ext2End: extendExtEnd(c2, extEnd2),
       dimStart: extEnd1,
       dimEnd: extEnd2,
       ...(() => {
-        const r = buildLinearArrows(extEnd1, extEnd2, basis.unit, formatMm(mmVal))
+        const r = buildLinearArrows(extEnd1, extEnd2, basis.unit, formatMm(mmVal), arrowMode)
+        const mid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 }
         return {
           ...r,
-          textPos: { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 - 3 }
+          textPos: linearTextPos(basis.unit, mid),
+          textAngle: linearTextAngle(basis.unit)
         }
       })(),
       text: formatMm(mmVal),
@@ -342,7 +351,7 @@ export function createDimensionCore(deps, ctx) {
    *  - 延伸线方向 = 边线方向(basis.unit)，从圆心和边线垂足沿 unit 走到尺寸线；
    *  - 尺寸线位置由鼠标沿 unit 方向的位移决定。
    */
-  function buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset = 50) {
+  function buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset = 50, arrowMode = 'auto') {
     if (!circleRef || !edgeRef) return null
     const c = getCircleCenterSheet(circleRef)
     const line = toLineSeg(edgeRef.seg)
@@ -369,16 +378,18 @@ export function createDimensionCore(deps, ctx) {
       refs: [edgeRefData(circleRef), edgeRefData(edgeRef)],
       offset,
       ext1: c,
-      ext1End: footC,
+      ext1End: extendExtEnd(c, footC),
       ext2: f,
-      ext2End: footF,
+      ext2End: extendExtEnd(f, footF),
       dimStart: footC,
       dimEnd: footF,
       ...(() => {
-        const r = buildLinearArrows(footC, footF, basis.perp, formatMm(mmVal))
+        const r = buildLinearArrows(footC, footF, basis.perp, formatMm(mmVal), arrowMode)
+        const mid = { x: (footC.x + footF.x) / 2, y: (footC.y + footF.y) / 2 }
         return {
           ...r,
-          textPos: { x: (footC.x + footF.x) / 2, y: (footC.y + footF.y) / 2 - 3 }
+          textPos: linearTextPos(basis.perp, mid),
+          textAngle: linearTextAngle(basis.perp)
         }
       })(),
       text: formatMm(mmVal),
@@ -679,7 +690,7 @@ export function createDimensionCore(deps, ctx) {
       const envelope = getMotorEnvelope ? getMotorEnvelope(ref.view) : null
       if (!envelope) return null
       geometry = buildMotorEnvelopeGeometry(
-        ref.view, envelope, getSheetPoint, dim.offset, dim.customText || '')
+        ref.view, envelope, getSheetPoint, dim.offset, dim.customText || '', dim.arrowMode || 'auto')
       if (geometry) {
         geometry.text = dim.customText || geometry.text
       }
@@ -687,13 +698,13 @@ export function createDimensionCore(deps, ctx) {
       const first = resolveDimRef(dim.refs[0])
       if (!first) return null
       if (dim.mode === 'center') {
-        geometry = buildLinearCenterGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+        geometry = buildLinearCenterGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto')
       } else if (dim.mode === 'parallel') {
-        geometry = buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+        geometry = buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto')
       } else if (dim.mode === 'circle-edge') {
-        geometry = buildLinearCircleEdgeGeometry(first, resolveDimRef(dim.refs[1]), dim.offset)
+        geometry = buildLinearCircleEdgeGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto')
       } else {
-        geometry = buildLinearSingleGeometry(first, dim.offset)
+        geometry = buildLinearSingleGeometry(first, dim.offset, dim.arrowMode || 'auto')
       }
     } else if (dim.type === 'center-mark') {
       geometry = buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
@@ -706,7 +717,21 @@ export function createDimensionCore(deps, ctx) {
     if (dim.customText != null && dim.customText !== '') {
       geometry.text = dim.customText
     }
-    return geometry ? { ...geometry, id: dim.id, color: dim.color || '#303133' } : null
+    // 拖动过的文字按 textSlide 沿尺寸线滑动(存于标注数据,随模板持久化)
+    if (geometry && dim.type === 'linear' && dim.textSlide) {
+      const a = geometry.dimStart
+      const b = geometry.dimEnd
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const len = Math.hypot(dx, dy)
+      if (len > 1e-6) {
+        const unit = { x: dx / len, y: dy / len }
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+        geometry.textPos = linearTextPos(unit, mid, DIM_TEXT_GAP, dim.textSlide)
+        geometry.textAngle = linearTextAngle(unit)
+      }
+    }
+    return geometry ? { ...geometry, id: dim.id, color: dim.color || '#303133', arrowMode: dim.arrowMode || 'auto', offset: dim.offset } : null
   }
 
   // ===== 拖拽 =====
@@ -755,6 +780,21 @@ export function createDimensionCore(deps, ctx) {
     }
   }
 
+  /** 拖动文字标签:鼠标位置投影到尺寸线方向,更新 textSlide(相对中点,允许稍出界) */
+  function updateDimTextDrag(dim, mousePos) {
+    if (!dim || dim.type !== 'linear' || !mousePos) return
+    const geometry = renderDimension({ ...dim, textSlide: 0 })
+    if (!geometry) return
+    const a = geometry.dimStart
+    const b = geometry.dimEnd
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-6) return
+    const t = (mousePos.x - a.x) * (dx / len) + (mousePos.y - a.y) * (dy / len) - len / 2
+    dim.textSlide = Math.max(-(len / 2 + 15), Math.min(len / 2 + 15, t))
+  }
+
   // 供引擎使用的预览构建集合
   const previewBuilders = {
     linearSingle: buildLinearSinglePreview,
@@ -794,6 +834,7 @@ export function createDimensionCore(deps, ctx) {
     // 渲染与拖拽
     renderDimension,
     updateDimDrag,
+    updateDimTextDrag,
     previewBuilders
   }
 }

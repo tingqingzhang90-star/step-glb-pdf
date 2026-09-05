@@ -6,8 +6,10 @@
 """
 import math
 
-ARROW_LEN = 14.0
-ARROW_HALF = 1.6
+from .dim_style import dim_arrow_len_px, dim_arrow_half_px
+
+ARROW_LEN = dim_arrow_len_px()
+ARROW_HALF = dim_arrow_half_px()
 
 
 def to_line_seg(seg):
@@ -179,9 +181,14 @@ def linear_arrow_dirs(start, end, text):
     return {"outward": length >= span, "unit": unit}
 
 
-def build_linear_arrows(start, end, unit, text):
-    dirs = linear_arrow_dirs(start, end, text)
-    outward = dirs["outward"]
+def build_linear_arrows(start, end, unit, text, mode="auto"):
+    if mode == "outward":
+        outward = True
+    elif mode == "inward":
+        outward = False
+    else:
+        dirs = linear_arrow_dirs(start, end, text)
+        outward = dirs["outward"]
     dir1 = (-unit[0], -unit[1]) if outward else unit
     dir2 = unit if outward else (-unit[0], -unit[1])
     return {
@@ -192,9 +199,9 @@ def build_linear_arrows(start, end, unit, text):
 
 
 def format_mm(value):
-    """对应 JS formatMm: 440 → '440mm', 440.5 → '440.5mm'"""
+    """对应 JS formatMm: 440 → '440', 440.5 → '440.5'(不带单位)"""
     s = f"{float(value or 0):.1f}".rstrip("0").rstrip(".")
-    return f"{s or '0'}mm"
+    return s or '0'
 
 
 def format_deg(value):

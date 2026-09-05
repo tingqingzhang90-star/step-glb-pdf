@@ -8,22 +8,13 @@
   前端用 px(屏幕像素,SVG non-scaling-stroke),
   后端按 96dpi 折算成 mm,确保前后端视觉一致(等比缩放)。
 """
-import json
 import math
 import os
 
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 
-# 加载共享样式配置(项目根 cad_viewer_style.json,前后端共用)
-# 本文件位于 src/drawing/dim/,需上溯四级: dim → drawing → src → 项目根
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
-_STYLE_PATH = os.path.join(_PROJECT_ROOT, "cad_viewer_style.json")
-with open(_STYLE_PATH, "r", encoding="utf-8") as _f:
-    _CFG = json.load(_f)
-
-_PX2MM = _CFG["_px_to_mm_at_96dpi"]   # 0.2645833 mm/px (96dpi)
+from drawing.dim.dim_style import CFG as _CFG, PX2MM as _PX2MM
 # 后端常量(从 px 换算成 mm)
 _W_VISIBLE = _CFG["edge"]["visible"]["stroke_px"] * _PX2MM   # 0.265
 _W_HIDDEN = _CFG["edge"]["hidden"]["stroke_px"] * _PX2MM     # 0.212
@@ -34,9 +25,6 @@ _W_MARK = _CFG["center_mark"]["stroke_px"] * _PX2MM          # 0.212
 # 而不是 pt:若传 pt 值会被坐标系再放大 2.834 倍(pt→mm 因子),
 # 导致 PDF 文字比前端预览大 3.8 倍
 _FS_TEXT_MM = _CFG["dim"]["text"]["font_px"] * _PX2MM  # 7px → 1.85mm
-# 箭头 px → mm
-_ARROW_LEN_MM = _CFG["dim"]["arrow"]["len_px"] * _PX2MM
-_ARROW_HALF_MM = _CFG["dim"]["arrow"]["half_px"] * _PX2MM
 _C_EDGE = (0.1, 0.1, 0.1)
 _C_HIDDEN = (0.45, 0.45, 0.45)
 # 表格默认值:表格画在 SVG viewBox 内,长度单位即 mm,不经 _PX2MM 折算;
