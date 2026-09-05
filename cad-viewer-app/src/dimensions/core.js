@@ -199,17 +199,23 @@ export function createDimensionCore(deps, ctx) {
 
   // ===== 平行线间距 =====
 
-  function getParallelOffsetFromMouse(edgeRef, mousePos) {
-    if (!edgeRef) return 50
-    const { seg, view } = edgeRef
-    const line = toLineSeg(seg)
-    if (!line || !view || !mousePos) return 50
-    const p1 = getSheetPoint(view, line.x1, line.y1)
-    const p2 = getSheetPoint(view, line.x2, line.y2)
+  function getParallelOffsetFromMouse(edgeRef1, edgeRef2, mousePos) {
+    if (!edgeRef1 || !edgeRef2 || !mousePos) return 50
+    const { seg: seg1, view: view1 } = edgeRef1
+    const { seg: seg2, view: view2 } = edgeRef2
+    const line1 = toLineSeg(seg1)
+    const line2 = toLineSeg(seg2)
+    if (!line1 || !line2 || !view1 || !view2) return 50
+    const p1 = getSheetPoint(view1, line1.x1, line1.y1)
+    const p2 = getSheetPoint(view1, line1.x2, line1.y2)
+    const q1 = getSheetPoint(view2, line2.x1, line2.y1)
     const dir = lineBasis(p1, p2)
     if (!dir) return 50
-    const raw = signedDistanceToLine(mousePos, p1, dir.unit)
-    return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+    // offset 是尺寸线沿被测边方向的滑动量；以第二条边在第一条边上的垂足为原点，
+    // 才能让尺寸线精确跟随鼠标，而不是被第一条边的端点位置带偏。
+    const start = closestPointOnLine(q1.x, q1.y, p1.x, p1.y, p2.x, p2.y)
+    const raw = (mousePos.x - start.x) * dir.unit.x + (mousePos.y - start.y) * dir.unit.y
+    return raw
   }
 
   function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto') {
@@ -265,7 +271,7 @@ export function createDimensionCore(deps, ctx) {
   }
 
   function buildLinearParallelPreview(edgeRef1, edgeRef2, mousePos) {
-    const offset = getParallelOffsetFromMouse(edgeRef1, mousePos)
+    const offset = getParallelOffsetFromMouse(edgeRef1, edgeRef2, mousePos)
     return buildLinearParallelGeometry(edgeRef1, edgeRef2, offset)
   }
 
@@ -493,6 +499,7 @@ export function createDimensionCore(deps, ctx) {
       mode: 'center',
       refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
       offset: geometry.offset,
+      tailLength: geometry.tailLength,
       color: ctx.dimensionColor.value,
       text: geometry.text
     })
@@ -752,7 +759,9 @@ export function createDimensionCore(deps, ctx) {
         if (!second) return
         dim.offset = getCenterOffsetFromMouse(first, second, mousePos)
       } else if (dim.mode === 'parallel') {
-        dim.offset = getParallelOffsetFromMouse(first, mousePos)
+        const second = resolveDimRef(dim.refs[1])
+        if (!second) return
+        dim.offset = getParallelOffsetFromMouse(first, second, mousePos)
       } else if (dim.mode === 'circle-edge') {
         const second = resolveDimRef(dim.refs[1])
         if (!second) return
