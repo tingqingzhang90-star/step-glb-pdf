@@ -319,6 +319,14 @@ export function createDimEngine(deps) {
     dimDragging.value = { id: dim.id, type: dim.type, part: 'text' }
   }
 
+  /** 延长线手柄 mousedown:开始拖拽调整 lineExtension(尺寸线两端外延长度) */
+  function onDimExtensionHandleDown(event, dim, endSide) {
+    const mousePos = getSvgMousePoint(event)
+    if (!mousePos) return
+    selectDim(dim.id)
+    dimDragging.value = { id: dim.id, type: dim.type, part: 'extension', endSide }
+  }
+
   /** 全局 mouseup：结束标注拖拽 */
   function onGlobalDimMouseUp() {
     dimDragging.value = null
@@ -356,6 +364,8 @@ export function createDimEngine(deps) {
     if (!dim || !mousePos) return
     if (drag.part === 'text') {
       core.updateDimTextDrag(dim, mousePos)
+    } else if (drag.part === 'extension') {
+      core.updateDimExtensionDrag(dim, mousePos, drag.endSide)
     } else {
       core.updateDimDrag(dim, mousePos)
     }
@@ -369,6 +379,7 @@ export function createDimEngine(deps) {
     commitPendingLinear,
     onDimMouseDown,
     onDimTextMouseDown,
+    onDimExtensionHandleDown,
     onDimDragMove,
     onGlobalDimMouseUp,
     deleteSelectedDim,

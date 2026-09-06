@@ -38,7 +38,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
 
   const {
     toggleTool, onDimEdgeSelect, onMotorEnvelopePick, updateDimPreviewAt, commitPendingLinear,
-    onDimMouseDown, onDimTextMouseDown, onDimDragMove,     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
+    onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove,
+    onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
     activeTool,
     dimHoveredEdge,
@@ -241,7 +242,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
     renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
     dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
-    toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimDragMove,
+    toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown,
+    onDimExtensionHandleDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, selectDim, onDimClick,
     onSvgMouseDown, onSvgMouseMove, onSvgMouseLeave,
     clearTransientSelection, removeByView, resetAll

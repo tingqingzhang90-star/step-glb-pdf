@@ -1,17 +1,18 @@
 {
-  "_comment": "前后端共用样式配置。前端用 px(屏幕像素,SVG non-scaling-stroke),后端按 96dpi 折算成 mm。改一处同步两端。",
-
   "edge": {
     "visible": { "stroke_px": 1.0, "color": "#303133" },
     "hidden":  { "stroke_px": 0.8, "color": "#999999" }
   },
 
   "dim": {
-    "_comment": "stroke_px / font_px 为屏幕 px(后端按 96dpi 折为 mm);overshoot_mm / gap_mm 为图纸几何量——SVG viewBox 单位即 mm,前后端都不折算",
     "line":  { "stroke_px": 1.0, "color": "#303133" },
     "ext":   { "stroke_px": 0.8, "color": "#606266", "overshoot_mm": 2.5 },
-    "text":  { "font_px": 18,    "color": "#303133", "gap_mm": 1 },
-    "arrow": { "len_px": 8,   "half_px": 1.1 }
+    "text":  { "font_px": 18, "color": "#303133", "gap_mm": 1 },
+    "arrow": {
+      "len_px": 8,
+      "half_px": 1.1,
+      "extension_px": 12
+    }
   },
 
   "center_mark": {
@@ -30,7 +31,6 @@
   },
 
   "table": {
-    "_comment": "表格绘制在 SVG viewBox 内,长度单位即 mm,不经 _px_to_mm_at_96dpi 折算;font_px 例外,沿用 96dpi 折算(与 dim.text 一致)",
     "text":   { "font_px": 13,    "color": "#303133" },
     "border": { "stroke_mm": 0.3, "color": "#303133" },
     "col_width_mm": 30,

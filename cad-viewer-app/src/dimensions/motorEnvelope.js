@@ -3,7 +3,7 @@
 // 各字段为模型 mm 投影坐标,与 palette 边线 meta.mm_coords 同源。
 
 import { lineBasis, extendExtEnd, linearTextAngle, linearTextPos } from './geometry.js'
-import { buildLinearArrows } from './arrow.js'
+import { buildLinearArrows, extendLinearLine } from './arrow.js'
 
 function pickEnvelopeEndpoint(face, orientation, offset) {
   const [a, b] = face
@@ -66,7 +66,7 @@ function faceToSheet(face, view, getSheetPoint) {
   return face.map(([x, y]) => getSheetPoint(view, x * k + ox, y * k + oy))
 }
 
-export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset = 50, customText = '', arrowMode = 'auto') {
+export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset = 50, customText = '', arrowMode = 'auto', extStartPx, extEndPx) {
   const face1 = faceToSheet(envelope.face_min, view, getSheetPoint)
   const face2 = faceToSheet(envelope.face_max, view, getSheetPoint)
   const orientation = envelope.orientation
@@ -100,6 +100,7 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
 
   const text = customText || `${envelope.span_mm}mm`
   const arrows = buildLinearArrows(dimStart, dimEnd, basis.unit, text, arrowMode)
+  const ext = extendLinearLine(dimStart, dimEnd, arrows.outward, basis.unit, extStartPx, extEndPx)
   const mid = { x: (dimStart.x + dimEnd.x) / 2, y: (dimStart.y + dimEnd.y) / 2 }
 
   return {
@@ -111,6 +112,8 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
     ext2End: extendExtEnd(ext2, dimEnd),
     dimStart,
     dimEnd,
+    dimLineStart: ext.lineStart,
+    dimLineEnd: ext.lineEnd,
     ...arrows,
     textPos: linearTextPos(basis.unit, mid),
     textAngle: linearTextAngle(basis.unit),

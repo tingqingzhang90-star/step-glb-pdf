@@ -391,8 +391,14 @@ class TaskPool:
         """最近任务列表(多用户可看到彼此的排队情况)"""
         now = time.time()
         with self._lock:
+            # 先按源 task 的 submitted_at 排序(精简后的 items 不带该字段,不能直接排)
+            ordered = sorted(
+                self._tasks.values(),
+                key=lambda t: t.get("submitted_at", 0),
+                reverse=True,
+            )
             items = []
-            for t in self._tasks.values():
+            for t in ordered:
                 fut = t.get("_fut")
                 status = t["status"]
                 if status == "pending" and fut is not None and fut.running():
@@ -405,7 +411,6 @@ class TaskPool:
                     "elapsed": round(
                         (t["finished_at"] or now) - t["submitted_at"], 2),
                 })
-        items.sort(key=lambda x: x["submitted_at"], reverse=True)
         return items[:limit]
 
     def stats(self):

@@ -7,6 +7,11 @@ import styleConfig from '../../../cad_viewer_style.json'
 const ARROW_LEN = styleConfig.dim.arrow.len_px
 const ARROW_HALF = styleConfig.dim.arrow.half_px
 
+// 线性标注尺寸线两端向外延长量：箭头由外向内(inward)时，
+// 尺寸线穿过箭头再向两侧延伸，工程图常见画法(标准 ISO/GB 也有类似习惯)。
+// 放到 cad_viewer_style.json 的 dim.arrow.extension_px，前后端共用同一值。
+const LINE_EXTENSION_PX = styleConfig.dim.arrow.extension_px ?? ARROW_LEN * 2
+
 function invert(dir) {
   return { x: -dir.x, y: -dir.y }
 }
@@ -65,3 +70,19 @@ export function buildLinearArrows(start, end, unit, text, mode = 'auto') {
     arrow2: buildArrowPoints(end, dir2, true)
   }
 }
+
+// 尺寸线两端实际起止：outward 时等于箭头尖端；inward 时穿过箭头向外延伸。
+// extStartPx / extEndPx: 可选，分别覆盖全局 LINE_EXTENSION_PX（单侧独立调整延长量）。
+export function extendLinearLine(start, end, outward, unit, extStartPx, extEndPx) {
+  const extS = extStartPx ?? LINE_EXTENSION_PX
+  const extE = extEndPx ?? LINE_EXTENSION_PX
+  if (outward) {
+    return { lineStart: start, lineEnd: end }
+  }
+  return {
+    lineStart: { x: start.x - unit.x * extS, y: start.y - unit.y * extS },
+    lineEnd:   { x: end.x   + unit.x * extE, y: end.y   + unit.y * extE }
+  }
+}
+
+export { LINE_EXTENSION_PX }

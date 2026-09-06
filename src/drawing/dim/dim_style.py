@@ -21,7 +21,7 @@ PX2MM = CFG["_px_to_mm_at_96dpi"]
 
 # json 缺字段时的兜底值,避免旧配置文件直接崩
 _FALLBACK = {"ext_overshoot_mm": 2.5, "text_gap_mm": 4.0,
-             "arrow_len_px": 14.0, "arrow_half_px": 1.6}
+             "arrow_len_px": 14.0, "arrow_half_px": 1.6, "arrow_ext_px": 16.0}
 
 
 def _dim(section, key, fallback_key):
@@ -49,3 +49,8 @@ def dim_arrow_len_px():
 def dim_arrow_half_px():
     """箭头底部半宽(图纸单位,越小越尖锐)"""
     return _dim("arrow", "half_px", "arrow_half_px")
+
+
+def dim_arrow_extension_px():
+    """箭头向内(尖端相对)时尺寸线穿过箭头的延长量(px,与前端 arrow.js 共用同一份 json)"""
+    return _dim("arrow", "extension_px", "arrow_ext_px")

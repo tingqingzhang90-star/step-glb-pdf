@@ -17,6 +17,7 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           project_point_to_line, line_intersection,
                           farthest_endpoint_from, build_arc_points,
                           build_linear_arrows, build_arrow_points,
+                          extend_linear_line,
                           format_mm, format_deg)
 from drawing.dim.dim_style import dim_ext_overshoot_mm, dim_text_gap_mm
 
@@ -109,6 +110,17 @@ def _texts_and_final(prims, text, custom_text):
 def _arrow_mode(ann):
     """读取前端标注数据中的箭头方向模式(outward/inward/auto)"""
     return ann.get("arrowMode") or ann.get("arrow_mode") or "auto"
+
+
+def _line_extension(ann):
+    """读取前端标注数据中的尺寸线单侧延长量(px);返回 (start, end) 元组,
+    未设置时对应位置为 None 用全局默认。"""
+    s = ann.get("extensionStartPx")
+    e = ann.get("extensionEndPx")
+    return (
+        s if isinstance(s, (int, float)) else None,
+        e if isinstance(e, (int, float)) else None,
+    )
 
 
 # 标注外观几何量取自前后端共用样式配置(cad_viewer_style.json)
@@ -204,17 +216,19 @@ def _linear_single(ann, segs, views):
     slide = ann.get("textSlide") or 0.0
     e1 = offset_point(p1, basis["perp"], offset)
     e2 = offset_point(p2, basis["perp"], offset)
+    unit = basis["unit"]
     mm_val = _line_mm_length(line)
     if mm_val is None:
         mm_val = basis["len"] / (view["scale"] * (view["k"] or 1.0))
     text = format_mm(mm_val)
-    arrows = build_linear_arrows(e1, e2, basis["unit"], text, _arrow_mode(ann))
+    arrows = build_linear_arrows(e1, e2, unit, text, _arrow_mode(ann))
+    dim_start, dim_end = extend_linear_line(e1, e2, arrows["outward"], unit, *_line_extension(ann))
     mid = ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2)
     return {
         "lines": [_ext_line(p1, e1), _ext_line(p2, e2)],
-        "dim_lines": [(e1, e2)],
+        "dim_lines": [(dim_start, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
-        "texts": [_linear_text(basis["unit"], mid, text, slide)],
+        "texts": [_linear_text(unit, mid, text, slide)],
         "center_marks": [], "text": text,
     }
 
@@ -297,10 +311,11 @@ def _linear_motor_envelope(ann, segs, views):
     dim_end = offset_point(ext2, normal, abs(offset))
 
     arrows = build_linear_arrows(dim_base, dim_end, unit, text, _arrow_mode(ann))
+    dim_start, dim_end = extend_linear_line(dim_base, dim_end, arrows["outward"], unit, *_line_extension(ann))
     mid = ((dim_base[0] + dim_end[0]) / 2.0, (dim_base[1] + dim_end[1]) / 2.0)
     return {
         "lines": [_ext_line(ext1, dim_base), _ext_line(ext2, dim_end)],
-        "dim_lines": [(dim_base, dim_end)],
+        "dim_lines": [(dim_start, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
         "texts": [_linear_text(unit, mid, text, slide)],
         "center_marks": [], "text": text,
@@ -337,10 +352,11 @@ def _linear_parallel(ann, segs, views):
         mm_val = distance / (v1["scale"] * (v1["k"] or 1.0))
     text = format_mm(mm_val)
     arrows = build_linear_arrows(dim_base, dim_end, normal, text, _arrow_mode(ann))
+    dim_start, dim_end = extend_linear_line(dim_base, dim_end, arrows["outward"], normal, *_line_extension(ann))
     mid = ((dim_base[0] + dim_end[0]) / 2, (dim_base[1] + dim_end[1]) / 2)
     return {
         "lines": [_ext_line(start, dim_base), _ext_line(end, dim_end)],
-        "dim_lines": [(dim_base, dim_end)],
+        "dim_lines": [(dim_start, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
         "texts": [_linear_text(normal, mid, text, slide)],
         "center_marks": [], "text": text,
@@ -370,10 +386,11 @@ def _linear_center(ann, segs, views):
         mm_val = basis["len"] / (v1["scale"] * (v1["k"] or 1.0))
     text = format_mm(mm_val)
     arrows = build_linear_arrows(e1, e2, basis["unit"], text, _arrow_mode(ann))
+    dim_start, dim_end = extend_linear_line(e1, e2, arrows["outward"], basis["unit"], *_line_extension(ann))
     mid = ((e1[0] + e2[0]) / 2, (e1[1] + e2[1]) / 2)
     return {
         "lines": [_ext_line(c1, e1), _ext_line(c2, e2)],
-        "dim_lines": [(e1, e2)],
+        "dim_lines": [(dim_start, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
         "texts": [_linear_text(basis["unit"], mid, text, slide)],
         "center_marks": [
@@ -412,10 +429,11 @@ def _linear_circle_edge(ann, segs, views):
         mm_val = d / (vc["scale"] * (vc["k"] or 1.0))
     text = format_mm(mm_val)
     arrows = build_linear_arrows(foot_c, foot_f, basis["perp"], text, _arrow_mode(ann))
+    dim_start, dim_end = extend_linear_line(foot_c, foot_f, arrows["outward"], basis["perp"], *_line_extension(ann))
     mid = ((foot_c[0] + foot_f[0]) / 2, (foot_c[1] + foot_f[1]) / 2)
     return {
         "lines": [_ext_line(c, foot_c), _ext_line(f, foot_f)],
-        "dim_lines": [(foot_c, foot_f)],
+        "dim_lines": [(dim_start, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
         "texts": [_linear_text(basis["perp"], mid, text, slide)],
         "center_marks": [{"pos": c, "r": _mark_half_px(segs[0], vc),

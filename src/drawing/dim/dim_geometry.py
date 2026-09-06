@@ -6,10 +6,11 @@
 """
 import math
 
-from .dim_style import dim_arrow_len_px, dim_arrow_half_px
+from .dim_style import dim_arrow_len_px, dim_arrow_half_px, dim_arrow_extension_px
 
 ARROW_LEN = dim_arrow_len_px()
 ARROW_HALF = dim_arrow_half_px()
+ARROW_EXTENSION = dim_arrow_extension_px()
 
 
 def to_line_seg(seg):
@@ -196,6 +197,20 @@ def build_linear_arrows(start, end, unit, text, mode="auto"):
         "arrow1": build_arrow_points(start, dir1, True),
         "arrow2": build_arrow_points(end, dir2, True),
     }
+
+
+def extend_linear_line(start, end, outward, unit, ext_start_px=None, ext_end_px=None):
+    """尺寸线两端实际起止:outward 时等于箭头尖端;inward 时穿过箭头向外延伸。
+    ext_start_px / ext_end_px 可选,分别覆盖全局 ARROW_EXTENSION(单侧独立延长)。
+    对应 JS extendLinearLine。"""
+    ext_s = ARROW_EXTENSION if ext_start_px is None else ext_start_px
+    ext_e = ARROW_EXTENSION if ext_end_px is None else ext_end_px
+    if outward:
+        return start, end
+    return (
+        (start[0] - unit[0] * ext_s, start[1] - unit[1] * ext_s),
+        (end[0] + unit[0] * ext_e, end[1] + unit[1] * ext_e),
+    )
 
 
 def format_mm(value):

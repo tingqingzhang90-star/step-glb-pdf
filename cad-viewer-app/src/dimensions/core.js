@@ -30,7 +30,7 @@ import {
   linearTextPos,
   DIM_TEXT_GAP
 } from './geometry.js'
-import { buildArrowPoints, buildLinearArrows } from './arrow.js'
+import { buildArrowPoints, buildLinearArrows, extendLinearLine } from './arrow.js'
 import {
   buildMotorEnvelopeGeometry,
   getMotorEnvelopeOffsetFromMouse
@@ -155,7 +155,7 @@ export function createDimensionCore(deps, ctx) {
 
   }
 
-  function buildLinearSingleGeometry(edgeRef, offset = 50, arrowMode = 'auto') {
+  function buildLinearSingleGeometry(edgeRef, offset = 50, arrowMode = 'auto', extStartPx, extEndPx) {
     if (!edgeRef) return null
     const { seg, view } = edgeRef
     const line = toLineSeg(seg)
@@ -182,8 +182,11 @@ export function createDimensionCore(deps, ctx) {
       ...(() => {
         const r = buildLinearArrows(extEnd1, extEnd2, dir.unit, formatMm(mmVal), arrowMode)
         const mid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 }
+        const ext = extendLinearLine(extEnd1, extEnd2, r.outward, dir.unit, extStartPx, extEndPx)
         return {
           ...r,
+          dimLineStart: ext.lineStart,
+          dimLineEnd: ext.lineEnd,
           textPos: linearTextPos(dir.unit, mid),
           textAngle: linearTextAngle(dir.unit)
         }
@@ -218,7 +221,7 @@ export function createDimensionCore(deps, ctx) {
     return raw
   }
 
-  function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto') {
+  function buildLinearParallelGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto', extStartPx, extEndPx) {
     if (!edgeRef1 || !edgeRef2) return null
     const { seg: seg1, view: view1 } = edgeRef1
     const { seg: seg2, view: view2 } = edgeRef2
@@ -260,8 +263,11 @@ export function createDimensionCore(deps, ctx) {
       ...(() => {
         const r = buildLinearArrows(dimBase, dimEnd, normal, formatMm(mmVal), arrowMode)
         const mid = { x: (dimBase.x + dimEnd.x) / 2, y: (dimBase.y + dimEnd.y) / 2 }
+        const ext = extendLinearLine(dimBase, dimEnd, r.outward, normal, extStartPx, extEndPx)
         return {
           ...r,
+          dimLineStart: ext.lineStart,
+          dimLineEnd: ext.lineEnd,
           textPos: linearTextPos(normal, mid),
           textAngle: linearTextAngle(normal)
         }
@@ -288,7 +294,7 @@ export function createDimensionCore(deps, ctx) {
     return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
   }
 
-  function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto') {
+  function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto', extStartPx, extEndPx) {
     if (!edgeRef1 || !edgeRef2) return null
     const { view: view1 } = edgeRef1
     const c1 = getCircleCenterSheet(edgeRef1)
@@ -318,8 +324,11 @@ export function createDimensionCore(deps, ctx) {
       ...(() => {
         const r = buildLinearArrows(extEnd1, extEnd2, basis.unit, formatMm(mmVal), arrowMode)
         const mid = { x: (extEnd1.x + extEnd2.x) / 2, y: (extEnd1.y + extEnd2.y) / 2 }
+        const ext = extendLinearLine(extEnd1, extEnd2, r.outward, basis.unit, extStartPx, extEndPx)
         return {
           ...r,
+          dimLineStart: ext.lineStart,
+          dimLineEnd: ext.lineEnd,
           textPos: linearTextPos(basis.unit, mid),
           textAngle: linearTextAngle(basis.unit)
         }
@@ -357,7 +366,7 @@ export function createDimensionCore(deps, ctx) {
    *  - 延伸线方向 = 边线方向(basis.unit)，从圆心和边线垂足沿 unit 走到尺寸线；
    *  - 尺寸线位置由鼠标沿 unit 方向的位移决定。
    */
-  function buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset = 50, arrowMode = 'auto') {
+  function buildLinearCircleEdgeGeometry(circleRef, edgeRef, offset = 50, arrowMode = 'auto', extStartPx, extEndPx) {
     if (!circleRef || !edgeRef) return null
     const c = getCircleCenterSheet(circleRef)
     const line = toLineSeg(edgeRef.seg)
@@ -392,8 +401,11 @@ export function createDimensionCore(deps, ctx) {
       ...(() => {
         const r = buildLinearArrows(footC, footF, basis.perp, formatMm(mmVal), arrowMode)
         const mid = { x: (footC.x + footF.x) / 2, y: (footC.y + footF.y) / 2 }
+        const ext = extendLinearLine(footC, footF, r.outward, basis.perp, extStartPx, extEndPx)
         return {
           ...r,
+          dimLineStart: ext.lineStart,
+          dimLineEnd: ext.lineEnd,
           textPos: linearTextPos(basis.perp, mid),
           textAngle: linearTextAngle(basis.perp)
         }
@@ -499,7 +511,6 @@ export function createDimensionCore(deps, ctx) {
       mode: 'center',
       refs: [edgeRefData(edgeRef1), edgeRefData(edgeRef2)],
       offset: geometry.offset,
-      tailLength: geometry.tailLength,
       color: ctx.dimensionColor.value,
       text: geometry.text
     })
@@ -690,6 +701,8 @@ export function createDimensionCore(deps, ctx) {
   function renderDimension(dim) {
     if (!dim) return null
 
+    const extS = dim.extensionStartPx ?? undefined
+    const extE = dim.extensionEndPx ?? undefined
     let geometry = null
     if (dim.type === 'linear' && dim.mode === 'motor-envelope') {
       const ref = resolveDimRef(dim.refs?.[0])
@@ -697,7 +710,7 @@ export function createDimensionCore(deps, ctx) {
       const envelope = getMotorEnvelope ? getMotorEnvelope(ref.view) : null
       if (!envelope) return null
       geometry = buildMotorEnvelopeGeometry(
-        ref.view, envelope, getSheetPoint, dim.offset, dim.customText || '', dim.arrowMode || 'auto')
+        ref.view, envelope, getSheetPoint, dim.offset, dim.customText || '', dim.arrowMode || 'auto', extS, extE)
       if (geometry) {
         geometry.text = dim.customText || geometry.text
       }
@@ -705,13 +718,13 @@ export function createDimensionCore(deps, ctx) {
       const first = resolveDimRef(dim.refs[0])
       if (!first) return null
       if (dim.mode === 'center') {
-        geometry = buildLinearCenterGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto')
+        geometry = buildLinearCenterGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto', extS, extE)
       } else if (dim.mode === 'parallel') {
-        geometry = buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto')
+        geometry = buildLinearParallelGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto', extS, extE)
       } else if (dim.mode === 'circle-edge') {
-        geometry = buildLinearCircleEdgeGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto')
+        geometry = buildLinearCircleEdgeGeometry(first, resolveDimRef(dim.refs[1]), dim.offset, dim.arrowMode || 'auto', extS, extE)
       } else {
-        geometry = buildLinearSingleGeometry(first, dim.offset, dim.arrowMode || 'auto')
+        geometry = buildLinearSingleGeometry(first, dim.offset, dim.arrowMode || 'auto', extS, extE)
       }
     } else if (dim.type === 'center-mark') {
       geometry = buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
@@ -804,6 +817,31 @@ export function createDimensionCore(deps, ctx) {
     dim.textSlide = Math.max(-(len / 2 + 15), Math.min(len / 2 + 15, t))
   }
 
+  /** 拖动延长线手柄:鼠标沿尺寸线方向投影,计算超出箭头尖端的距离,更新对应侧的 extensionPx。
+   *  endSide: 'start' | 'end', 表示拖的是哪一端。*/
+  function updateDimExtensionDrag(dim, mousePos, endSide) {
+    if (!dim || dim.type !== 'linear' || !mousePos) return
+    // 不传 extension 用默认值构建基底几何,拿到箭头尖端位置
+    const geometry = renderDimension({ ...dim, extensionStartPx: undefined, extensionEndPx: undefined })
+    if (!geometry) return
+    const a = geometry.dimStart
+    const b = geometry.dimEnd
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    if (len < 1e-6) return
+    const unit = { x: dx / len, y: dy / len }
+    // 鼠标在尺寸线方向上的投影偏移(以 a 为原点)
+    const proj = (mousePos.x - a.x) * unit.x + (mousePos.y - a.y) * unit.y
+    if (endSide === 'start') {
+      const ext = -proj
+      dim.extensionStartPx = Math.max(0, ext)
+    } else {
+      const ext = proj - len
+      dim.extensionEndPx = Math.max(0, ext)
+    }
+  }
+
   // 供引擎使用的预览构建集合
   const previewBuilders = {
     linearSingle: buildLinearSinglePreview,
@@ -844,6 +882,7 @@ export function createDimensionCore(deps, ctx) {
     renderDimension,
     updateDimDrag,
     updateDimTextDrag,
+    updateDimExtensionDrag,
     previewBuilders
   }
 }

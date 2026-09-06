@@ -304,7 +304,7 @@
                   <template v-if="dim.type === 'linear'">
                     <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <line :x1="dim.dimLineStart.x" :y1="dim.dimLineStart.y" :x2="dim.dimLineEnd.x" :y2="dim.dimLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cm-${dim.id}-${ci}`">
                       <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
                       <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
@@ -341,7 +341,7 @@
                   <template v-if="dim.type === 'linear'">
                     <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <line :x1="dim.dimLineStart.x" :y1="dim.dimLineStart.y" :x2="dim.dimLineEnd.x" :y2="dim.dimLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cm-${dim.id}-${ci}`">
                       <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
                       <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
@@ -395,7 +395,7 @@
                 <template v-if="dimPreview.type === 'linear'">
                   <line :x1="dimPreview.ext1.x" :y1="dimPreview.ext1.y" :x2="dimPreview.ext1End.x" :y2="dimPreview.ext1End.y" class="dim-ext-line" />
                   <line :x1="dimPreview.ext2.x" :y1="dimPreview.ext2.y" :x2="dimPreview.ext2End.x" :y2="dimPreview.ext2End.y" class="dim-ext-line" />
-                  <line :x1="dimPreview.dimStart.x" :y1="dimPreview.dimStart.y" :x2="dimPreview.dimEnd.x" :y2="dimPreview.dimEnd.y" class="dim-line" />
+                  <line :x1="dimPreview.dimLineStart.x" :y1="dimPreview.dimLineStart.y" :x2="dimPreview.dimLineEnd.x" :y2="dimPreview.dimLineEnd.y" class="dim-line" />
                   <polygon v-if="dimPreview.arrow1" :points="dimPreview.arrow1" class="dim-arrow" />
                   <polygon v-if="dimPreview.arrow2" :points="dimPreview.arrow2" class="dim-arrow" />
                   <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" :transform="`rotate(${(dimPreview.textAngle || 0) * 180 / Math.PI}, ${dimPreview.textPos.x}, ${dimPreview.textPos.y})`" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dimPreview.text }}</text>
@@ -427,8 +427,10 @@
                   <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-stroke" />
                   <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-ext-line" />
                   <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-stroke" />
-                  <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-line" />
-                  <line :x1="dim.dimStart.x" :y1="dim.dimStart.y" :x2="dim.dimEnd.x" :y2="dim.dimEnd.y" class="dim-hit-stroke" />
+                  <line :x1="dim.dimLineStart.x" :y1="dim.dimLineStart.y" :x2="dim.dimLineEnd.x" :y2="dim.dimLineEnd.y" class="dim-line" />
+                  <line :x1="dim.dimLineStart.x" :y1="dim.dimLineStart.y" :x2="dim.dimLineEnd.x" :y2="dim.dimLineEnd.y" class="dim-hit-stroke" />
+                  <circle v-if="selectedDimId === dim.id" :cx="dim.dimLineStart.x" :cy="dim.dimLineStart.y" r="12" class="dim-extension-hit" :style="{ cursor: extensionCursor(dim) }" @mousedown.stop="onDimExtensionHandleDown($event, dim, 'start')" />
+                  <circle v-if="selectedDimId === dim.id" :cx="dim.dimLineEnd.x" :cy="dim.dimLineEnd.y" r="12" class="dim-extension-hit" :style="{ cursor: extensionCursor(dim) }" @mousedown.stop="onDimExtensionHandleDown($event, dim, 'end')" />
                   <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
                   <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
                   <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${(dim.textAngle || 0) * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" style="cursor: move" text-anchor="middle" dominant-baseline="auto" @mousedown.stop="onDimTextMouseDown($event, dim)">{{ dim.text }}</text>
@@ -437,7 +439,8 @@
                 <template v-if="dim.type === 'diameter'">
                   <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
                   <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
-                  <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
+                  <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
+                  <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
                   <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${dim.textAngle * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
                 </template>
                 <!-- 角度标注 -->
@@ -709,7 +712,7 @@ const {
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
   dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
   dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
-  toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimDragMove, onGlobalDimMouseUp,
+  toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove, onGlobalDimMouseUp,
   onKeyDown, selectDim, onDimClick, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
   onSvgMouseLeave, clearTransientSelection, removeByView, resetAll
 } = useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope })
@@ -871,6 +874,21 @@ function dimTypeLabel(dim) {
     return `线性标注(${LINEAR_MODE_LABELS[dim.mode] || dim.mode})`
   }
   return DIM_TYPE_LABELS[dim.type] || dim.type
+}
+
+/** 根据尺寸线方向返回匹配的 resize 光标:水平/竖直/对角线 */
+function extensionCursor(dim) {
+  const a = dim.dimLineStart
+  const b = dim.dimLineEnd
+  if (!a || !b) return 'ew-resize'
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const absDx = Math.abs(dx)
+  const absDy = Math.abs(dy)
+  if (absDx > absDy * 2.4) return 'ew-resize'
+  if (absDy > absDx * 2.4) return 'ns-resize'
+  if ((dx > 0) === (dy > 0)) return 'nwse-resize'
+  return 'nesw-resize'
 }
 
 async function saveAsTemplate() {
@@ -1508,6 +1526,14 @@ function onModelChange() {
 .dimension-hovered .dim-text {
   fill: #409eff;
   font-weight: 600;
+}
+
+/* 选中线性标注时,尺寸线两端出现透明拖拽热区(圆形,覆盖箭尾位置)。
+   光标由 inline style 动态设置,匹配尺寸线方向。 */
+.dim-extension-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
 }
 
 .drawing-sheet.dim-active {
