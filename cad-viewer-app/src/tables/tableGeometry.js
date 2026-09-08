@@ -128,6 +128,21 @@ export function cellFontSize(cell) {
 }
 
 function hAlign(cell) {
-  return (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-'))
-    || 'h-left'
+  return (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-')) || 'h-left'
+}
+
+/** sheet 坐标点 → 最近格 (r,c)(合并格归到其左上角所在行列) */
+export function cellRCAtPoint(t, pt) {
+  const lefts = tableColLefts(t)
+  const tops = tableRowTops(t)
+  let c = -1
+  for (let i = 0; i < t.col_widths.length; i++) {
+    if (pt.x >= lefts[i] && pt.x < lefts[i + 1]) { c = i; break }
+  }
+  let r = -1
+  for (let i = 0; i < t.row_heights.length; i++) {
+    if (pt.y >= tops[i] && pt.y < tops[i + 1]) { r = i; break }
+  }
+  if (r < 0 || c < 0) return null
+  return { r, c }
 }

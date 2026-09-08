@@ -41,6 +41,17 @@
           :text-anchor="cellTextAnchor(lc.cell)"
           :style="{ fontWeight: lc.cell.bold ? 'bold' : 'normal' }"
         >{{ lc.cell.text }}</text>
+        <!-- 单元格符号(SVG):居中适配于格内(内边距 1.5mm),不拦截鼠标 -->
+        <image
+          v-if="lc.isOrigin && lc.cell.symbol"
+          :href="symbolUrl(lc.cell.symbol)"
+          :x="cellRect(t, lc.cell).x + 1.5"
+          :y="cellRect(t, lc.cell).y + 1.5"
+          :width="Math.max(1, cellRect(t, lc.cell).w - 3)"
+          :height="Math.max(1, cellRect(t, lc.cell).h - 3)"
+          preserveAspectRatio="xMidYMid meet"
+          pointer-events="none"
+        />
       </template>
 
       <!-- 选中外框:吸附命中时变品红加粗,提示"这张表吸上了" -->
@@ -105,6 +116,7 @@
 // 表格 SVG 渲染层:只负责画与事件转发,状态与逻辑在 composable 里
 import { nextTick, ref, watch } from 'vue'
 import { TABLE_STYLE } from '@/composables/useStyleConfig'
+import { symbolUrl } from '@/api/symbols'
 import {
   tableColLefts, tableRowTops, tableW, tableH, tableLogicalCells,
   cornerHandles, colResizeHandles, rowResizeHandles,

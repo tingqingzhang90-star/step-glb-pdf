@@ -68,6 +68,22 @@ export function usePlacedTables() {
     if (cell) cell.text = text
   }
 
+  /** 写入单元格符号(存相对 data/symbols 的文件名)。拖拽放置与双击清除共用 */
+  function setCellSymbol(tableId, r, c, file) {
+    const t = placedTables.value.find(t => t.id === tableId)
+    if (!t) return
+    const cell = findCellAt(t, r, c)
+    if (cell) cell.symbol = file
+  }
+
+  /** 清除单元格符号(双击已有符号的单元格触发) */
+  function clearCellSymbol(tableId, r, c) {
+    const t = placedTables.value.find(t => t.id === tableId)
+    if (!t) return
+    const cell = findCellAt(t, r, c)
+    if (cell) delete cell.symbol
+  }
+
   /** 切换/追加选中格;Shift 追加,普通点击单选 */
   function toggleCellSelect(r, c, shiftKey) {
     if (!shiftKey) {
@@ -247,7 +263,7 @@ export function usePlacedTables() {
   return {
     placedTables, selectedTableId, selectedTable, selectedCells,
     placeTable, selectTable, focusTable, deleteSelectedTable, clearTables,
-    updateCellText, toggleCellSelect, mergeSelected, splitSelected,
+    updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected,
     findCellAt,
     insertRow, deleteRow, insertCol, deleteCol,
     resizeCol, resizeRow, resizeTable, resizeFromTopLeft,

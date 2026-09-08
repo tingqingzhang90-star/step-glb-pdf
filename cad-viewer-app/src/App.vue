@@ -126,6 +126,11 @@
             </div>
           </section>
         </template>
+        <SymbolPalette
+          :dragging-file="symbolDraggingFile"
+          :preview-pos="symbolPreviewPos"
+          @symbol-pointerdown="onSymbolPointerDown"
+        />
       </aside>
 
       <section class="canvas-region">
@@ -259,7 +264,7 @@
               @cell-mousedown="onCellMouseDown"
               @cell-mouseenter="onCellMouseEnter"
               @cell-mouseleave="clearHover"
-              @cell-dblclick="startEdit"
+              @cell-dblclick="onCellDblClick"
               @cell-contextmenu="openContextMenu"
               @corner-mousedown="startCornerResize"
               @col-mousedown="startColResize"
@@ -663,6 +668,7 @@ import { useViewDrag } from '@/composables/useViewDrag'
 import { useDimensions } from '@/composables/useDimensions'
 import { useModelPalette } from '@/composables/useModelPalette'
 import { usePaletteDrag } from '@/composables/usePaletteDrag'
+import { useSymbolDrag } from '@/composables/useSymbolDrag'
 import { usePlacedTables } from '@/composables/usePlacedTables'
 import { useTableDrag } from '@/composables/useTableDrag'
 import { useTableEdit } from '@/composables/useTableEdit'
@@ -675,6 +681,7 @@ import TableContextMenu from '@/components/TableContextMenu.vue'
 import DimContextMenu from '@/components/DimContextMenu.vue'
 import TableSizePicker from '@/components/TableSizePicker.vue'
 import TableStyleBar from '@/components/TableStyleBar.vue'
+import SymbolPalette from '@/components/SymbolPalette.vue'
 
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
@@ -750,11 +757,17 @@ const tables = usePlacedTables()
 const {
   placedTables, selectedTableId, selectedTable, selectedCells,
   placeTable, selectTable, deleteSelectedTable: removeSelectedTable, clearTables,
-  updateCellText, toggleCellSelect, mergeSelected, splitSelected, findCellAt,
+  updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected, findCellAt,
   insertRow, deleteRow, insertCol, deleteCol,
   resizeCol, resizeRow, resizeTable,
   setCellFontSize, setTableBorder
 } = tables
+
+// ===== 符号拖拽放置:从符号库拖 SVG 到单元格 =====
+const {
+  dragging: symbolDragging, draggingFile: symbolDraggingFile, previewPos: symbolPreviewPos,
+  onSymbolPointerDown, onSymbolPointerMove, onSymbolPointerUp, reset: resetSymbolDrag
+} = useSymbolDrag({ coords, placedTables, setCellSymbol })
 
 // 拖拽 + 吸附(注入坐标转换与尺寸操作)
 const {
@@ -799,6 +812,17 @@ function onCellMouseDown(event, table, r, c) {
 
 function onCellMouseEnter(event, table, r, c) {
   onCellHover(table, r, c)
+}
+
+// 双击单元格:若已含符号则清除,否则进入文字编辑
+function onCellDblClick(event, table, r, c) {
+  const cell = findCellAt(table, r, c)
+  if (cell && cell.symbol) {
+    clearCellSymbol(table.id, r, c)
+    ElMessage.success('已清除单元格符号')
+    return
+  }
+  startEdit(event, table, r, c)
 }
 
 const selectedCellFontSize = computed(() => {
@@ -946,6 +970,9 @@ onMounted(async () => {
   window.addEventListener('pointermove', onPalettePointerMove)
   window.addEventListener('pointerup', onPalettePointerUp)
   window.addEventListener('pointercancel', resetPaletteDrag)
+  window.addEventListener('pointermove', onSymbolPointerMove)
+  window.addEventListener('pointerup', onSymbolPointerUp)
+  window.addEventListener('pointercancel', resetSymbolDrag)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keydown', handleKeydown)
   window.addEventListener('click', closeAllContextMenus)
@@ -957,6 +984,9 @@ onUnmounted(() => {
   window.removeEventListener('pointermove', onPalettePointerMove)
   window.removeEventListener('pointerup', onPalettePointerUp)
   window.removeEventListener('pointercancel', resetPaletteDrag)
+  window.removeEventListener('pointermove', onSymbolPointerMove)
+  window.removeEventListener('pointerup', onSymbolPointerUp)
+  window.removeEventListener('pointercancel', resetSymbolDrag)
   window.removeEventListener('keydown', onKeyDown)
   window.removeEventListener('keydown', handleKeydown)
   window.removeEventListener('click', closeAllContextMenus)

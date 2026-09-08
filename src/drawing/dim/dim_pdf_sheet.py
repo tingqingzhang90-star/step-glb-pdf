@@ -33,6 +33,10 @@ _TBL_FONT_PX = _CFG["table"]["text"]["font_px"]
 _TBL_TEXT_COLOR = _CFG["table"]["text"]["color"]
 _TBL_BORDER_W = _CFG["table"]["border"]["stroke_mm"]
 _TBL_BORDER_COLOR = _CFG["table"]["border"]["color"]
+# 自定义 SVG 符号库目录(与 web/common.SYMBOLS_DIR 同源,后端自行解析避免跨层耦合)
+_SYMBOLS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))), "data", "symbols")
 
 
 def _hex_rgb(color):
@@ -148,6 +152,11 @@ def _draw_table_placement(c, table, mapper):
         c.setLineWidth(bw)
         c.rect(rx, ry, rw, rh, stroke=1, fill=0)
 
+        # 单元格符号(SVG):居中适配于格内(优先于文字绘制,但都在网格上方)
+        sym = cell.get("symbol")
+        if sym:
+            _draw_cell_symbol(c, sym, rx, ry, rw, rh)
+
         text = cell.get("text") or ""
         if not text:
             continue
@@ -172,6 +181,45 @@ def _draw_table_placement(c, table, mapper):
         # 垂直:baseline 偏移近似(ascent≈0.8em,中心-0.35em)
         cy = (py_top + py_bot) / 2 - 0.35 * fs_mm
         draw(tx, cy, text)
+
+
+def _draw_cell_symbol(c, rel_file, rx, ry, rw, rh):
+    """在单元格矩形(rx,ry 为 PDF 左下角,宽 rw 高 rh)内居中适配绘制一个 SVG 符号。
+
+    rel_file 为相对 data/symbols 的文件名(前端只存这个)。任意异常静默跳过,
+    绝不阻塞整张工程图出图。
+    """
+    try:
+        from svglib.svglib import svg2rlg
+    except Exception:
+        return
+    path = os.path.join(_SYMBOLS_DIR, os.path.basename(rel_file))
+    if not os.path.isfile(path):
+        return
+    try:
+        drawing = svg2rlg(path)
+    except Exception:
+        return
+    if drawing is None:
+        return
+    sw = float(getattr(drawing, "width", 0) or 0)
+    sh = float(getattr(drawing, "height", 0) or 0)
+    if sw <= 0 or sh <= 0:
+        return
+    pad = 1.0  # mm 内边距
+    avail_w = max(rw - 2 * pad, 0.5)
+    avail_h = max(rh - 2 * pad, 0.5)
+    scale = min(avail_w / sw, avail_h / sh)
+    drawing.width = sw * scale
+    drawing.height = sh * scale
+    drawing.scale(scale, scale)
+    # PDF 坐标 y 向上:ry 是格下边界,符号整体居中
+    x = rx + (rw - drawing.width) / 2
+    y = ry + (rh - drawing.height) / 2
+    try:
+        drawing.drawOn(c, x, y)
+    except Exception:
+        return
 
 
 def _draw_primitives(c, prims, color, mapper):
