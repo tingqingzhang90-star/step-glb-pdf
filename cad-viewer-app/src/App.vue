@@ -399,6 +399,7 @@
                   <polygon v-if="dimPreview.arrow1" :points="dimPreview.arrow1" class="dim-arrow" />
                   <polygon v-if="dimPreview.arrow2" :points="dimPreview.arrow2" class="dim-arrow" />
                   <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" :transform="`rotate(${(dimPreview.textAngle || 0) * 180 / Math.PI}, ${dimPreview.textPos.x}, ${dimPreview.textPos.y})`" class="dim-text" text-anchor="middle" dominant-baseline="auto">{{ dimPreview.text }}</text>
+                  <text v-if="dimPreview.labelText" :x="dimPreview.labelPos.x" :y="dimPreview.labelPos.y" :transform="`rotate(${(dimPreview.labelAngle || 0) * 180 / Math.PI}, ${dimPreview.labelPos.x}, ${dimPreview.labelPos.y})`" class="dim-text dim-label-text" text-anchor="end" dominant-baseline="auto">{{ dimPreview.labelText }}</text>
                 </template>
               </template>
               <template v-if="dimPreview.type === 'diameter'">
@@ -434,6 +435,7 @@
                   <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
                   <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
                   <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${(dim.textAngle || 0) * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" style="cursor: move" text-anchor="middle" dominant-baseline="auto" @mousedown.stop="onDimTextMouseDown($event, dim)">{{ dim.text }}</text>
+                  <text v-if="dim.labelText" :x="dim.labelPos.x" :y="dim.labelPos.y" :transform="`rotate(${(dim.labelAngle || 0) * 180 / Math.PI}, ${dim.labelPos.x}, ${dim.labelPos.y})`" class="dim-text dim-label-text" text-anchor="end" dominant-baseline="auto">{{ dim.labelText }}</text>
                 </template>
                 <!-- 直径标注 -->
                 <template v-if="dim.type === 'diameter'">
@@ -574,6 +576,17 @@
               clearable
               @update:model-value="v => setDimField(selectedDim.id, 'customText', v || null)"
             />
+          </div>
+          <div class="prop-row stacked">
+            <span class="prop-label">伴随文字</span>
+            <el-input
+              :model-value="selectedDim.label ?? ''"
+              size="small"
+              placeholder='如"行程"、"总长"'
+              clearable
+              @update:model-value="v => setDimField(selectedDim.id, 'label', v || null)"
+            />
+            <span class="prop-hint">显示在数值左侧,前后端位置一致</span>
           </div>
           <div v-if="selectedDim.type === 'linear' && selectedDim.mode !== 'motor-envelope'" class="prop-row stacked">
             <span class="prop-label">绑定电机包络</span>
@@ -1473,6 +1486,11 @@ function onModelChange() {
   font-family: 'Microsoft YaHei', sans-serif;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* 伴随文字标签：与数值同字号,右对齐(末端紧贴间距) */
+.dim-label-text {
+  text-anchor: end;
 }
 
 .dimension-group {

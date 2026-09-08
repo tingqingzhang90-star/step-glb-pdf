@@ -7,7 +7,7 @@
   "dim": {
     "line":  { "stroke_px": 1.0, "color": "#303133" },
     "ext":   { "stroke_px": 0.8, "color": "#606266", "overshoot_mm": 2.5 },
-    "text":  { "font_px": 18, "color": "#303133", "gap_mm": 1 },
+    "text":  { "font_px": 18, "color": "#303133", "gap_mm": 1, "label_gap_factor": 0.82 },
     "arrow": {
       "len_px": 8,
       "half_px": 1.1,

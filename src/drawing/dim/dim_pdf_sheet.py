@@ -223,17 +223,22 @@ def _draw_primitives(c, prims, color, mapper):
     for t in prims.get("texts", []):
         x, y = mapper.pt(*t["pos"])
         angle_deg = math.degrees(t.get("angle") or 0.0)
+        anchor = t.get("anchor", "middle")
         if abs(angle_deg) < 0.5:
-            if t.get("anchor") == "start":
+            if anchor == "start":
                 c.drawString(x, y, t["text"])
+            elif anchor == "end":
+                c.drawRightString(x, y, t["text"])
             else:
                 c.drawCentredString(x, y, t["text"])
         else:
             c.saveState()
             c.translate(x, y)
             c.rotate(angle_deg)
-            if t.get("anchor") == "start":
+            if anchor == "start":
                 c.drawString(0, 0, t["text"])
+            elif anchor == "end":
+                c.drawRightString(0, 0, t["text"])
             else:
                 c.drawCentredString(0, 0, t["text"])
             c.restoreState()

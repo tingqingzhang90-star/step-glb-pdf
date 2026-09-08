@@ -35,6 +35,7 @@ import {
   buildMotorEnvelopeGeometry,
   getMotorEnvelopeOffsetFromMouse
 } from './motorEnvelope.js'
+import config from '../../../cad_viewer_style.json'
 
 export function createDimensionCore(deps, ctx) {
   const {
@@ -738,9 +739,11 @@ export function createDimensionCore(deps, ctx) {
       geometry.text = dim.customText
     }
     // 拖动过的文字按 textSlide 沿尺寸线滑动(存于标注数据,随模板持久化)
+    // 注意:与 updateDimTextDrag 共用同一基准(dimLineStart/dimLineEnd,含延长线),
+    // 否则延长线拉伸后两处中点错开,文字不跟鼠标
     if (geometry && dim.type === 'linear' && dim.textSlide) {
-      const a = geometry.dimStart
-      const b = geometry.dimEnd
+      const a = geometry.dimLineStart ?? geometry.dimStart
+      const b = geometry.dimLineEnd ?? geometry.dimEnd
       const dx = b.x - a.x
       const dy = b.y - a.y
       const len = Math.hypot(dx, dy)
@@ -751,6 +754,23 @@ export function createDimensionCore(deps, ctx) {
         geometry.textAngle = linearTextAngle(unit)
       }
     }
+    // 伴随文字标签(label):位置相对数值文字固定偏移(沿尺寸线反方向),
+    // 保证前后端渲染时 label 与 value 的相对位置一致。
+    if (geometry && geometry.textPos && dim.label) {
+      const tp = geometry.textPos
+      const ta = geometry.textAngle || 0
+      // 沿文字基线反方向偏移:水平尺寸线label在左,竖直在上方
+      const ux = Math.cos(ta), uy = Math.sin(ta)
+      // 间距随字号成比例(= font_px * PX2MM * label_gap_factor,单位mm),
+      // 与后端 dim_label_gap_mm() 公式完全一致
+      const labelGapFactor = config.dim.text.label_gap_factor ?? 0.55
+      const LABEL_GAP = config.dim.text.font_px * config._px_to_mm_at_96dpi * labelGapFactor
+      geometry.labelText = dim.label
+      // 标签与数值共用同一基线 y(保证等高);仅 x 沿反方向偏移间距
+      geometry.labelPos = { x: tp.x - ux * LABEL_GAP, y: tp.y }
+      geometry.labelAngle = ta
+    }
+
     return geometry ? { ...geometry, id: dim.id, color: dim.color || '#303133', arrowMode: dim.arrowMode || 'auto', offset: dim.offset } : null
   }
 
@@ -802,13 +822,16 @@ export function createDimensionCore(deps, ctx) {
     }
   }
 
-  /** 拖动文字标签:鼠标位置投影到尺寸线方向,更新 textSlide(相对中点,允许稍出界) */
+  /** 拖动文字标签:鼠标位置投影到尺寸线方向,更新 textSlide(相对中点,允许稍出界)
+   *  使用 dimLineStart/dimLineEnd(含延长线的全长)而非 dimStart/dimEnd(仅箭头间),
+   *  确保文字可沿整个尺寸线(含延长线)拖动。*/
   function updateDimTextDrag(dim, mousePos) {
     if (!dim || dim.type !== 'linear' || !mousePos) return
     const geometry = renderDimension({ ...dim, textSlide: 0 })
     if (!geometry) return
-    const a = geometry.dimStart
-    const b = geometry.dimEnd
+    // 优先使用含延长线的全长端点,确保拖动范围覆盖整条尺寸线
+    const a = geometry.dimLineStart ?? geometry.dimStart
+    const b = geometry.dimLineEnd ?? geometry.dimEnd
     const dx = b.x - a.x
     const dy = b.y - a.y
     const len = Math.hypot(dx, dy)

@@ -41,6 +41,20 @@ def dim_text_gap_mm():
     return _dim("text", "gap_mm", "text_gap_mm")
 
 
+def dim_label_gap_mm():
+    """伴随文字标签与数值的间距(mm,图纸坐标)= 字号 * 系数(默认 0.55em),
+    视觉等同字间距,与前端 core.js 共用同一份 json"""
+    try:
+        factor = float(CFG["dim"]["text"]["label_gap_factor"])
+    except (KeyError, TypeError, ValueError):
+        factor = 0.55
+    try:
+        font_px = float(CFG["dim"]["text"]["font_px"])
+    except (KeyError, TypeError, ValueError):
+        font_px = 18
+    return font_px * PX2MM * factor
+
+
 def dim_arrow_len_px():
     """箭头长度(图纸单位,与前端 arrow.js 共用同一份 json)"""
     return _dim("arrow", "len_px", "arrow_len_px")

@@ -19,7 +19,7 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           build_linear_arrows, build_arrow_points,
                           extend_linear_line,
                           format_mm, format_deg)
-from drawing.dim.dim_style import dim_ext_overshoot_mm, dim_text_gap_mm
+from drawing.dim.dim_style import dim_ext_overshoot_mm, dim_text_gap_mm, dim_label_gap_mm
 
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
@@ -99,11 +99,24 @@ def _mark_half_px(seg, placement):
     return circ["r"] * placement["scale"] + 0.2 / (placement["k"] or 1.0)
 
 
-def _texts_and_final(prims, text, custom_text):
+def _texts_and_final(prims, text, custom_text, label=None):
     if custom_text:
         prims["text"] = custom_text
         for t in prims.get("texts", []):
             t["text"] = custom_text
+    # 伴随文字标签(label):在每个数值文字左侧沿基线反方向固定偏移,
+    # 与前端 core.js renderDimension 中 labelPos 计算保持一致。
+    if label:
+        texts = prims.setdefault("texts", [])
+        # 注意:遍历快照,不能边遍历边向 texts.append,否则无限循环
+        for vt in list(texts):
+            vp = vt["pos"]
+            va = vt["angle"]
+            # 标签与数值共用同一基线 y(保证等高);仅 x 沿反方向偏移间距
+            lx = vp[0] - math.cos(va) * LABEL_GAP
+            ly = vp[1]
+            texts.append({"pos": (lx, ly), "text": label,
+                          "angle": va, "anchor": "end"})
     return prims
 
 
@@ -126,6 +139,7 @@ def _line_extension(ann):
 # 标注外观几何量取自前后端共用样式配置(cad_viewer_style.json)
 EXT_OVERSHOOT = dim_ext_overshoot_mm()   # 尺寸界线越过尺寸线的长度(mm)
 TEXT_GAP = dim_text_gap_mm()             # 文字与尺寸线的间距(mm)
+LABEL_GAP = dim_label_gap_mm()           # 伴随文字与数值的间距(mm),=字号*label_gap_factor(配置)
 
 
 def _ext_line(p, e):
@@ -178,6 +192,7 @@ def build_dim_primitives(ann, segs, views):
     """
     dtype = ann.get("type")
     custom = ann.get("customText") or None
+    label = ann.get("label") or None
 
     if dtype == "linear":
         mode = ann.get("mode") or "single"
@@ -199,7 +214,7 @@ def build_dim_primitives(ann, segs, views):
         return None
     if prims is None:
         return None
-    return _texts_and_final(prims, prims.get("text"), custom)
+    return _texts_and_final(prims, prims.get("text"), custom, label)
 
 
 def _linear_single(ann, segs, views):
