@@ -94,6 +94,69 @@ function compensateStrokeWidths(svgEl, clone, lineWeight) {
   })
 }
 
+/** 把单元格里的 <image href="/api/symbols/xxx.svg">(或 data: SVG)内联成真实 <svg> 节点。
+ *  原因:导出时外层 SVG 以 <img> 方式加载,浏览器安全静态模式不会去抓取内部
+ *  <image> 引用的外部资源;即便能抓,img.onload 也只等外层 SVG、不等子图加载完,
+ *  drawImage 时符号还是空白(这正是"导入源文件后导出符号消失"的根因——导入场景的
+ *  符号本会话未缓存,竞态必现;非导入场景碰巧缓存命中才画出来)。
+ *  直接把符号 SVG 内容嵌进克隆图,导出结果自包含、必然可见,且不再依赖服务器在线。 */
+async function inlineSymbolImages(clone) {
+  const imgs = Array.from(clone.querySelectorAll('image'))
+  if (!imgs.length) return
+  const cache = new Map()
+  const NS = 'http://www.w3.org/2000/svg'
+  for (const img of imgs) {
+    const href = img.getAttribute('href') || img.getAttribute('xlink:href')
+    if (!href) continue
+    const isSymbol = href.includes('/api/symbols/') || href.startsWith('data:image/svg')
+    if (!isSymbol) continue
+    let svgText = null
+    try {
+      if (href.startsWith('data:')) {
+        const comma = href.indexOf(',')
+        const meta = href.slice(5, comma)
+        const data = href.slice(comma + 1)
+        svgText = meta.includes('base64') ? atob(data) : decodeURIComponent(data)
+      } else {
+        if (cache.has(href)) svgText = cache.get(href)
+        else {
+          const res = await fetch(href)
+          if (!res.ok) continue
+          svgText = await res.text()
+          cache.set(href, svgText)
+        }
+      }
+      const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml')
+      const srcSvg = doc.querySelector('svg')
+      if (!srcSvg) continue
+      const x = img.getAttribute('x') || '0'
+      const y = img.getAttribute('y') || '0'
+      const w = img.getAttribute('width') || '0'
+      const h = img.getAttribute('height') || '0'
+      const par = img.getAttribute('preserveAspectRatio') || 'xMidYMid meet'
+      let vb = srcSvg.getAttribute('viewBox')
+      if (!vb) {
+        const sw = parseFloat(srcSvg.getAttribute('width'))
+        const sh = parseFloat(srcSvg.getAttribute('height'))
+        vb = (sw && sh) ? `0 0 ${sw} ${sh}` : '0 0 100 100'
+      }
+      const wrapper = document.createElementNS(NS, 'svg')
+      wrapper.setAttribute('class', 'inlined-symbol')
+      wrapper.setAttribute('x', x)
+      wrapper.setAttribute('y', y)
+      wrapper.setAttribute('width', w)
+      wrapper.setAttribute('height', h)
+      wrapper.setAttribute('viewBox', vb)
+      wrapper.setAttribute('preserveAspectRatio', par)
+      // 把源 SVG 内部所有节点(含其 <style>)搬进 wrapper,保持样式自包含
+      while (srcSvg.firstChild) wrapper.appendChild(srcSvg.firstChild)
+      img.replaceWith(wrapper)
+    } catch (e) {
+      // 内联失败(如符号文件缺失)则保留原 <image>,不阻断整体导出
+    }
+  }
+}
+
 /**
  * 所见即所得导出 PDF。
  * @param {SVGElement} svgEl        画布 SVG 元素(模板 ref svgRef)
@@ -118,6 +181,8 @@ export async function exportSheetScreenshotPdf({
   // 1) 克隆并清理
   const clone = svgEl.cloneNode(true)
   clone.querySelectorAll(UI_LAYER_SELECTOR).forEach(el => el.remove())
+  // 先把单元格符号 <image>(外部 URL)内联成真实 <svg>,避免导出图里符号丢失
+  await inlineSymbolImages(clone)
   // 卡片阴影等展示样式不要;换成导出用的 root CSS 变量(线宽已放大)
   clone.removeAttribute('style')
   const rootVars = collectRootCssVars(lineWeight)
@@ -128,14 +193,7 @@ export async function exportSheetScreenshotPdf({
   // 300dpi 大图下 1px 发丝线不可见,移除后线宽按 mm 真实缩放
   clone.querySelectorAll('[vector-effect]').forEach(el => el.removeAttribute('vector-effect'))
 
-  // 3) 图框/标题栏等模板里写死的 stroke-width="1" 也按 lineWeight 放大
-  if (lineWeight !== 1) {
-    clone.querySelectorAll('[stroke-width="1"]').forEach(el => {
-      el.setAttribute('stroke-width', String(lineWeight))
-    })
-  }
-
-  // 4) 导出尺寸 + 内联 CSS
+  // 3) 导出尺寸 + 内联 CSS
   clone.setAttribute('width', pxW)
   clone.setAttribute('height', pxH)
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
@@ -146,7 +204,7 @@ export async function exportSheetScreenshotPdf({
     clone.insertBefore(styleEl, clone.firstChild)
   }
 
-  // 5) SVG → Image → Canvas(300dpi)
+  // 4) SVG → Image → Canvas(300dpi)
   const svgText = new XMLSerializer().serializeToString(clone)
   const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -170,7 +228,7 @@ export async function exportSheetScreenshotPdf({
     URL.revokeObjectURL(url)
   }
 
-  // 6) 贴进与图纸同尺寸的 PDF 页
+  // 5) 贴进与图纸同尺寸的 PDF 页
   const doc = new jsPDF({
     orientation: sheetWidthMm >= sheetHeightMm ? 'landscape' : 'portrait',
     unit: 'mm',
