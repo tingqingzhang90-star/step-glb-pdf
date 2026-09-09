@@ -1,6 +1,6 @@
 // 表格编辑交互:inline 编辑 / 右键行列菜单 / 样式 / 键盘 / 插入
 // 依赖 usePlacedTables 的能力,由外部注入
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { TABLE_STYLE } from '@/composables/useStyleConfig'
 
 const DEFAULT_COL_W = TABLE_STYLE.colWidth
@@ -13,6 +13,9 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     insertRow, deleteRow, insertCol, deleteCol,
     setCellFontSize, setTableBorder, placeTable
   } = tables
+
+  // 当前字号“画笔”:用户设置一次后保持,切换到其他单元格时不再被该单元格原字号覆盖
+  const activeFontSize = ref(TABLE_STYLE.fontPx)
 
   // ---- inline 编辑 ----
   // editingCell 只标记"哪个格在编辑",input 的聚焦由渲染层(TableLayer)
@@ -126,11 +129,23 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
 
   // ---- 样式(作用于选中格 / 选中表) ----
   function setFontOfSelected(v) {
+    activeFontSize.value = Number(v) || TABLE_STYLE.fontPx
     const t = selectedTable.value
     const cells = selectedCells.value
-    if (!t || cells.length !== 1) return
-    setCellFontSize(t.id, cells[0].r, cells[0].c, Number(v) || TABLE_STYLE.fontPx)
+    if (!t || !cells.length) return
+    for (const { r, c } of cells) {
+      setCellFontSize(t.id, r, c, activeFontSize.value)
+    }
   }
+
+  // 切换单元格时把当前字号刷过去,避免到下一格就“变回”原字号
+  watch(selectedCells, (cells) => {
+    const t = selectedTable.value
+    if (!t || !cells.length) return
+    for (const { r, c } of cells) {
+      setCellFontSize(t.id, r, c, activeFontSize.value)
+    }
+  }, { deep: true })
   function setBorderWidth(v) {
     const t = selectedTable.value
     if (!t) return
@@ -180,7 +195,7 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
   }
 
   return {
-    editingCell, hoverCell, contextMenu,
+    editingCell, hoverCell, contextMenu, activeFontSize,
     startEdit, editCell, commitEdit, onCellClick,
     startCellSelect, extendCellSelect, endCellSelect,
     onCellHover, clearHover,

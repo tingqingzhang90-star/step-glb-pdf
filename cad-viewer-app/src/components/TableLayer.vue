@@ -66,14 +66,17 @@
       />
 
       <template v-if="selectedId === t.id">
-        <!-- 四角缩放手柄 -->
-        <rect v-for="cr in cornerHandles(t)" :key="`ch-${t.id}-${cr.corner}`"
-          :x="cr.x - 3" :y="cr.y - 3" width="6" height="6"
-          fill="#409eff" stroke="#fff" stroke-width="0.5"
-          vector-effect="non-scaling-stroke"
-          @mousedown.stop.prevent="emit('corner-mousedown', $event, t, cr.corner)"
-          @click.stop
-        />
+        <!-- 四角 L 形缩放手柄:视觉路径 + 透明大命中区 -->
+        <g v-for="cr in cornerHandles(t)" :key="`ch-${t.id}-${cr.corner}`">
+          <circle :cx="cr.x" :cy="cr.y" r="5" fill="transparent"
+            @mousedown.stop.prevent="emit('corner-mousedown', $event, t, cr.corner)"
+            @click.stop
+          />
+          <path :d="cornerHandlePath(t, cr.corner)" fill="none" stroke="#409eff"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            vector-effect="non-scaling-stroke" pointer-events="none"
+          />
+        </g>
         <!-- 列宽手柄(竖网格线顶端) / 行高手柄(水平网格线左端) -->
         <circle v-for="c in colResizeHandles(t)" :key="`cr-${t.id}-${c}`"
           :cx="tableColLefts(t)[c]" :cy="t.y" r="2.5"
@@ -119,7 +122,7 @@ import { TABLE_STYLE } from '@/composables/useStyleConfig'
 import { symbolUrl } from '@/api/symbols'
 import {
   tableColLefts, tableRowTops, tableW, tableH, tableLogicalCells,
-  cornerHandles, colResizeHandles, rowResizeHandles,
+  cornerHandles, cornerHandlePath, colResizeHandles, rowResizeHandles,
   cellRect, cellRectAt, cellTextX, cellTextY, cellTextAnchor, cellFontSize,
   findCellAt
 } from '@/tables/tableGeometry'

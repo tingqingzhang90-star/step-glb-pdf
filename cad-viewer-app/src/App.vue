@@ -813,7 +813,7 @@ const {
 
 // 编辑交互:inline 编辑 / 右键菜单 / 样式 / 键盘 / 插入
 const {
-  editingCell, hoverCell, contextMenu,
+  editingCell, hoverCell, contextMenu, activeFontSize,
   startEdit, editCell, commitEdit, onCellClick,
   startCellSelect, extendCellSelect, endCellSelect,
   onCellHover, clearHover,
@@ -856,12 +856,8 @@ function onCellDblClick(event, table, r, c) {
   startEdit(event, table, r, c)
 }
 
-const selectedCellFontSize = computed(() => {
-  const t = selectedTable.value
-  const cells = selectedCells.value
-  if (!t || cells.length !== 1) return TABLE_STYLE.fontPx
-  return findCellAt(t, cells[0].r, cells[0].c)?.font_size || TABLE_STYLE.fontPx
-})
+// 字号控件显示用户最后设置的字号,切到别的单元格不再变回该单元格原字号
+const selectedCellFontSize = computed(() => activeFontSize.value)
 
 // 插入表格:尺寸选择器 → 空表格(Office 风格,无占位文字)
 const showTablePicker = ref(false)
@@ -1224,7 +1220,10 @@ function onModelChange() {
 .top-toolbar {
   display: flex;
   align-items: center;
+  align-content: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  row-gap: 6px;
   min-height: 48px;
   padding: 8px 14px;
   background: #fff;
@@ -1238,6 +1237,7 @@ function onModelChange() {
 .toolbar-right {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
 }

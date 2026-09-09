@@ -64,14 +64,33 @@ export function cornerHandles(t) {
   ]
 }
 
-/** 列宽手柄所在的列索引(内部竖网格线,1..cols-1) */
-export function colResizeHandles(t) {
-  return Array.from({ length: t.col_widths.length - 1 }, (_, i) => i + 1)
+/** 四角 L 形缩放手柄路径(顶点在表格角,臂长 size 向内) */
+export function cornerHandlePath(t, corner, size = 5) {
+  const pts = {
+    nw: { x: t.x, y: t.y },
+    ne: { x: t.x + tableW(t), y: t.y },
+    sw: { x: t.x, y: t.y + tableH(t) },
+    se: { x: t.x + tableW(t), y: t.y + tableH(t) }
+  }
+  const { x, y } = pts[corner]
+  const s = size
+  switch (corner) {
+    case 'nw': return `M ${x} ${y + s} L ${x} ${y} L ${x + s} ${y}`
+    case 'ne': return `M ${x - s} ${y} L ${x} ${y} L ${x} ${y + s}`
+    case 'sw': return `M ${x} ${y - s} L ${x} ${y} L ${x + s} ${y}`
+    case 'se': return `M ${x - s} ${y} L ${x} ${y} L ${x} ${y - s}`
+    default: return ''
+  }
 }
 
-/** 行高手柄所在的行索引(内部水平网格线,1..rows-1) */
+/** 列宽手柄所在的列索引(竖网格线,1..cols,包含表格右边界) */
+export function colResizeHandles(t) {
+  return Array.from({ length: t.col_widths.length }, (_, i) => i + 1)
+}
+
+/** 行高手柄所在的行索引(水平网格线,1..rows,包含表格下边界) */
 export function rowResizeHandles(t) {
-  return Array.from({ length: t.row_heights.length - 1 }, (_, i) => i + 1)
+  return Array.from({ length: t.row_heights.length }, (_, i) => i + 1)
 }
 
 /** 合并格的实际矩形(按 colspan/rowspan 累加) */
