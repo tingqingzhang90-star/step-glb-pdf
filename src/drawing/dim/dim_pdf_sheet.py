@@ -57,6 +57,7 @@ class SheetMapper:
 
     def __init__(self, sheet_w, sheet_h):
         self.k = 1.0
+        self.sheet_w = sheet_w
         self.sheet_h = sheet_h
 
     def pt(self, x, y):
@@ -118,6 +119,16 @@ def _draw_table_placement(c, table, mapper):
     ox, oy = table["x"], table["y"]
     col_w = table["col_widths"]
     row_h = table["row_heights"]
+
+    # 保证表格整体不超出右内框线(margin=20);超限时整体左移
+    total_w = sum(col_w)
+    margin = 20
+    right_limit = getattr(mapper, "sheet_w", 420) - margin
+    if ox + total_w > right_limit:
+        ox = max(margin, right_limit - total_w)
+        table = dict(table)
+        table["x"] = ox
+
     # 列左边 x / 行顶部 y:前缀和
     col_left = [ox]
     for w in col_w:
@@ -344,9 +355,14 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
         tb_params = model_params(model_code)
     except (OSError, ValueError, KeyError):
         tb_params = {"model_code": model_code}
-    draw_title_block(c, template_doc.get("title_block"), tb_params, mapper,
-                     _CN_FONT, _FS_TEXT_MM)
-    draw_bom_table(c, template_doc.get("bom_table"), mapper, _CN_FONT, _FS_TEXT_MM)
+    # 标题栏在 BOM 上方,两者都贴在右下角内框线内
+    margin = 20
+    frame_bottom = getattr(mapper, "sheet_h", 297) - margin - 1
+    bom_top = draw_bom_table(c, template_doc.get("bom_table"), mapper,
+                             _CN_FONT, _FS_TEXT_MM, bottom_y=frame_bottom)
+    tb_bottom = (bom_top - 2) if bom_top is not None else frame_bottom
+    draw_title_block(c, template_doc.get("title_block"), tb_params,
+                     mapper, _CN_FONT, _FS_TEXT_MM, bottom_y=tb_bottom)
 
     unmatched = 0
     for item in rebound:

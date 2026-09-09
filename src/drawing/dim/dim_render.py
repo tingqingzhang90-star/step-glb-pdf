@@ -273,41 +273,37 @@ def _linear_motor_envelope(ann, segs, views):
 
     offset = ann.get("offset") or 50
     slide = ann.get("textSlide") or 0.0
-    # 与前端一致:offset 正 → 尺寸线画在包络下方/右方,延伸线向上/左;
-    # offset 负 → 尺寸线在上方/左方,延伸线向下/右。
+    # 与前端 buildMotorEnvelopeGeometry 严格对齐:
+    # - 取每条端面线"朝向尺寸线"的端点(同 pickEnvelopeEndpoint);
+    # - 统一取 max y / max x(最下/最右端点),让尺寸线基线依附在包络下方/右方;
+    # - normal 固定 (0,1)/(1,0),offset 带符号直接乘,正负自然决定上/下、左/右。
+    # 之前按 offset 符号分别取 min/max y 会导致负 offset(尺寸线在上方)时
+    # 基线被抬到最高端点,尺寸线紧贴图框甚至超出。
     if o1 == "vertical":  # 包络水平(端面线竖直)
         # 尺寸线水平,延伸线竖直
         unit = (1.0, 0.0)
-        normal = (0.0, 1.0) if offset >= 0 else (0.0, -1.0)
-        # 取每条端面线向上/向下的端点作延伸线起点
+        normal = (0.0, 1.0)
         if offset >= 0:
             ext1 = p1a if p1a[1] > p1b[1] else p1b  # 下端点
             ext2 = p2a if p2a[1] > p2b[1] else p2b
         else:
             ext1 = p1a if p1a[1] < p1b[1] else p1b  # 上端点
             ext2 = p2a if p2a[1] < p2b[1] else p2b
-        # 两条端面线可能吸附到不同边线,其端点 y 会不同,必须统一为更下/更上,
-        # 否则尺寸线会倾斜(与前端 motorEnvelope.js 保持一致)。
-        if offset >= 0:
-            y = max(ext1[1], ext2[1])
-        else:
-            y = min(ext1[1], ext2[1])
+        # 统一为最下端点(max y),offset 为负时加上负值自然向上
+        y = max(ext1[1], ext2[1])
         ext1 = (ext1[0], y)
         ext2 = (ext2[0], y)
     else:  # 包络竖直(端面线水平)
         unit = (0.0, 1.0)
-        normal = (1.0, 0.0) if offset >= 0 else (-1.0, 0.0)
+        normal = (1.0, 0.0)
         if offset >= 0:
             ext1 = p1a if p1a[0] > p1b[0] else p1b  # 右端点
             ext2 = p2a if p2a[0] > p2b[0] else p2b
         else:
             ext1 = p1a if p1a[0] < p1b[0] else p1b  # 左端点
             ext2 = p2a if p2a[0] < p2b[0] else p2b
-        # 统一 x
-        if offset >= 0:
-            x = max(ext1[0], ext2[0])
-        else:
-            x = min(ext1[0], ext2[0])
+        # 统一为最右端点(max x),offset 为负时加上负值自然向左
+        x = max(ext1[0], ext2[0])
         ext1 = (x, ext1[1])
         ext2 = (x, ext2[1])
 
@@ -322,8 +318,8 @@ def _linear_motor_envelope(ann, segs, views):
             return None
     text = format_mm(mm_val)
 
-    dim_base = offset_point(ext1, normal, abs(offset))
-    dim_end = offset_point(ext2, normal, abs(offset))
+    dim_base = offset_point(ext1, normal, offset)
+    dim_end = offset_point(ext2, normal, offset)
 
     arrows = build_linear_arrows(dim_base, dim_end, unit, text, _arrow_mode(ann))
     dim_start, dim_end = extend_linear_line(dim_base, dim_end, arrows["outward"], unit, *_line_extension(ann))

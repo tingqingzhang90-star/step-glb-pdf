@@ -77,6 +77,8 @@ def _selection_info(model_code):
         "mount": parsed.get("mount"),
         "load": parsed.get("load"),
         "date": datetime.now().strftime("%Y-%m-%d"),
+        # 与 dim_titleblock.model_params 保持一致,供前端标题栏 {{scale}} 预览
+        "scale": "2",
     }
 
 
