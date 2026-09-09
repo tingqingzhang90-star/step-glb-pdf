@@ -336,6 +336,18 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
     for table in template_doc.get("tables", []):
         _draw_table_placement(c, table, mapper)
 
+    # 标题栏 / BOM:变量按型号实时解析,选型配置变化后出图自动跟随
+    from drawing.dim.dim_render import _CN_FONT
+    from drawing.dim.dim_titleblock import (
+        model_params, draw_title_block, draw_bom_table)
+    try:
+        tb_params = model_params(model_code)
+    except (OSError, ValueError, KeyError):
+        tb_params = {"model_code": model_code}
+    draw_title_block(c, template_doc.get("title_block"), tb_params, mapper,
+                     _CN_FONT, _FS_TEXT_MM)
+    draw_bom_table(c, template_doc.get("bom_table"), mapper, _CN_FONT, _FS_TEXT_MM)
+
     unmatched = 0
     for item in rebound:
         if item.get("status") == "unmatched":

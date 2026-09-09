@@ -5,6 +5,7 @@
 OCC 投影走 web.task_pool 子进程。
 """
 import os
+from datetime import datetime
 
 from flask import Blueprint, jsonify
 
@@ -25,6 +26,58 @@ def _find_model_shape_path(model_code):
     if os.path.isfile(brep_path):
         return brep_path
     return None
+
+
+def _load_series_config(series):
+    """按系列找配置:优先 <系列>直连,回退目录下首个 <系列>*.json"""
+    from core import paths
+    from core.rebuild_assembly import load_config
+
+    primary = f"{series}直连"
+    if os.path.isfile(os.path.join(paths.CONFIG_DIR, f"{primary}.json")):
+        return load_config(primary)
+    if not os.path.isdir(paths.CONFIG_DIR):
+        return None
+    for name in sorted(os.listdir(paths.CONFIG_DIR)):
+        if name.endswith(".json") and name.startswith(series):
+            return load_config(name[:-5])
+    return None
+
+
+def _slim_config(config):
+    """剔除 cylinder.table(上千项行程映射):前端只用后端算好的 d1,不必下发整表
+
+    整表下发会让前端对上千个键做响应式代理,明显拖慢编辑器。
+    """
+    slim = dict(config)
+    cyl = dict(config.get("cylinder") or {})
+    cyl.pop("table", None)
+    slim["cylinder"] = cyl
+    return slim
+
+
+def _selection_info(model_code):
+    """型号 → 系列配置 + 标题栏/BOM 可用参数(供前端绑定配置自动联动)"""
+    from core.rebuild_assembly import parse_model_code, compute_cylinder_scale
+
+    parsed = parse_model_code(model_code)
+    config = _load_series_config(parsed["series"])
+    if not config:
+        return None, {}
+    d1 = None
+    cyl = compute_cylinder_scale(config, parsed["stroke"])
+    if cyl:
+        d1 = cyl[1]
+    return _slim_config(config), {
+        "series": config.get("series") or f"{parsed['series']}直连",
+        "model_code": model_code,
+        "stroke": parsed["stroke"].lstrip("L"),
+        "d1": d1,
+        "motor": parsed.get("motor"),
+        "mount": parsed.get("mount"),
+        "load": parsed.get("load"),
+        "date": datetime.now().strftime("%Y-%m-%d"),
+    }
 
 
 @bp.route("/api/drawing-view-palette/<model_code>")
@@ -66,6 +119,13 @@ def api_drawing_view_palette(model_code):
         except Exception:
             result["motor_envelope"] = {}
             result["gearbox_envelope"] = {}
+        # 选型配置缺失只影响标题栏/BOM 联动,不阻断视图返回
+        try:
+            config, model_params = _selection_info(model_code)
+        except (OSError, ValueError, KeyError):
+            config, model_params = None, {}
+        result["config"] = config
+        result["model_params"] = model_params
         return jsonify({"ok": True, **result})
     except Exception as e:
         import traceback

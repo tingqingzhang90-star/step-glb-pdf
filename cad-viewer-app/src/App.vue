@@ -11,6 +11,11 @@
           <el-icon><Upload /></el-icon>
           导入模型
         </el-button>
+        <el-divider direction="vertical" />
+        <el-button size="small" :disabled="!placedViews.length" @click="exportDrawingDocument">导出源文件</el-button>
+        <el-button size="small" type="primary" :loading="exportingPdf" :disabled="!placedViews.length" @click="exportPdf">导出 PDF</el-button>
+        <el-button size="small" @click="triggerImportDoc">导入源文件</el-button>
+        <input ref="fileInputRef" type="file" accept=".json,application/json" style="display:none" @change="onFilePicked" />
       </div>
 
       <div class="toolbar-center">
@@ -566,6 +571,15 @@
           <div class="stat-row"><span>模型尺寸</span><span class="num">{{ modelBbox.width }}×{{ modelBbox.height }}×{{ modelBbox.depth }}mm</span></div>
         </section>
 
+        <section class="property-section">
+          <div class="section-title">标题栏 / BOM</div>
+          <TitleBlockBomPanel
+            :title-block-bom="titleBlockBom"
+            :config="config"
+            :model-params="modelParams"
+          />
+        </section>
+
         <section v-if="selectedDim" class="property-section">
           <div class="section-title">标注属性</div>
           <div class="prop-row">
@@ -655,7 +669,7 @@
 <script setup>
 // 组合根:只做各功能域的组合装配、事件总控与跨域编排。
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
@@ -672,7 +686,9 @@ import { useSymbolDrag } from '@/composables/useSymbolDrag'
 import { usePlacedTables } from '@/composables/usePlacedTables'
 import { useTableDrag } from '@/composables/useTableDrag'
 import { useTableEdit } from '@/composables/useTableEdit'
-import { buildDrawingDocument } from '@/utils/drawingDocument'
+import { buildDrawingDocument, previewDocument } from '@/utils/drawingDocument'
+import { exportSheetScreenshotPdf } from '@/utils/drawingPdf'
+import { parseDrawingDocument, applyDrawingDocument } from '@/utils/loadDrawingDocument'
 import { saveDrawingTemplate } from '@/api/drawingApi'
 import TemplateDrawingPanel from '@/components/TemplateDrawingPanel.vue'
 import TableLayer from '@/components/TableLayer.vue'
@@ -682,6 +698,8 @@ import DimContextMenu from '@/components/DimContextMenu.vue'
 import TableSizePicker from '@/components/TableSizePicker.vue'
 import TableStyleBar from '@/components/TableStyleBar.vue'
 import SymbolPalette from '@/components/SymbolPalette.vue'
+import TitleBlockBomPanel from '@/components/TitleBlockBomPanel.vue'
+import { useTitleBlockBom } from '@/composables/useTitleBlockBom'
 
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
@@ -705,6 +723,7 @@ function onSheetSizeChange(name) {
 const {
   placedViews, selectedViewId, globalScale, selectedView, placedViewNames,
   placeView, selectView, deleteSelectedView: removeSelectedView, clearViews, resetScale,
+  setViews,
   onViewScaleChange, zoomCanvas, resetCanvas
 } = usePlacedViews({ sheetWidth, sheetHeight })
 
@@ -721,8 +740,19 @@ const { alignmentGuides, startMoveView, moveViewTo, endMoveView, clearGuides } =
 const {
   models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
   lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope, standardViews, isometricViews,
+  config, modelParams,
   loadModelList, resetPalette, loadViewPalette
 } = useModelPalette()
+
+// ===== 标题栏 / BOM:绑定选型配置,支持手动覆盖 =====
+const titleBlockBom = useTitleBlockBom()
+
+// 配置就绪后为空白 BOM 自动建行;已有手工行则不动,避免覆盖用户编辑
+watch([config, modelParams], ([cfg, mp]) => {
+  if (cfg && titleBlockBom.bomTable.value.rows.length === 0) {
+    titleBlockBom.rebuildBomFromConfig(cfg, mp)
+  }
+})
 
 // ===== 标注:工具状态机与引擎装配 =====
 const getMotorEnvelope = (view) => motorEnvelope.value[view.name]
@@ -734,7 +764,7 @@ const {
   dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
   toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove, onGlobalDimMouseUp,
   onKeyDown, selectDim, onDimClick, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
-  onSvgMouseLeave, clearTransientSelection, removeByView, resetAll
+  onSvgMouseLeave, clearTransientSelection, removeByView, resetAll, setDimensions
 } = useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope })
 
 function closeAllContextMenus() {
@@ -757,6 +787,7 @@ const tables = usePlacedTables()
 const {
   placedTables, selectedTableId, selectedTable, selectedCells,
   placeTable, selectTable, deleteSelectedTable: removeSelectedTable, clearTables,
+  setTables,
   updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected, findCellAt,
   insertRow, deleteRow, insertCol, deleteCol,
   resizeCol, resizeRow, resizeTable,
@@ -873,18 +904,9 @@ function onRemoveTablePreset(id) {
   ElMessage.success('已删除模板')
 }
 
-const drawingDocumentPreview = computed(() => JSON.stringify(
-  buildDrawingDocument({
-    sheetSize: sheetSize.value,
-    sheetWidth: sheetWidth.value,
-    sheetHeight: sheetHeight.value,
-    modelId: selectedModel.value,
-    placedViews: placedViews.value,
-    dimensions: dimensions.value,
-    placedTables: placedTables.value
-  }),
-  null, 2
-))
+// 预览只给结构摘要:edges 全文可达几十万字符,直接塞进 <pre> 会拖垮编辑器
+const drawingDocumentPreview = computed(
+  () => JSON.stringify(previewDocument(buildDoc()), null, 2))
 
 // ===== 模板保存:当前图纸(基准型号 + 视图布局 + 标注)落盘 =====
 
@@ -928,6 +950,98 @@ function extensionCursor(dim) {
   return 'nesw-resize'
 }
 
+function buildDoc() {
+  return buildDrawingDocument({
+    sheetSize: sheetSize.value,
+    sheetWidth: sheetWidth.value,
+    sheetHeight: sheetHeight.value,
+    modelId: selectedModel.value,
+    placedViews: placedViews.value,
+    dimensions: dimensions.value,
+    placedTables: placedTables.value,
+    titleBlock: titleBlockBom.titleBlock.value,
+    bomTable: titleBlockBom.bomTable.value
+  })
+}
+
+async function exportDrawingDocument() {
+  if (!selectedModel.value) { ElMessage.warning('请先选择并导入型号'); return }
+  if (!placedViews.value.length) { ElMessage.warning('请先放置视图'); return }
+  const doc = buildDoc()
+  const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${doc.model_id || 'drawing'}.json`
+  a.click()
+  URL.revokeObjectURL(url)
+  ElMessage.success('源文件已导出到本地')
+}
+
+const exportingPdf = ref(false)
+
+/** 所见即所得导出:直接把画布 SVG 光栅化进 PDF,不重画几何 */
+async function exportPdf() {
+  if (!placedViews.value.length) {
+    ElMessage.warning('请先放置视图')
+    return
+  }
+  exportingPdf.value = true
+  try {
+    // 清掉选中/悬浮/编辑态——这些是纯 UI 反馈,不应出现在图纸上
+    selectedViewId.value = null
+    selectedTableId.value = null
+    selectedDimId.value = null
+    selectedCells.value = []
+    hoverCell.value = null
+    editingCell.value = null
+    await nextTick() // 等 DOM 同步清掉选中框后再克隆
+
+    await exportSheetScreenshotPdf({
+      svgEl: svgRef.value,
+      sheetWidthMm: sheetWidth.value,
+      sheetHeightMm: sheetHeight.value,
+      fileName: `${selectedModel.value || 'drawing'}.pdf`
+    })
+    ElMessage.success('PDF 已导出')
+  } catch (e) {
+    ElMessage.error(`导出失败: ${e.message}`)
+  } finally {
+    exportingPdf.value = false
+  }
+}
+
+const fileInputRef = ref(null)
+function triggerImportDoc() {
+  fileInputRef.value?.click()
+}
+
+async function onFilePicked(event) {
+  const file = event.target.files && event.target.files[0]
+  if (!file) return
+  try {
+    const text = await file.text()
+    const parsed = parseDrawingDocument(text)
+    if (parsed.sheet && parsed.sheet.size) sheetSize.value = parsed.sheet.size
+    if (parsed.modelId && models.value.includes(parsed.modelId)) selectedModel.value = parsed.modelId
+    applyDrawingDocument(parsed, {
+      placedViews: { setViews },
+      dimensions: { setDimensions },
+      placedTables: { setTables },
+      titleBlockBom
+    })
+    if (parsed.droppedAnnotations) {
+      ElMessage.warning(
+        `已跳过 ${parsed.droppedAnnotations} 条标注(它引用的视图不在文件中)`)
+    }
+    ElMessage.success('源文件已载入,可继续编辑')
+  } catch (e) {
+    ElMessage.error(`导入失败: ${e.message}`)
+  } finally {
+    event.target.value = ''
+  }
+}
+
 async function saveAsTemplate() {
   if (!selectedModel.value) {
     ElMessage.warning('请先选择并导入型号')
@@ -937,15 +1051,7 @@ async function saveAsTemplate() {
     ElMessage.warning('请先从调色板放置视图')
     return
   }
-  const doc = buildDrawingDocument({
-    sheetSize: sheetSize.value,
-    sheetWidth: sheetWidth.value,
-    sheetHeight: sheetHeight.value,
-    modelId: selectedModel.value,
-    placedViews: placedViews.value,
-    dimensions: dimensions.value,
-    placedTables: placedTables.value
-  })
+  const doc = buildDoc()
   savingTemplate.value = true
   try {
     const res = await saveDrawingTemplate(doc)

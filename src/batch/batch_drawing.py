@@ -116,6 +116,75 @@ def _frontend_dim_summary(rebound):
     ]
 
 
+def _content_bbox(segs, hidden):
+    """由边线算内容包围盒(前端 contentBBox 用于缩放居中),无点返回 None"""
+    pts = []
+    for s in list(segs or []) + list(hidden or []):
+        if not s:
+            continue
+        if s.get("points"):
+            pts.extend(s["points"])
+        elif s.get("type") == "line":
+            pts.append([s["x1"], s["y1"]])
+            pts.append([s["x2"], s["y2"]])
+        elif s.get("type") == "circle":
+            r = s.get("r", 0)
+            pts.append([s["cx"] - r, s["cy"] - r])
+            pts.append([s["cx"] + r, s["cy"] + r])
+    if not pts:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    return {"x": min(xs), "y": min(ys),
+            "width": max(xs) - min(xs), "height": max(ys) - min(ys)}
+
+
+def _write_model_source(model_code, template_doc, placements, palette, out_dir):
+    """出图同时落盘该型号的可导入源文件
+
+    存的是本型号自己的投影几何(不是基准型号的),以后导入可直接渲染,
+    不必重跑 OCC 投影。标注沿用模板定义:同系列边线索引一致,refs 仍有效。
+    """
+    views = []
+    for v in template_doc["views"]:
+        p = placements[v["id"]]
+        src = p["source_view"]
+        views.append({
+            "id": v["id"],
+            "source_view": src,
+            "label": v.get("label"),
+            "group": v.get("group"),
+            "x": v["x"],
+            "y": v["y"],
+            "scale": v.get("scale"),
+            "px_per_mm": p["k"],
+            "bbox": palette["views"].get(src, {}).get("bbox"),
+            "contentBBox": _content_bbox(p["segs"], p["hidden"]),
+            "edges": p["segs"],
+            "hidden_edges": p["hidden"],
+        })
+    # 只保留引用完整的标注:悬空引用渲染不出,落盘只会制造脏数据
+    view_ids = {v["id"] for v in template_doc["views"]}
+    annotations = [
+        a for a in template_doc.get("annotations", [])
+        if all(r.get("viewId") in view_ids for r in a.get("refs", []))
+    ]
+    doc = {
+        "schema_version": "1.0",
+        "sheet": template_doc.get("sheet"),
+        "model_id": model_code,
+        "views": views,
+        "annotations": annotations,
+    }
+    for key in ("tables", "title_block", "bom_table"):
+        if template_doc.get(key):
+            doc[key] = template_doc[key]
+    path = os.path.join(out_dir, model_code, "drawing_source.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False)
+    return path
+
+
 def generate_one_frontend(model_code, template_doc, base_views, base_refs,
                           base_profile, out_dir, view_names=None):
     """前端实例模板:重绑 + 渲染单型号,返回结果 dict
@@ -179,6 +248,8 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
 
     dim_pdf_sheet.render_frontend_pdf(
         rebound, placements, template_doc, model_code, pdf_path)
+    source_path = _write_model_source(
+        model_code, template_doc, placements, palette, out_dir)
 
     unmatched = [f"{i['annotation'].get('id')}: {i['reason']}"
                  for i in rebound if i["status"] == "unmatched"]
@@ -186,6 +257,7 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         "model_code": model_code,
         "ok": True,
         "pdf": pdf_path,
+        "source": source_path,
         "svg": None,
         "unmatched": unmatched,
         "dims": _frontend_dim_summary(rebound),

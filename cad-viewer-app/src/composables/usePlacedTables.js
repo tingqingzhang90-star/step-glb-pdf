@@ -260,9 +260,25 @@ export function usePlacedTables() {
     t.border = { width, color }
   }
 
+  /** 从源文件批量载入表格 */
+  function setTables(tables) {
+    placedTables.value = (tables || []).map(t => ({
+      id: t.id || `table_${++tableIdCounter}`,
+      x: t.x, y: t.y,
+      col_widths: [...(t.col_widths || [])],
+      row_heights: [...(t.row_heights || [])],
+      border: { ...(t.border || {}) },
+      text_color: t.text_color || '#303133',
+      cells: (t.cells || []).map(c => ({ ...c }))
+    }))
+    selectedTableId.value = null
+    selectedCells.value = []
+  }
+
   return {
     placedTables, selectedTableId, selectedTable, selectedCells,
     placeTable, selectTable, focusTable, deleteSelectedTable, clearTables,
+    setTables,
     updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected,
     findCellAt,
     insertRow, deleteRow, insertCol, deleteCol,

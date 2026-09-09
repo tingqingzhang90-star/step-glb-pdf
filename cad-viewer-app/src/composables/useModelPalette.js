@@ -1,5 +1,5 @@
 // 型号选择与视图调色板数据加载
-import { ref, computed } from 'vue'
+import { ref, computed, shallowRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchModelList, fetchViewPalette } from '@/api/drawingApi.js'
 
@@ -15,6 +15,9 @@ export function useModelPalette() {
   const paletteViews = ref({})
   const motorEnvelope = ref({})
   const gearboxEnvelope = ref({})
+  // 选型配置只读且体积大,用 shallowRef 避免上千个键被递归代理
+  const config = shallowRef(null)
+  const modelParams = ref({})
 
   const standardViews = computed(() =>
     Object.entries(paletteViews.value)
@@ -41,6 +44,8 @@ export function useModelPalette() {
     paletteViews.value = {}
     motorEnvelope.value = {}
     gearboxEnvelope.value = {}
+    config.value = null
+    modelParams.value = {}
     viewsLoaded.value = false
     error.value = ''
     lastElapsed.value = null
@@ -60,6 +65,8 @@ export function useModelPalette() {
       paletteViews.value = data.views
       motorEnvelope.value = data.motor_envelope || {}
       gearboxEnvelope.value = data.gearbox_envelope || {}
+      config.value = data.config || null
+      modelParams.value = data.model_params || {}
       modelBbox.value = data.model_bbox
       viewsLoaded.value = true
       lastElapsed.value = data.elapsed
@@ -75,6 +82,7 @@ export function useModelPalette() {
   return {
     models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
     lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope,
+    config, modelParams,
     standardViews, isometricViews,
     loadModelList, resetPalette, loadViewPalette
   }

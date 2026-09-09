@@ -30,7 +30,7 @@ def api_save_drawing_template():
     doc = dict(doc)
     doc["template_kind"] = "frontend-instance"
     doc["template_identity"] = th.template_identity(model_id)
-    doc["schema_version"] = 1
+    doc.setdefault("schema_version", "1.0")
     os.makedirs(th.TEMPLATES_DIR, exist_ok=True)
     path = os.path.join(th.TEMPLATES_DIR, f"{model_id}.json")
     try:
@@ -76,7 +76,7 @@ def api_upload_drawing_template():
     doc = dict(doc)
     doc["template_kind"] = "frontend-instance"
     doc["template_identity"] = th.template_identity(model_id)
-    doc["schema_version"] = 1
+    doc.setdefault("schema_version", "1.0")
     try:
         th.save_template_doc(model_id, doc)
     except OSError as e:

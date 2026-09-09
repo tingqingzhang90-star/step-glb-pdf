@@ -237,10 +237,18 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimPreview.value = null
   }
 
+  /** 从源文件批量载入标注 */
+  function setDimensions(dims) {
+    dimensions.value = (dims || []).map(d => ({ ...d }))
+    selectedDimId.value = null
+    dimHoveredId.value = null
+  }
+
   return {
     activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
     renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
+    setDimensions,
     dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
     toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown,
     onDimExtensionHandleDown, onDimDragMove,
