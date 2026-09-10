@@ -646,13 +646,14 @@
       </aside>
     </main>
 
-    <!-- 表格右键菜单:插入/删除行列(抽离到 TableContextMenu) -->
+    <!-- 表格右键菜单:插入/删除行列、单元格对齐(抽离到 TableContextMenu) -->
     <TableContextMenu
       :menu="contextMenu"
       @insert-row="ctxInsertRow"
       @delete-row="ctxDeleteRow"
       @insert-col="ctxInsertCol"
       @delete-col="ctxDeleteCol"
+      @set-align="setAlignOfSelected"
     />
 
     <!-- 标注右键菜单：切换箭头方向 -->
@@ -819,7 +820,7 @@ const {
   onCellHover, clearHover,
   openContextMenu, closeContextMenu,
   ctxInsertRow, ctxDeleteRow, ctxInsertCol, ctxDeleteCol,
-  setFontOfSelected, setBorderWidth, setBorderColor,
+  setAlignOfSelected, setFontOfSelected, setBorderWidth, setBorderColor,
   handleKeydown, insertEmptyTable, insertPresetTable
 } = useTableEdit(tables, { sheetWidth, sheetHeight })
 
@@ -866,7 +867,7 @@ function onPickTableSize(rows, cols) {
   insertEmptyTable(rows, cols)
 }
 
-// 表格预设:整套表格存 localStorage,按原坐标灌回(幅面一致,坐标可直接复用)
+// 表格模板:整套表格存后端,按原坐标灌回(幅面一致,坐标可直接复用)
 const {
   presets: tablePresets, load: loadTablePresets,
   save: saveTablePreset, apply: applyTablePreset, remove: removeTablePreset
@@ -885,7 +886,7 @@ async function onSaveTablePreset() {
     if (e !== 'cancel') ElMessage.error(`保存失败:${e?.message || e}`)
     return
   }
-  if (saveTablePreset(name, placedTables.value)) {
+  if (await saveTablePreset(name, placedTables.value)) {
     ElMessage.success(`已保存模板「${(name || '').trim()}」`)
   }
 }
@@ -895,9 +896,8 @@ function onApplyTablePreset(id) {
   if (n > 0) ElMessage.success(`已放入 ${n} 张表格`)
 }
 
-function onRemoveTablePreset(id) {
-  removeTablePreset(id)
-  ElMessage.success('已删除模板')
+async function onRemoveTablePreset(id) {
+  if (await removeTablePreset(id)) ElMessage.success('已删除模板')
 }
 
 // 预览只给结构摘要:edges 全文可达几十万字符,直接塞进 <pre> 会拖垮编辑器
@@ -1066,7 +1066,7 @@ async function saveAsTemplate() {
 
 onMounted(async () => {
   await loadModelList()
-  loadTablePresets()
+  await loadTablePresets()
   centerSheet()
   window.addEventListener('mousemove', onGlobalMouseMove)
   window.addEventListener('mouseup', onGlobalMouseUp)

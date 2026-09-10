@@ -75,3 +75,30 @@ export function pdfDownloadUrl(pdfRelPath) {
 export function pdfPreviewUrl(pdfRelPath) {
   return `/api/template-drawing/preview/${pdfRelPath}`
 }
+
+// ===== 表格模板:整套表格布局存后端(全局共享,不绑定型号) =====
+
+export async function fetchTablePresets() {
+  const res = await fetch('/api/table-presets')
+  const data = await res.json()
+  if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  return data
+}
+
+export async function saveTablePreset(name, tables) {
+  const res = await fetch('/api/table-presets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, tables })
+  })
+  const data = await res.json()
+  if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  return data
+}
+
+export async function deleteTablePreset(id) {
+  const res = await fetch(`/api/table-presets/${id}`, { method: 'DELETE' })
+  const data = await res.json()
+  if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  return data
+}

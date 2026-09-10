@@ -23,6 +23,8 @@ CONFIG_DIR = rb.CONFIG_DIR
 # web 内部目录
 STATIC_DIR = os.path.join(_HERE, "static")
 TEMPLATES_DIR = os.path.join(PROJECT_ROOT, "data", "templates", "engineering")
+# 表格模板(整套表格布局)落盘目录,与工程图模板平行
+TABLE_PRESETS_DIR = os.path.join(PROJECT_ROOT, "data", "table-presets")
 # 自定义 SVG 符号库目录(上传的符号落这里,单元格引用其相对文件名)
 SYMBOLS_DIR = os.path.join(PROJECT_ROOT, "data", "symbols")
 
