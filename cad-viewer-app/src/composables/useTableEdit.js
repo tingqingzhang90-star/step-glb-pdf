@@ -11,7 +11,7 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     placedTables, selectedTableId, selectedTable, selectedCells,
     selectTable, focusTable, deleteSelectedTable, updateCellText, toggleCellSelect,
     insertRow, deleteRow, insertCol, deleteCol,
-    setCellFontSize, setTableBorder, placeTable
+    setCellFontSize, setCellAlign, setTableBorder, placeTable
   } = tables
 
   // 当前字号“画笔”:用户设置一次后保持,切换到其他单元格时不再被该单元格原字号覆盖
@@ -100,6 +100,11 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     event.preventDefault()
     event.stopPropagation()
     selectTable(table.id)
+    // 右键目标格如果没有在选区里,把它作为当前选区,否则对齐/字号等样式操作没目标
+    const inSelection = selectedCells.value.some(x => x.r === r && x.c === c)
+    if (!inSelection) {
+      selectedCells.value = [{ r, c }]
+    }
     contextMenu.value = {
       x: event.clientX, y: event.clientY, tableId: table.id, r, c
     }
@@ -128,6 +133,16 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
   }
 
   // ---- 样式(作用于选中格 / 选中表) ----
+  function setAlignOfSelected(align) {
+    const t = selectedTable.value
+    const cells = selectedCells.value
+    if (!t || !cells.length) return
+    for (const { r, c } of cells) {
+      setCellAlign(t.id, r, c, align)
+    }
+    closeContextMenu()
+  }
+
   function setFontOfSelected(v) {
     activeFontSize.value = Number(v) || TABLE_STYLE.fontPx
     const t = selectedTable.value
@@ -175,7 +190,7 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     const cells = []
     for (let r = 0; r < rows; r++)
       for (let c = 0; c < cols; c++)
-        cells.push({ r, c, text: '', align: 'h-left' })
+        cells.push({ r, c, text: '', align: 'h-center v-center' })
     const preset = {
       col_widths: Array(cols).fill(DEFAULT_COL_W),
       row_heights: Array(rows).fill(DEFAULT_ROW_H),
@@ -201,7 +216,7 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     onCellHover, clearHover,
     openContextMenu, closeContextMenu,
     ctxInsertRow, ctxDeleteRow, ctxInsertCol, ctxDeleteCol,
-    setFontOfSelected, setBorderWidth, setBorderColor,
+    setAlignOfSelected, setFontOfSelected, setBorderWidth, setBorderColor,
     handleKeydown, insertEmptyTable, insertPresetTable
   }
 }

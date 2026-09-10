@@ -39,6 +39,7 @@
           :font-size="cellFontSize(lc.cell)"
           :fill="t.text_color || TABLE_STYLE.textColor"
           :text-anchor="cellTextAnchor(lc.cell)"
+          :dominant-baseline="cellTextBaseline(lc.cell)"
           :style="{ fontWeight: lc.cell.bold ? 'bold' : 'normal' }"
         >{{ lc.cell.text }}</text>
         <!-- 单元格符号(SVG):居中适配于格内(内边距 1.5mm),不拦截鼠标 -->
@@ -100,16 +101,22 @@
         v-bind="editRectAttrsFor(t, activeCellOf(t))"
         :style="foreignObjectStyleFor(t, activeCellOf(t))"
       >
-        <input
-          ref="cellEditInput"
-          class="cell-edit-input"
-          :key="`${activeCellOf(t).r}-${activeCellOf(t).c}`"
-          :style="editCellStyleFor(t, activeCellOf(t))"
-          :defaultValue="editTextFor(t, activeCellOf(t))"
-          @keyup.enter="emit('edit-commit', $event)"
-          @blur="emit('edit-commit', $event)"
-          @mousedown.stop
-        />
+        <div
+          class="cell-edit-wrapper"
+          :style="wrapperStyleFor(t, activeCellOf(t))"
+        >
+          <input
+            ref="cellEditInput"
+            class="cell-edit-input"
+            :key="`${activeCellOf(t).r}-${activeCellOf(t).c}`"
+            :style="inputStyleFor(t, activeCellOf(t))"
+            :defaultValue="editTextFor(t, activeCellOf(t))"
+            @keyup.enter="emit('edit-commit', $event)"
+            @blur="emit('edit-commit', $event)"
+            @mousedown.stop
+            @contextmenu.prevent.stop="emit('cell-contextmenu', $event, t, activeCellOf(t).r, activeCellOf(t).c)"
+          />
+        </div>
       </foreignObject>
     </g>
   </g>
@@ -123,7 +130,7 @@ import { symbolUrl } from '@/api/symbols'
 import {
   tableColLefts, tableRowTops, tableW, tableH, tableLogicalCells,
   cornerHandles, cornerHandlePath, colResizeHandles, rowResizeHandles,
-  cellRect, cellRectAt, cellTextX, cellTextY, cellTextAnchor, cellFontSize,
+  cellRect, cellRectAt, cellTextX, cellTextY, cellTextAnchor, cellTextBaseline, cellFontSize,
   findCellAt
 } from '@/tables/tableGeometry'
 
@@ -211,20 +218,35 @@ function editTextFor(t, ac) {
   return r.text
 }
 
-function editCellStyleFor(t, ac) {
+function wrapperStyleFor(t, ac) {
   const cell = findCellAt(t, ac.r, ac.c)
   if (!cell) return {}
-  const rect = cellRect(t, cell)
-  const align = (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-')) || 'h-left'
+  const h = ((cell.align || '').split(/\s+/).find(s => s.startsWith('h-')) || 'h-center')
+  const v = ((cell.align || '').split(/\s+/).find(s => s.startsWith('v-')) || 'v-center')
+  return {
+    width: '100%',
+    height: '100%',
+    display: 'flex',
+    justifyContent: h === 'h-center' ? 'center' : h === 'h-right' ? 'flex-end' : 'flex-start',
+    alignItems: v === 'v-top' ? 'flex-start' : v === 'v-bottom' ? 'flex-end' : 'center',
+    boxSizing: 'border-box'
+  }
+}
+
+function inputStyleFor(t, ac) {
+  const cell = findCellAt(t, ac.r, ac.c)
+  if (!cell) return {}
+  const h = ((cell.align || '').split(/\s+/).find(s => s.startsWith('h-')) || 'h-center')
+  const v = ((cell.align || '').split(/\s+/).find(s => s.startsWith('v-')) || 'v-center')
   const editing = isEditingCell(ac)
   return {
     color: t.text_color || TABLE_STYLE.textColor,
     // foreignObject 内 CSS px 等价于 SVG 用户单位(mm),故字号须用 mm 值,与单元格文字一致
     fontSize: `${cellFontSize(cell)}px`,
     fontWeight: cell.bold ? 'bold' : 'normal',
-    textAlign: align === 'h-center' ? 'center' : align === 'h-right' ? 'right' : 'left',
-    lineHeight: `${rect.h}px`,
-    padding: '0 1px',
+    textAlign: h === 'h-center' ? 'center' : h === 'h-right' ? 'right' : 'left',
+    lineHeight: '1',
+    padding: v === 'v-top' ? '1px 1px 0 1px' : v === 'v-bottom' ? '0 1px 1px 1px' : '0 1px',
     // 预览态不拦截鼠标(点击穿透到单元格矩形触发编辑);编辑态可点击定位光标
     pointerEvents: editing ? 'auto' : 'none',
     cursor: editing ? 'text' : 'pointer'
@@ -237,9 +259,13 @@ function editCellStyleFor(t, ac) {
   /* 必须 block:input 默认按行内替换元素排版,下边缘对齐 foreignObject 行盒的
      基线,会被 strut 的下伸空间顶下去约 6mm,而行高只有 8mm——文字就落到下一格了 */
   display: block;
-  width: 100%; height: 100%;
+  width: 100%;
+  height: auto;
   margin: 0;
-  border: none; outline: none; padding: 0 2px;
+  border: none; outline: none;
   background: transparent; box-sizing: border-box;
+}
+.cell-edit-wrapper {
+  overflow: hidden;
 }
 </style>

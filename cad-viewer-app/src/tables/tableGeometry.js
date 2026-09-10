@@ -134,11 +134,24 @@ export function cellTextX(t, cell) {
   return r.x + 1
 }
 
-/** 单元格文字 y(baseline,垂直居中近似) */
+/** 单元格文字 y(baseline,按垂直对齐计算) */
 export function cellTextY(t, cell) {
   const r = cellRect(t, cell)
   const fs = cellFontSize(cell)
-  return r.y + r.h / 2 + fs * 0.35
+  const v = vAlign(cell)
+  if (v === 'v-top') return r.y + fs * 0.8 + 1
+  if (v === 'v-bottom') return r.y + r.h - fs * 0.2 - 1
+  // 垂直居中:用 central baseline,y 直接放在格中心,与编辑态 input 的 flex 居中对齐
+  return r.y + r.h / 2
+}
+
+/** 单元格文字 SVG dominant-baseline */
+export function cellTextBaseline(cell) {
+  const v = vAlign(cell)
+  if (v === 'v-top') return 'hanging'
+  if (v === 'v-bottom') return 'auto'
+  // central 把文字视觉中心放在 y 处,middle 对中文会略偏下
+  return 'central'
 }
 
 /** 单元格文字字号(mm)。cell 未指定 font_size 时取 cad_viewer_style.json 的 table.text.font_px */
@@ -147,7 +160,11 @@ export function cellFontSize(cell) {
 }
 
 function hAlign(cell) {
-  return (cell.align || 'h-left').split(' ').find(s => s.startsWith('h-')) || 'h-left'
+  return (cell.align || 'h-center').split(/\s+/).find(s => s.startsWith('h-')) || 'h-center'
+}
+
+function vAlign(cell) {
+  return (cell.align || '').split(/\s+/).find(s => s.startsWith('v-')) || 'v-center'
 }
 
 /** sheet 坐标点 → 最近格 (r,c)(合并格归到其左上角所在行列) */

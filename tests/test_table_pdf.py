@@ -111,6 +111,32 @@ def test_empty_cells_skip_text_but_keep_border():
                 if k in ("string", "center", "right")]) == 4
 
 
+def test_vertical_alignment_routes_to_correct_y():
+    """v-top/v-center/v-bottom 对应不同 baseline y"""
+    t = {
+        "x": 0, "y": 0,
+        "col_widths": [10, 10, 10],
+        "row_heights": [10],
+        "cells": [
+            {"r": 0, "c": 0, "text": "top", "align": "h-left v-top"},
+            {"r": 0, "c": 1, "text": "mid", "align": "h-center v-center"},
+            {"r": 0, "c": 2, "text": "bot", "align": "h-right v-bottom"},
+        ],
+    }
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, t, m)
+    texts = [a for k, a in c.calls
+             if k in ("string", "center", "right")]
+    # 行高 10, font_size 默认 _TBL_FONT_PX;y 已翻转
+    # top: 100 - 0.8*fs; mid: 100 - 5 - 0.35*fs; bot: 100 - 10 + 0.2*fs
+    from drawing.dim import dim_pdf_sheet as mod
+    fs = mod._TBL_FONT_PX * mod._PX2MM
+    top_y, mid_y, bot_y = texts[0][1], texts[1][1], texts[2][1]
+    assert top_y == round(100 - 0.8 * fs, 1)
+    assert mid_y == round(100 - 5 - 0.35 * fs, 1)
+    assert bot_y == round(100 - 10 + 0.2 * fs, 1)
+
+
 def test_default_colspan_rowspan_is_one():
     """省略 colspan/rowspan 时按单格画"""
     t = {

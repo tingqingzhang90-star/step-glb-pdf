@@ -137,7 +137,7 @@ export function usePlacedTables() {
     t.cells = t.cells.filter(x => x !== cell)
     for (let i = 0; i < rs; i++)
       for (let j = 0; j < cs; j++)
-        t.cells.push({ r: r0 + i, c: c0 + j, text: '', align: 'h-left' })
+        t.cells.push({ r: r0 + i, c: c0 + j, text: '', align: 'h-center v-center' })
     selectedCells.value = []
   }
 
@@ -158,7 +158,7 @@ export function usePlacedTables() {
     // 为新行补空 cell(除非已被扩展的合并格覆盖)
     for (let c = 0; c < t.col_widths.length; c++) {
       if (!findCellAt(t, newR, c)) {
-        t.cells.push({ r: newR, c, text: '', align: 'h-left' })
+        t.cells.push({ r: newR, c, text: '', align: 'h-center v-center' })
       }
     }
     selectedCells.value = []
@@ -194,7 +194,7 @@ export function usePlacedTables() {
     t.col_widths.splice(newC, 0, 40)
     for (let r = 0; r < t.row_heights.length; r++) {
       if (!findCellAt(t, r, newC)) {
-        t.cells.push({ r, c: newC, text: '', align: 'h-left' })
+        t.cells.push({ r, c: newC, text: '', align: 'h-center v-center' })
       }
     }
     selectedCells.value = []
@@ -254,6 +254,32 @@ export function usePlacedTables() {
     const cell = findCellAt(t, r, c)
     if (cell) cell.font_size = size
   }
+
+  /** 解析并规范化 align 字符串,保持另一轴不变,缺省值居中 */
+  function normalizeAlign(align) {
+    const parts = (align || '').split(/\s+/).filter(Boolean)
+    let h = parts.find(p => p.startsWith('h-')) || 'h-center'
+    let v = parts.find(p => p.startsWith('v-')) || 'v-center'
+    return `${h} ${v}`
+  }
+
+  /** 设置单元格对齐方式,align 如 'h-center v-bottom' */
+  function setCellAlign(tableId, r, c, align) {
+    const t = placedTables.value.find(x => x.id === tableId)
+    if (!t) return
+    const cell = findCellAt(t, r, c)
+    if (!cell) return
+    const parts = (align || '').split(/\s+/).filter(Boolean)
+    const current = normalizeAlign(cell.align)
+    const curParts = current.split(/\s+/)
+    const result = curParts.map(p => {
+      const axis = p.startsWith('h-') ? 'h-' : 'v-'
+      const replacement = parts.find(np => np.startsWith(axis))
+      return replacement || p
+    })
+    cell.align = result.join(' ')
+  }
+
   function setTableBorder(tableId, width, color) {
     const t = placedTables.value.find(x => x.id === tableId)
     if (!t) return
@@ -283,6 +309,6 @@ export function usePlacedTables() {
     findCellAt,
     insertRow, deleteRow, insertCol, deleteCol,
     resizeCol, resizeRow, resizeTable, resizeFromTopLeft,
-    setCellFontSize, setTableBorder
+    setCellFontSize, setCellAlign, setTableBorder
   }
 }

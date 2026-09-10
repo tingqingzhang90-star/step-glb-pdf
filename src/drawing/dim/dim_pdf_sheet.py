@@ -189,8 +189,17 @@ def _draw_table_placement(c, table, mapper):
         else:
             tx = min(px1, px2) + 1
             draw = c.drawString
-        # 垂直:baseline 偏移近似(ascent≈0.8em,中心-0.35em)
-        cy = (py_top + py_bot) / 2 - 0.35 * fs_mm
+        # 垂直:按 v-align 计算 baseline
+        va = 'v-center'
+        for part in align.split():
+            if part.startswith('v-'):
+                va = part
+        if va == 'v-top':
+            cy = py_top - 0.8 * fs_mm
+        elif va == 'v-bottom':
+            cy = py_bot + 0.2 * fs_mm
+        else:
+            cy = (py_top + py_bot) / 2 - 0.35 * fs_mm
         draw(tx, cy, text)
 
 
