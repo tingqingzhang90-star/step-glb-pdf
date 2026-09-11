@@ -451,8 +451,7 @@
                 <template v-if="dim.type === 'diameter'">
                   <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
                   <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
-                  <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
-                  <polygon v-if="dim.arrow2" :points="dim.arrow2" class="dim-arrow" />
+                  <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
                   <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${dim.textAngle * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
                 </template>
                 <!-- 角度标注 -->
