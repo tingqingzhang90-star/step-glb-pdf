@@ -37,9 +37,5 @@
     "row_height_mm": 8
   },
 
-  "pdf": {
-    "lineWeight": 3.0
-  },
-
   "_px_to_mm_at_96dpi": 0.2645833
 }

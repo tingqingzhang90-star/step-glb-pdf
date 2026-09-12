@@ -15,32 +15,16 @@ const UI_LAYER_SELECTOR = [
   'foreignObject'           // 单元格编辑输入框
 ].join(',')
 
-// 这些 CSS 变量控制线宽,导出时统一按 lineWeight 放大,抵消 300dpi 重采样到屏幕
-// 时抗锯齿灰边造成的"发虚"感。
-const STROKE_VARS = [
-  '--edge-visible-stroke',
-  '--edge-hidden-stroke',
-  '--dim-line-stroke',
-  '--dim-ext-stroke',
-  '--center-mark-stroke',
-  '--frame-stroke',
-  '--title-block-stroke'
-]
-
-/** 把 :root 上的 CSS 变量收集成 style 字符串,stroke_px 变量按 lineWeight 放大。
+/** 把 :root 上的 CSS 变量收集成 style 字符串。
  *  SVG 以 <img> 方式光栅化时读不到 document 的样式,必须带进克隆里。 */
-function collectRootCssVars(lineWeight) {
+function collectRootCssVars() {
   const cs = getComputedStyle(document.documentElement)
   const vars = []
   for (let i = 0; i < cs.length; i++) {
     const prop = cs[i]
     if (prop.startsWith('--')) {
-      let v = cs.getPropertyValue(prop).trim()
-      if (!v) continue
-      if (lineWeight !== 1 && STROKE_VARS.includes(prop) && /^[\d.]+$/.test(v)) {
-        v = String(parseFloat(v) * lineWeight)
-      }
-      vars.push(`${prop}: ${v}`)
+      const v = cs.getPropertyValue(prop).trim()
+      if (v) vars.push(`${prop}: ${v}`)
     }
   }
   return vars.join('; ')
@@ -70,28 +54,52 @@ function collectCssRules(clone) {
   return rules.join('\n')
 }
 
-/** 视图组带 scale(如 1:2),去掉 vector-effect 后线宽会被缩放。
- *  读原始元素的计算样式(浏览器实际用的 px 值)乘以 lineWeight 再除以视图缩放,
- *  用 !important 内联样式写回克隆,保证任何比例的视图打印线宽一致。 */
-function compensateStrokeWidths(svgEl, clone, lineWeight) {
-  const origViews = svgEl.querySelectorAll('.placed-view')
-  const cloneViews = clone.querySelectorAll('.placed-view')
-  origViews.forEach((ov, i) => {
-    const transform = cloneViews[i].getAttribute('transform') || ''
-    const m = transform.match(/scale\(\s*([\d.]+)\s*\)/)
-    const s = m ? parseFloat(m[1]) : 1
-    if (!Number.isFinite(s) || Math.abs(s - 1) < 1e-6) return
-    const oEls = ov.querySelectorAll('line, polyline, circle')
-    const cEls = cloneViews[i].querySelectorAll('line, polyline, circle')
-    oEls.forEach((oe, j) => {
-      const ce = cEls[j]
-      if (!ce) return
-      const v = parseFloat(getComputedStyle(oe).strokeWidth)
-      if (!Number.isFinite(v) || v === 0) return
-      const desired = (v * lineWeight) / s
-      ce.style.setProperty('stroke-width', `${desired.toFixed(5)}px`, 'important')
-    })
-  })
+/** 节点自身及祖先的累计缩放:transform 的 scale + 嵌套 svg 的 viewBox 映射 */
+function cumulativeScale(el, root) {
+  let s = 1
+  for (let n = el; n && n !== root; n = n.parentElement) {
+    if (!n.getAttribute) continue
+    const m = (n.getAttribute('transform') || '').match(/scale\(\s*([-\d.]+)/)
+    if (m) s *= parseFloat(m[1])
+    if (n.tagName === 'svg' && n.hasAttribute('viewBox')) {
+      const vb = n.getAttribute('viewBox').split(/[\s,]+/).map(parseFloat)
+      const w = parseFloat(n.getAttribute('width'))
+      if (vb.length === 4 && vb[2] > 0 && w > 0) s *= w / vb[2]
+    }
+  }
+  return s
+}
+
+/** 把"屏幕恒定线宽"固化为图纸 mm。
+ *  non-scaling-stroke 元素在前端任何缩放下都显示 stroke_px 个屏幕像素,
+ *  但克隆图光栅化成 <img> 后该特性失效,线宽会按用户单位(mm)解释。
+ *  导出前按当前画布缩放换算: mm = 屏幕px / sheetZoom / 累计scale,
+ *  内联写回并关掉 vector-effect,PDF 与屏幕所见一致。
+ *  需要把克隆临时挂进 document 才能读计算样式。 */
+function freezeStrokes(clone, sheetZoom) {
+  clone.style.position = 'fixed'
+  clone.style.left = '-100000px'
+  clone.style.top = '0'
+  document.body.appendChild(clone)
+  try {
+    for (const el of clone.querySelectorAll('*')) {
+      const cs = getComputedStyle(el)
+      if (cs.getPropertyValue('vector-effect') !== 'non-scaling-stroke') continue
+      if (cs.stroke === 'none') continue
+      const px = parseFloat(cs.strokeWidth)
+      if (!Number.isFinite(px) || px <= 0) continue
+      const mm = px / sheetZoom / cumulativeScale(el, clone)
+      el.style.setProperty('stroke-width', mm.toFixed(5))
+      el.style.setProperty('vector-effect', 'none')
+      el.removeAttribute('vector-effect')
+    }
+  } finally {
+    clone.remove()
+    // 只清掉本函数加的定位样式,保留调用前写入的 root CSS 变量
+    clone.style.removeProperty('position')
+    clone.style.removeProperty('left')
+    clone.style.removeProperty('top')
+  }
 }
 
 /** 把单元格里的 <image href="/api/symbols/xxx.svg">(或 data: SVG)内联成真实 <svg> 节点。
@@ -164,13 +172,11 @@ async function inlineSymbolImages(clone) {
  * @param {number} sheetHeightMm    图纸高(mm)
  * @param {string} fileName         保存文件名
  * @param {number} dpi              光栅化精度,默认 300(打印级)
- * @param {number} lineWeight       线宽放大系数,默认 1.0;
- *   在 1.0 时严格按前端 stroke_px(数值=mm)输出,但 PDF 查看器把 300dpi 重采样到
- *   屏幕时抗锯齿灰边会让线显得发虚。把线宽整体放大到 ~1.4× 可让灰边占比变小,
- *   视觉上更接近前端直接渲染的 1px 黑线。
+ * @param {number} sheetZoom        导出瞬间画布缩放(屏幕px/mm),
+ *   屏幕恒定线宽按它折成图纸 mm,保证 PDF 与当前屏幕所见一致
  */
 export async function exportSheetScreenshotPdf({
-  svgEl, sheetWidthMm, sheetHeightMm, fileName, dpi = 300, lineWeight = 1.0
+  svgEl, sheetWidthMm, sheetHeightMm, fileName, dpi = 300, sheetZoom = 1
 }) {
   if (!svgEl) throw new Error('画布未就绪')
 
@@ -183,15 +189,13 @@ export async function exportSheetScreenshotPdf({
   clone.querySelectorAll(UI_LAYER_SELECTOR).forEach(el => el.remove())
   // 先把单元格符号 <image>(外部 URL)内联成真实 <svg>,避免导出图里符号丢失
   await inlineSymbolImages(clone)
-  // 卡片阴影等展示样式不要;换成导出用的 root CSS 变量(线宽已放大)
+  // 卡片阴影等展示样式不要;换成导出用的 root CSS 变量
   clone.removeAttribute('style')
-  const rootVars = collectRootCssVars(lineWeight)
+  const rootVars = collectRootCssVars()
   if (rootVars) clone.setAttribute('style', rootVars)
 
-  // 2) 视图内元素线宽补偿(必须在移除 vector-effect 前读原始元素的计算样式)
-  compensateStrokeWidths(svgEl, clone, lineWeight)
-  // 300dpi 大图下 1px 发丝线不可见,移除后线宽按 mm 真实缩放
-  clone.querySelectorAll('[vector-effect]').forEach(el => el.removeAttribute('vector-effect'))
+  // 2) 屏幕恒定线宽固化为图纸 mm(需临时挂载读计算样式)
+  freezeStrokes(clone, sheetZoom)
 
   // 3) 导出尺寸 + 内联 CSS
   clone.setAttribute('width', pxW)

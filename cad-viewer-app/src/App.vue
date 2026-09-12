@@ -703,7 +703,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
-import { useStyleConfig, TABLE_STYLE, PDF_LINE_WEIGHT } from '@/composables/useStyleConfig'
+import { useStyleConfig, TABLE_STYLE } from '@/composables/useStyleConfig'
 import { useTablePresets } from '@/composables/useTablePresets'
 import { usePlacedViews } from '@/composables/usePlacedViews'
 import { useSheetCoords } from '@/composables/useSheetCoords'
@@ -1026,7 +1026,7 @@ async function exportPdf() {
       sheetWidthMm: sheetWidth.value,
       sheetHeightMm: sheetHeight.value,
       fileName: `${selectedModel.value || 'drawing'}.pdf`,
-      lineWeight: PDF_LINE_WEIGHT
+      sheetZoom: sheetZoom.value
     })
     ElMessage.success('PDF 已导出')
   } catch (e) {

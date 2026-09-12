@@ -7,11 +7,6 @@ import config from '../../../cad_viewer_style.json'
 // 96dpi 折算:px → mm。SVG viewBox 单位即 mm,标注/表格字号都要走这个换算
 export const PX_TO_MM = config._px_to_mm_at_96dpi
 
-// PDF 导出线宽放大系数。300dpi 光栅图经 PDF 阅读器重采样到屏幕时,
-// 抗锯齿灰边会让线显得发虚;整体放大线宽可压过灰边,视觉更接近前端 1px 黑线。
-// 改这里即可,无需改代码。缺省值 2.0。
-export const PDF_LINE_WEIGHT = config.pdf?.lineWeight ?? 2.0
-
 // 表格默认值。表格画在 SVG viewBox 内(长度单位即 mm),只有字号沿用 96dpi 折算
 export const TABLE_STYLE = {
   fontPx: config.table.text.font_px,
