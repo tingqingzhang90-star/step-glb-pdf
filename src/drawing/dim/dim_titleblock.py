@@ -174,9 +174,11 @@ def draw_title_block(c, title_block, params, mapper, font, fs_mm, *, bottom_y=No
         ty = sheet_h - cell_cy - 0.35 * fs_mm
 
         # 按单元格裁剪,确保无论如何不会画到邻格
+        # reportlab 5.x 的 rect() 已移除 clip 参数,统一用 clipPath 裁剪
         c.saveState()
-        c.rect(cell_l, sheet_h - cell_b, cell_w, cell_h,
-               stroke=0, fill=0, clip=1)
+        clip = c.beginPath()
+        clip.rect(cell_l, sheet_h - cell_b, cell_w, cell_h)
+        c.clipPath(clip, stroke=0, fill=0)
         c.drawString(tx, ty, truncated)
         c.restoreState()
 

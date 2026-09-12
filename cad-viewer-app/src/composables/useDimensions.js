@@ -5,6 +5,7 @@ import { toCircle, toLineSeg } from '@/dimensions/geometry.js'
 
 export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope }) {
   const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle' | 'center-mark' | 'motor-envelope'
+  const diameterSubMode = ref('line')  // 'line' (贯穿圆心直线) | 'leader' (引线折线)
   const dimHoveredEdge = ref(null)   // { seg, transform, viewId, idx, type }
   const dimFirstEdge = ref(null)     // 第一选中边线
   const dimPending = ref(null)       // { mode, first, second } 已选齐对象，等点击固定
@@ -42,6 +43,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
     activeTool,
+    diameterSubMode,
     dimHoveredEdge,
     dimFirstEdge,
     dimPending,
@@ -245,7 +247,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   }
 
   return {
-    activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
+    activeTool, diameterSubMode, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
     renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
     setDimensions,

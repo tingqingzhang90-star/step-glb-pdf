@@ -205,7 +205,10 @@ def build_dim_primitives(ann, segs, views):
             return None
         prims = builder(ann, segs, views)
     elif dtype == "diameter":
-        prims = _diameter(ann, segs[0], views[0])
+        if ann.get("diameterMode") == "leader":
+            prims = _diameter_leader(ann, segs[0], views[0])
+        else:
+            prims = _diameter(ann, segs[0], views[0])
     elif dtype == "angle":
         prims = _angle(ann, segs, views)
     elif dtype == "center-mark":
@@ -483,6 +486,71 @@ def _diameter(ann, seg, view):
         "arrows": [build_arrow_points(edge_pt, d, False)],
         "texts": [{"pos": text_pos, "text": text,
                    "angle": text_angle, "anchor": "start"}],
+        "center_marks": [], "text": text,
+    }
+
+
+def _diameter_leader(ann, seg, view):
+    """引线直径标注:水平文字线 + 折线引线 + 箭头指向圆周"""
+    circ = to_circle(seg)
+    if not circ or not view:
+        return None
+    cx = view["x"] + circ["cx"] * view["scale"]
+    cy = view["y"] + circ["cy"] * view["scale"]
+    r = circ["r"] * view["scale"]
+
+    # 文字左端位置(前端保存的 textPos)
+    text_left = ann.get("textLeft") or {"x": 0, "y": 0}
+    text_x = text_left.get("x", 0)
+    text_y = text_left.get("y", 0)
+
+    # 引线角度
+    angle = ann.get("leaderAngle")
+    if angle is None:
+        angle = -math.pi / 4
+    d = (math.cos(angle), math.sin(angle))
+
+    # 直径值与文字
+    radius = (circ.get("meta") or {}).get("radius")
+    mm_val = radius * 2 if radius else circ["r"] * 2 / (view["k"] or 1.0)
+    text = f"ø{format_mm(mm_val)}"
+
+    # 水平文字线(文字下方 4px)
+    text_gap = 4
+    text_line_start = (text_x, text_y + text_gap)
+    # 估算文字宽度(后端用固定估算,与前端 estimateTextWidth 对齐)
+    text_w = len(text) * 7 + 8 + 10  # 预留肩部
+    text_line_end = (text_x + text_w, text_y + text_gap)
+
+    # 折点 = 水平线右端
+    bend_pt = text_line_end
+
+    # 折点到圆的射线交点
+    dx = bend_pt[0] - cx
+    dy = bend_pt[1] - cy
+    a = d[0] ** 2 + d[1] ** 2  # = 1
+    b = 2 * (dx * d[0] + dy * d[1])
+    c = dx ** 2 + dy ** 2 - r ** 2
+    disc = b ** 2 - 4 * a * c
+    if disc < 0:
+        return None
+    sqrt_disc = math.sqrt(disc)
+    t1 = (-b - sqrt_disc) / (2 * a)
+    t2 = (-b + sqrt_disc) / (2 * a)
+    t = t1 if t1 > 0 else (t2 if t2 > 0 else 1)
+    if t < 1:
+        t = 1
+    edge_pt = (bend_pt[0] + d[0] * t, bend_pt[1] + d[1] * t)
+
+    return {
+        "lines": [],
+        "dim_lines": [
+            (text_line_start, text_line_end),   # 水平文字线
+            (bend_pt, edge_pt),                  # 折线引线
+        ],
+        "arrows": [build_arrow_points(edge_pt, d, False)],
+        "texts": [{"pos": (text_x, text_y), "text": text,
+                   "angle": 0, "anchor": "start"}],
         "center_marks": [], "text": text,
     }
 

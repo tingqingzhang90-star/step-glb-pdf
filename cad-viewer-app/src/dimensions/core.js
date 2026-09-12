@@ -625,6 +625,109 @@ export function createDimensionCore(deps, ctx) {
     return id
   }
 
+  // ===== 引线直径标注(Leader Diameter) =====
+  // 文字在水平线上,引线从文字末端折向圆周,箭头指向圆。
+  // 常用于孔位标注如 "6x Ø22 贯穿"。
+
+  const LEADER_SHOULDER = 10   // 水平肩部长度(px)
+  const LEADER_TEXT_GAP = 4    // 文字与水平线垂直间距(px)
+
+  function buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle = -Math.PI / 4) {
+    if (!edgeRef) return null
+    const { seg, view } = edgeRef
+    const circ = toCircle(seg)
+    if (!circ || !view) return null
+    const cx = view.x + circ.cx * getViewDisplayScale(view)
+    const cy = view.y + circ.cy * getViewDisplayScale(view)
+    const r = circ.r * getViewDisplayScale(view)
+    const dir = { x: Math.cos(leaderAngle), y: Math.sin(leaderAngle) }
+
+    // 文字左端(用户拖拽/鼠标位置),水平向右延伸
+    const textX = textLeft.x
+    const textY = textLeft.y
+
+    // 估算文字宽度,确定肩部起点
+    const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
+    const label = `ø${formatMm(mmVal)}`
+    const textW = estimateTextWidth(label) + 8   // 预留余量
+
+    // 水平线: 文字下方
+    const textLineStart = { x: textX, y: textY + LEADER_TEXT_GAP }
+    const textLineEnd = { x: textX + textW + LEADER_SHOULDER, y: textY + LEADER_TEXT_GAP }
+
+    // 肩部终点(折点): 从这里沿 leaderAngle 方向向圆引线
+    const bendPt = { x: textLineEnd.x, y: textLineEnd.y }
+
+    // 计算折点到圆的射线与圆的交点(取离折点近的那个交点)
+    // 射线参数方程: P = bendPt + t * dir, t > 0
+    // 圆方程: |P - C|^2 = r^2
+    const dx = bendPt.x - cx
+    const dy = bendPt.y - cy
+    const a = dir.x * dir.x + dir.y * dir.y  // = 1
+    const b = 2 * (dx * dir.x + dy * dir.y)
+    const c = dx * dx + dy * dy - r * r
+    const disc = b * b - 4 * a * c
+    if (disc < 0) return null
+    const sqrtDisc = Math.sqrt(disc)
+    const t1 = (-b - sqrtDisc) / (2 * a)
+    const t2 = (-b + sqrtDisc) / (2 * a)
+    // 取正的较小 t(最近的交点)
+    let t = (t1 > 0 ? t1 : (t2 > 0 ? t2 : 0))
+    if (t < 1) t = 1  // 至少走 1px,避免箭头压到折点
+    const edgePt = { x: bendPt.x + dir.x * t, y: bendPt.y + dir.y * t }
+
+    return {
+      type: 'diameter',
+      diameterMode: 'leader',
+      refs: [edgeRefData(edgeRef)],
+      leaderAngle,
+      // 水平文字线段
+      textLineStart,
+      textLineEnd,
+      // 折线引线: 折点 → 圆周
+      leaderBend: bendPt,
+      leaderEnd: edgePt,
+      // 箭头在圆周,方向沿 dir 向外
+      arrow: buildArrowPoints(edgePt, dir, false),
+      // 文字:水平,左对齐
+      textPos: { x: textX, y: textY },
+      textAngle: 0,
+      text: label
+    }
+  }
+
+  function buildDiameterLeaderPreview(edgeRef, mousePos) {
+    if (!edgeRef || !mousePos) return null
+    // 引线角度:从圆心到鼠标方向的反方向(让引线从文字折向圆)
+    const { seg, view } = edgeRef
+    const circ = toCircle(seg)
+    if (!circ || !view) return null
+    const cx = view.x + circ.cx * getViewDisplayScale(view)
+    const cy = view.y + circ.cy * getViewDisplayScale(view)
+    // 文字左端放在鼠标位置左侧一点,引线向右下折向圆
+    const textLeft = { x: mousePos.x - 60, y: mousePos.y }
+    // 引线角度:指向圆的大致方向
+    const angle = Math.atan2(cy - mousePos.y, cx - mousePos.x)
+    return buildDiameterLeaderGeometry(edgeRef, textLeft, angle)
+  }
+
+  function placeDiameterLeaderDim(edgeRef, textLeft, leaderAngle) {
+    const geometry = buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle)
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'diameter',
+      diameterMode: 'leader',
+      refs: [edgeRefData(edgeRef)],
+      leaderAngle: geometry.leaderAngle,
+      textLeft: geometry.textPos,
+      color: ctx.dimensionColor.value,
+      text: geometry.text
+    })
+    return id
+  }
+
   // ===== 角度标注 =====
 
   function buildAngleGeometry(edgeRef1, edgeRef2, radius = 40) {
@@ -730,7 +833,11 @@ export function createDimensionCore(deps, ctx) {
     } else if (dim.type === 'center-mark') {
       geometry = buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
     } else if (dim.type === 'diameter') {
-      geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength)
+      if (dim.diameterMode === 'leader' && dim.textLeft) {
+        geometry = buildDiameterLeaderGeometry(resolveDimRef(dim.refs[0]), dim.textLeft, dim.leaderAngle)
+      } else {
+        geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength)
+      }
     } else if (dim.type === 'angle') {
       geometry = buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
     }
@@ -807,11 +914,18 @@ export function createDimensionCore(deps, ctx) {
       if (!ref) return
       const circ = toCircle(ref.seg)
       if (!circ) return
-      const center = getSheetPoint(ref.view, circ.cx, circ.cy)
-      const r = circ.r * getViewDisplayScale(ref.view)
-      const dist = Math.hypot(mousePos.x - center.x, mousePos.y - center.y)
-      dim.leaderAngle = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
-      dim.leaderLength = Math.max(15, dist - r)
+      if (dim.diameterMode === 'leader') {
+        // 引线模式:拖拽更新文字位置和引线角度
+        dim.textLeft = { x: mousePos.x - 60, y: mousePos.y }
+        const center = getSheetPoint(ref.view, circ.cx, circ.cy)
+        dim.leaderAngle = Math.atan2(center.y - mousePos.y, center.x - mousePos.x)
+      } else {
+        const center = getSheetPoint(ref.view, circ.cx, circ.cy)
+        const r = circ.r * getViewDisplayScale(ref.view)
+        const dist = Math.hypot(mousePos.x - center.x, mousePos.y - center.y)
+        dim.leaderAngle = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
+        dim.leaderLength = Math.max(15, dist - r)
+      }
     } else if (dim.type === 'angle') {
       const first = resolveDimRef(dim.refs[0])
       const second = resolveDimRef(dim.refs[1])
@@ -890,6 +1004,7 @@ export function createDimensionCore(deps, ctx) {
     buildLinearCircleEdgeGeometry,
     buildCenterMarkGeometry,
     buildDiameterGeometry,
+    buildDiameterLeaderGeometry,
     buildAngleGeometry,
     buildMotorEnvelopeGeometry,
     // 放置
@@ -900,6 +1015,7 @@ export function createDimensionCore(deps, ctx) {
     placeMotorEnvelopeDim,
     placeCenterMarkDim,
     placeDiameterDim,
+    placeDiameterLeaderDim,
     placeAngleDim,
     // 渲染与拖拽
     renderDimension,

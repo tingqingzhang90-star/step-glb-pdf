@@ -32,6 +32,15 @@
         <el-button-group>
           <el-button size="small" :type="activeTool === 'linear' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('linear')">线性</el-button>
           <el-button size="small" :type="activeTool === 'diameter' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('diameter')">直径</el-button>
+          <el-dropdown v-if="activeTool === 'diameter'" trigger="click" @command="(cmd) => diameterSubMode = cmd">
+            <el-button size="small">{{ diameterSubMode === 'leader' ? '引线' : '直线' }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="line">直线(贯穿圆心)</el-dropdown-item>
+                <el-dropdown-item command="leader">引线(折线标注)</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button size="small" :type="activeTool === 'angle' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('angle')">角度</el-button>
           <el-button size="small" :type="activeTool === 'center-mark' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('center-mark')">中心</el-button>
           <el-button size="small" :type="activeTool === 'motor-envelope' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('motor-envelope')">电机包络</el-button>
@@ -413,9 +422,19 @@
                 </template>
               </template>
               <template v-if="dimPreview.type === 'diameter'">
-                <line :x1="dimPreview.leaderStart.x" :y1="dimPreview.leaderStart.y" :x2="dimPreview.leaderEnd.x" :y2="dimPreview.leaderEnd.y" class="dim-line" />
-                <polygon v-if="dimPreview.arrow" :points="dimPreview.arrow" class="dim-arrow" />
-                <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" :transform="`rotate(${dimPreview.textAngle * 180 / Math.PI}, ${dimPreview.textPos.x}, ${dimPreview.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dimPreview.text }}</text>
+                <template v-if="dimPreview.diameterMode === 'leader'">
+                  <!-- 引线模式:水平文字线 + 折线引线 -->
+                  <line :x1="dimPreview.textLineStart.x" :y1="dimPreview.textLineStart.y" :x2="dimPreview.textLineEnd.x" :y2="dimPreview.textLineEnd.y" class="dim-line" />
+                  <line :x1="dimPreview.leaderBend.x" :y1="dimPreview.leaderBend.y" :x2="dimPreview.leaderEnd.x" :y2="dimPreview.leaderEnd.y" class="dim-line" />
+                  <polygon v-if="dimPreview.arrow" :points="dimPreview.arrow" class="dim-arrow" />
+                  <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dimPreview.text }}</text>
+                </template>
+                <template v-else>
+                  <!-- 直线模式:贯穿圆心 -->
+                  <line :x1="dimPreview.leaderStart.x" :y1="dimPreview.leaderStart.y" :x2="dimPreview.leaderEnd.x" :y2="dimPreview.leaderEnd.y" class="dim-line" />
+                  <polygon v-if="dimPreview.arrow" :points="dimPreview.arrow" class="dim-arrow" />
+                  <text :x="dimPreview.textPos.x" :y="dimPreview.textPos.y" :transform="`rotate(${dimPreview.textAngle * 180 / Math.PI}, ${dimPreview.textPos.x}, ${dimPreview.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dimPreview.text }}</text>
+                </template>
               </template>
               <template v-if="dimPreview.type === 'angle'">
                 <path :d="dimPreview.arcPath" class="dim-line" fill="none" />
@@ -449,10 +468,20 @@
                 </template>
                 <!-- 直径标注 -->
                 <template v-if="dim.type === 'diameter'">
-                  <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
-                  <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
-                  <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
-                  <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${dim.textAngle * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
+                  <template v-if="dim.diameterMode === 'leader'">
+                    <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-line" />
+                    <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-hit-stroke" />
+                    <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
+                    <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
+                    <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
+                    <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
+                  </template>
+                  <template v-else>
+                    <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
+                    <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
+                    <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
+                    <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${dim.textAngle * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
+                  </template>
                 </template>
                 <!-- 角度标注 -->
                 <template v-if="dim.type === 'angle'">
@@ -758,7 +787,7 @@ watch([config, modelParams], ([cfg, mp]) => {
 const getMotorEnvelope = (view) => motorEnvelope.value[view.name]
 
 const {
-  activeTool, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview, dimDragging,
+  activeTool, diameterSubMode, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview, dimDragging,
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
   dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
   dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,

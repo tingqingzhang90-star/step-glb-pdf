@@ -21,6 +21,7 @@ import { resolveLinearMode, buildPendingPreview, commitPending } from './pending
 export function createDimEngine(deps) {
   const {
     activeTool,
+    diameterSubMode,
     dimHoveredEdge,
     dimFirstEdge,
     dimPending,
@@ -102,7 +103,18 @@ export function createDimEngine(deps) {
     if (activeTool.value === 'diameter') {
       // 直径：点击即放置（圆/圆弧/孔，circle 或可拟合的 polyline）
       if (toCircle(seg)) {
-        const id = core.placeDiameterDim(edgeRef, dimPreview.value?.leaderAngle)
+        let id
+        if (diameterSubMode.value === 'leader') {
+          const mousePos = getSvgMousePoint(event)
+          const preview = dimPreview.value
+          id = core.placeDiameterLeaderDim(
+            edgeRef,
+            preview?.textLeft || (mousePos ? { x: mousePos.x - 60, y: mousePos.y } : { x: 0, y: 0 }),
+            preview?.leaderAngle || -Math.PI / 4
+          )
+        } else {
+          id = core.placeDiameterDim(edgeRef, dimPreview.value?.leaderAngle)
+        }
         if (id) selectDim(id)
       }
       return
@@ -277,7 +289,11 @@ export function createDimEngine(deps) {
     if (activeTool.value === 'diameter') {
       // 直径预览：跟随光标（circle 或可拟合为圆的 polyline）
       if (dimHoveredEdge.value && toCircle(dimHoveredEdge.value.seg)) {
-        dimPreview.value = P.diameter(dimHoveredEdge.value, mousePos)
+        if (diameterSubMode.value === 'leader') {
+          dimPreview.value = core.buildDiameterLeaderPreview(dimHoveredEdge.value, mousePos)
+        } else {
+          dimPreview.value = P.diameter(dimHoveredEdge.value, mousePos)
+        }
       }
       return
     }
