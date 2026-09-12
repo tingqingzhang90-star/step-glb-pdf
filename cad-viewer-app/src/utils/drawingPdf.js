@@ -15,24 +15,38 @@ const UI_LAYER_SELECTOR = [
   'foreignObject'           // 单元格编辑输入框
 ].join(',')
 
-/** 把 :root 上的 CSS 变量收集成 style 字符串。
+/** 收集 :root 上的 CSS 变量(useStyleConfig 注入的共享标注样式),返回 name→value。
  *  SVG 以 <img> 方式光栅化时读不到 document 的样式,必须带进克隆里。 */
-function collectRootCssVars() {
+function collectRootCssVarMap() {
   const cs = getComputedStyle(document.documentElement)
-  const vars = []
+  const varMap = {}
   for (let i = 0; i < cs.length; i++) {
     const prop = cs[i]
     if (prop.startsWith('--')) {
       const v = cs.getPropertyValue(prop).trim()
-      if (v) vars.push(`${prop}: ${v}`)
+      if (v) varMap[prop] = v
     }
   }
-  return vars.join('; ')
+  return varMap
+}
+
+function formatCssVars(varMap) {
+  return Object.keys(varMap).map(prop => `${prop}: ${varMap[prop]}`).join('; ')
+}
+
+/** SVG 图片化后的独立文档里,var() 对根节点自定义属性的引用不生效,
+ *  字号等会落到 fallback(.dim-text 回退 9px,比前端所见大约 1.9 倍)。
+ *  收集规则时直接把 var() 替换成 :root 上的具体值,导出即与屏幕一致。 */
+function resolveCssVars(cssText, varMap) {
+  return cssText.replace(/var\(\s*(--[\w-]+)\s*(?:,\s*([^()]*?)\s*)?\)/g, (match, name, fallback) => {
+    if (varMap[name]) return varMap[name]
+    return fallback || match
+  })
 }
 
 /** 收集页面上"克隆 SVG 里实际用到"的 CSS 规则。
  *  样式都在 <style> 里(类选择器 + CSS 变量),SVG 图片化后外部样式失效,需内联。 */
-function collectCssRules(clone) {
+function collectCssRules(clone, varMap) {
   const classSet = new Set()
   const addClasses = (s) => String(s || '').split(/\s+/).forEach(c => c && classSet.add(c))
   addClasses(clone.getAttribute('class'))
@@ -47,7 +61,7 @@ function collectCssRules(clone) {
       const sel = rule.selectorText || ''
       if (!sel) continue
       for (const c of classSet) {
-        if (sel.includes('.' + c)) { rules.push(rule.cssText); break }
+        if (sel.includes('.' + c)) { rules.push(resolveCssVars(rule.cssText, varMap)); break }
       }
     }
   }
@@ -70,13 +84,14 @@ function cumulativeScale(el, root) {
   return s
 }
 
-/** 把"屏幕恒定线宽"固化为图纸 mm。
- *  non-scaling-stroke 元素在前端任何缩放下都显示 stroke_px 个屏幕像素,
- *  但克隆图光栅化成 <img> 后该特性失效,线宽会按用户单位(mm)解释。
- *  导出前按当前画布缩放换算: mm = 屏幕px / sheetZoom / 累计scale,
- *  内联写回并关掉 vector-effect,PDF 与屏幕所见一致。
+/** 把屏幕所见的外观固化为克隆图的内联样式。
+ *  1) non-scaling-stroke 元素在前端任何缩放下都显示 stroke_px 个屏幕像素,
+ *     但克隆图光栅化成 <img> 后该特性失效,线宽会按用户单位(mm)解释。
+ *     按当前画布缩放换算: mm = 屏幕px / sheetZoom / 累计scale,内联写回并关掉 vector-effect。
+ *  2) 文字字号/字体/颜色直接内联计算值:独立 SVG 文档里 var() 与页面样式表
+ *     都不可靠(字号会落回 fallback),内联后才能保证 PDF 与屏幕一致。
  *  需要把克隆临时挂进 document 才能读计算样式。 */
-function freezeStrokes(clone, sheetZoom) {
+function freezeAppearance(clone, sheetZoom) {
   clone.style.position = 'fixed'
   clone.style.left = '-100000px'
   clone.style.top = '0'
@@ -92,6 +107,13 @@ function freezeStrokes(clone, sheetZoom) {
       el.style.setProperty('stroke-width', mm.toFixed(5))
       el.style.setProperty('vector-effect', 'none')
       el.removeAttribute('vector-effect')
+    }
+    for (const t of clone.querySelectorAll('text')) {
+      const cs = getComputedStyle(t)
+      t.style.setProperty('font-size', cs.fontSize)
+      t.style.setProperty('font-family', cs.fontFamily)
+      t.style.setProperty('font-weight', cs.fontWeight)
+      t.style.setProperty('fill', cs.fill)
     }
   } finally {
     clone.remove()
@@ -191,17 +213,18 @@ export async function exportSheetScreenshotPdf({
   await inlineSymbolImages(clone)
   // 卡片阴影等展示样式不要;换成导出用的 root CSS 变量
   clone.removeAttribute('style')
-  const rootVars = collectRootCssVars()
+  const varMap = collectRootCssVarMap()
+  const rootVars = formatCssVars(varMap)
   if (rootVars) clone.setAttribute('style', rootVars)
 
-  // 2) 屏幕恒定线宽固化为图纸 mm(需临时挂载读计算样式)
-  freezeStrokes(clone, sheetZoom)
+  // 2) 屏幕所见的线宽/文字外观固化为内联样式(需临时挂载读计算样式)
+  freezeAppearance(clone, sheetZoom)
 
   // 3) 导出尺寸 + 内联 CSS
   clone.setAttribute('width', pxW)
   clone.setAttribute('height', pxH)
   clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
-  const cssText = collectCssRules(clone)
+  const cssText = collectCssRules(clone, varMap)
   if (cssText) {
     const styleEl = document.createElementNS('http://www.w3.org/2000/svg', 'style')
     styleEl.textContent = cssText

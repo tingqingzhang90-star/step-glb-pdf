@@ -14,7 +14,26 @@
         <el-divider direction="vertical" />
         <el-button size="small" :disabled="!placedViews.length" @click="exportDrawingDocument">导出源文件</el-button>
         <el-button size="small" type="primary" :loading="exportingPdf" :disabled="!placedViews.length" @click="exportPdf">导出 PDF</el-button>
-        <el-button size="small" @click="triggerImportDoc">导入源文件</el-button>
+        <el-select
+          v-model="selectedSource"
+          placeholder="导入源文件"
+          size="small"
+          filterable
+          clearable
+          :loading="loadingSources"
+          style="width: 168px"
+          title="从 output 目录已生成的源文件选择"
+          @change="onSourcePicked"
+        >
+          <el-option
+            v-for="s in sourceOptions"
+            :key="s.name"
+            :label="s.name + (s.sheet ? ` (${s.sheet})` : '')"
+            :value="s.name"
+          />
+        </el-select>
+        <el-button size="small" :icon="Refresh" :loading="loadingSources" title="刷新源文件列表" @click="loadSourceList" />
+        <el-button size="small" @click="triggerImportDoc" title="从本地文件导入">本地导入</el-button>
         <input ref="fileInputRef" type="file" accept=".json,application/json" style="display:none" @change="onFilePicked" />
       </div>
 
@@ -28,6 +47,7 @@
           <el-button size="small" :icon="ZoomOut" :disabled="!viewsLoaded" @click="zoomCanvas(0.8)">缩小</el-button>
           <el-button size="small" :disabled="!viewsLoaded" @click="resetCanvas">适应</el-button>
         </el-button-group>
+        <div class="mobile-hide">
         <el-divider direction="vertical" />
         <el-button-group>
           <el-button size="small" :type="activeTool === 'linear' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('linear')">线性</el-button>
@@ -84,9 +104,10 @@
         <el-button size="small" type="danger" :icon="Delete" :disabled="!selectedTableId" @click="removeSelectedTable">删表</el-button>
         <el-divider direction="vertical" />
         <el-button size="small" :icon="Delete" :disabled="placedViews.length === 0" @click="clearPlacedViews">清空</el-button>
+        </div>
       </div>
 
-      <div class="toolbar-right">
+      <div class="toolbar-right mobile-hide">
         <span v-if="loadingText" class="status-text">{{ loadingText }}</span>
         <span v-if="lastElapsed" class="status-ok">耗时 {{ lastElapsed }}s</span>
         <span v-if="error" class="status-err">{{ error }}</span>
@@ -700,9 +721,10 @@
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown } from '@element-plus/icons-vue'
+import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
+import { useTouchCanvas } from '@/composables/useTouchCanvas'
 import { useStyleConfig, TABLE_STYLE } from '@/composables/useStyleConfig'
 import { useTablePresets } from '@/composables/useTablePresets'
 import { usePlacedViews } from '@/composables/usePlacedViews'
@@ -732,13 +754,16 @@ import { useTitleBlockBom } from '@/composables/useTitleBlockBom'
 
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
-  sheetAreaRef, sheetSize, sheetWidth, sheetHeight, sheetZoom, sheetPanning, sheetCardStyle,
+  sheetAreaRef, sheetSize, sheetWidth, sheetHeight, sheetZoom, sheetPan, sheetPanning, sheetCardStyle,
   setSheetSize, centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel
 } = useCanvasTransform()
 
+// 移动端查看浏览:单指平移 + 双指缩放(桌面端不接鼠标,无副作用)
+useTouchCanvas({ areaRef: sheetAreaRef, sheetZoom, sheetPan })
+
 // 注入前后端共享样式(标注字号/线宽等 CSS 变量)到 :root。
-// 必须在此处调用:否则 .dim-text 等一直 fallback 到 9px(=9mm),
-// 前端标注文字会比 PDF 大 2.6 倍
+// 必须在此处调用:.dim-text 等字号取自这些变量,缺失时回退 9px(=9mm),
+// 与图纸设定字号不符;导出内联样式也以 :root 上的值为准
 useStyleConfig().applyToRoot()
 
 const sheetSizeOptions = ['A4', 'A3', 'A2', 'A1', 'A0']
@@ -1041,12 +1066,44 @@ function triggerImportDoc() {
   fileInputRef.value?.click()
 }
 
-async function onFilePicked(event) {
-  const file = event.target.files && event.target.files[0]
-  if (!file) return
+// ===== output 目录源文件下拉 =====
+const sourceOptions = ref([])
+const selectedSource = ref('')
+const loadingSources = ref(false)
+
+async function loadSourceList() {
+  loadingSources.value = true
   try {
-    const text = await file.text()
-    const parsed = parseDrawingDocument(text)
+    const res = await fetch('/api/drawing-sources')
+    const data = await res.json()
+    if (data.ok) {
+      sourceOptions.value = data.sources || []
+    }
+  } catch (e) {
+    // 后端未启动或不支持时静默:手动导入仍可用
+  } finally {
+    loadingSources.value = false
+  }
+}
+
+async function onSourcePicked(name) {
+  if (!name) return
+  try {
+    const res = await fetch(`/api/drawing-sources/${encodeURIComponent(name)}`)
+    const data = await res.json()
+    if (!data.ok) { ElMessage.error(data.error || '读取源文件失败'); return }
+    applyDocRaw(data.raw, name)
+  } catch (e) {
+    ElMessage.error(`导入失败: ${e.message}`)
+  } finally {
+    selectedSource.value = ''
+  }
+}
+
+/** 把一份源文件原文(字符串)解析并灌回画布,供文件导入与下拉导入复用 */
+function applyDocRaw(raw, label) {
+  try {
+    const parsed = parseDrawingDocument(raw)
     if (parsed.sheet && parsed.sheet.size) sheetSize.value = parsed.sheet.size
     if (parsed.modelId && models.value.includes(parsed.modelId)) selectedModel.value = parsed.modelId
     applyDrawingDocument(parsed, {
@@ -1056,10 +1113,21 @@ async function onFilePicked(event) {
       titleBlockBom
     })
     if (parsed.droppedAnnotations) {
-      ElMessage.warning(
-        `已跳过 ${parsed.droppedAnnotations} 条标注(它引用的视图不在文件中)`)
+      ElMessage.warning(`已跳过 ${parsed.droppedAnnotations} 条标注(它引用的视图不在文件中)`)
     }
-    ElMessage.success('源文件已载入,可继续编辑')
+    ElMessage.success(`源文件已载入${label ? `: ${label}` : ''},可继续编辑`)
+  } catch (e) {
+    ElMessage.error(`导入失败: ${e.message}`)
+  }
+}
+
+
+async function onFilePicked(event) {
+  const file = event.target.files && event.target.files[0]
+  if (!file) return
+  try {
+    const text = await file.text()
+    applyDocRaw(text, file.name)
   } catch (e) {
     ElMessage.error(`导入失败: ${e.message}`)
   } finally {
@@ -1095,6 +1163,7 @@ async function saveAsTemplate() {
 onMounted(async () => {
   await loadModelList()
   await loadTablePresets()
+  await loadSourceList()
   centerSheet()
   window.addEventListener('mousemove', onGlobalMouseMove)
   window.addEventListener('mouseup', onGlobalMouseUp)
@@ -1458,6 +1527,7 @@ function onModelChange() {
   flex-shrink: 0;
   user-select: none;
   -webkit-user-select: none;
+  touch-action: none;
 }
 
 .placed-view {
@@ -1730,6 +1800,40 @@ function onModelChange() {
 
   .model-select {
     width: 180px;
+  }
+}
+
+/* 移动端查看浏览:隐藏编辑工具、侧栏与状态栏,画布占满,开启触控手势 */
+@media (max-width: 1024px) {
+  .mobile-hide {
+    display: none;
+  }
+
+  .top-toolbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .app-title {
+    display: none;
+  }
+
+  .editor-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .view-palette,
+  .property-panel {
+    display: none;
+  }
+
+  .sheet-area {
+    touch-action: none;
+    padding: 12px;
+  }
+
+  .model-select {
+    width: 150px;
   }
 }
 
