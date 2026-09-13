@@ -1,6 +1,7 @@
 <template>
   <div class="sw-drawing-app">
-    <header class="top-toolbar">
+    <template v-if="!viewMode">
+      <header class="top-toolbar">
       <div class="toolbar-left">
         <span class="app-title">工程图编辑器</span>
         <el-divider direction="vertical" />
@@ -113,9 +114,22 @@
         <span v-if="error" class="status-err">{{ error }}</span>
       </div>
     </header>
+    </template>
 
-    <main class="editor-shell">
-      <aside class="view-palette">
+    <header v-if="viewMode" class="top-toolbar view-toolbar">
+      <div class="toolbar-left">
+        <span class="app-title">工程图预览</span>
+        <el-divider direction="vertical" />
+        <span v-if="viewLoading" class="status-text">加载中...</span>
+        <span v-else-if="selectedModel" class="status-text">{{ selectedModel }}</span>
+      </div>
+      <div class="toolbar-right">
+        <el-button size="small" type="primary" :loading="exportingPdf" :disabled="!placedViews.length" @click="exportPdf">导出 PDF</el-button>
+      </div>
+    </header>
+
+    <main class="editor-shell" :class="{ 'view-mode': viewMode }">
+      <aside v-if="!viewMode" class="view-palette">
         <div class="panel-header">视图调色板</div>
 
         <div v-if="loadingViews" class="panel-empty">
@@ -581,7 +595,7 @@
         </div>
       </section>
 
-      <aside class="property-panel">
+      <aside v-if="!viewMode" class="property-panel">
         <div class="panel-header">属性面板</div>
 
         <section v-if="selectedView" class="property-section">
@@ -740,6 +754,7 @@ import { useTableEdit } from '@/composables/useTableEdit'
 import { buildDrawingDocument, previewDocument } from '@/utils/drawingDocument'
 import { exportSheetScreenshotPdf } from '@/utils/drawingPdf'
 import { parseDrawingDocument, applyDrawingDocument } from '@/utils/loadDrawingDocument'
+import { applySpec } from '@/utils/applySpec'
 import { saveDrawingTemplate } from '@/api/drawingApi'
 import TemplateDrawingPanel from '@/components/TemplateDrawingPanel.vue'
 import TableLayer from '@/components/TableLayer.vue'
@@ -751,6 +766,50 @@ import TableStyleBar from '@/components/TableStyleBar.vue'
 import SymbolPalette from '@/components/SymbolPalette.vue'
 import TitleBlockBomPanel from '@/components/TitleBlockBomPanel.vue'
 import { useTitleBlockBom } from '@/composables/useTitleBlockBom'
+
+// ===== 只读展示模式(供小程序/外部系统通过 ?src=URL 直接打开源文件) =====
+const urlParams = new URLSearchParams(window.location.search)
+const viewMode = ref(urlParams.has('view') || urlParams.has('src'))
+const viewSrc = ref(urlParams.get('src') || '')
+const viewLoading = ref(false)
+
+async function loadViewSource(srcUrl) {
+  if (!srcUrl) return
+  viewLoading.value = true
+  try {
+    const res = await fetch(srcUrl)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const raw = await res.text()
+    const parsed = parseDrawingDocument(raw)
+    // 规格回填:小程序以 ?spec=<JSON> 传入时,直接写进标题栏与参数表,跳过后端 render-drawing
+    const specParam = urlParams.get('spec')
+    if (specParam) {
+      try {
+        // decodeURIComponent 对纯 JSON(无 %) 为无操作,故同时兼容 uni 已解码/未解码两种传入
+        const spec = JSON.parse(decodeURIComponent(specParam))
+        applySpec(parsed, parsed.modelId || urlParams.get('modelId') || '', spec)
+      } catch (se) {
+        console.warn('[spec] 解析失败,跳过规格回填:', se)
+      }
+    }
+    if (parsed.sheet && parsed.sheet.size) sheetSize.value = parsed.sheet.size
+    if (parsed.modelId && models.value.includes(parsed.modelId)) selectedModel.value = parsed.modelId
+    applyDrawingDocument(parsed, {
+      placedViews: { setViews },
+      dimensions: { setDimensions },
+      placedTables: { setTables },
+      titleBlockBom
+    })
+    if (parsed.droppedAnnotations) {
+      ElMessage.warning(`已跳过 ${parsed.droppedAnnotations} 条标注(它引用的视图不在文件中)`)
+    }
+    ElMessage.success('源文件已加载')
+  } catch (e) {
+    ElMessage.error(`加载源文件失败: ${e.message}`)
+  } finally {
+    viewLoading.value = false
+  }
+}
 
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
@@ -1165,6 +1224,9 @@ onMounted(async () => {
   await loadTablePresets()
   await loadSourceList()
   centerSheet()
+  if (viewMode.value && viewSrc.value) {
+    await loadViewSource(viewSrc.value)
+  }
   window.addEventListener('mousemove', onGlobalMouseMove)
   window.addEventListener('mouseup', onGlobalMouseUp)
   window.addEventListener('pointermove', onPalettePointerMove)
@@ -1370,6 +1432,10 @@ function onModelChange() {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.editor-shell.view-mode {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .view-palette,

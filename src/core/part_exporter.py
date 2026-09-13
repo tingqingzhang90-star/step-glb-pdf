@@ -51,6 +51,7 @@ _SW_LOAD_ERRORS = {
     23: "文件是更高版本(本机 SolidWorks 版本过低,打不开用更新版本保存的文件)",
     24: "需要强制重建",
     26: "大装配体审阅模式",
+    65536: "同名文档已在 SolidWorks 中打开(代码将自动复用已打开的文档;若仍失败请先关闭该文件)",
 }
 
 
@@ -143,11 +144,41 @@ def collect_components(asm, search_dirs):
     return [_component_state(c, search_dirs) for c in (asm.GetComponents(False) or [])]
 
 
+def _already_open_model(sw, path):
+    """文档已被同一 SW 实例打开时(如用户在界面里开着),取回已打开的模型"""
+    try:
+        docs = sw.GetDocuments()
+    except Exception:
+        return None
+    if not docs:
+        return None
+    target = os.path.abspath(path).lower()
+    for doc in docs:
+        try:
+            p = doc.GetPathName
+            if callable(p):
+                p = p()
+        except Exception:
+            continue
+        if p and os.path.abspath(p).lower() == target:
+            return doc
+    return None
+
+
 def _open(sw, path, doc_type):
-    """打开文档,返回 (model, 错误码, 警告码)。model 为 None 表示打开失败"""
+    """打开文档,返回 (model, 错误码, 警告码, 是否复用已打开文档)。
+
+    model 为 None 表示打开失败;borrowed=True 时该模型是 SW 中已打开的,
+    调用方不应 CloseDoc(否则会关掉用户界面里打开的文件)。
+    """
     errors, warnings = _int_ref(), _int_ref()
     model = sw.OpenDoc6(path, doc_type, SW_OPEN_SILENT, "", errors, warnings)
-    return model, errors.value, warnings.value
+    borrowed = False
+    if model is None:
+        # OpenDoc6 返回空但文档可能已在 SW 中打开(错误码 65536),直接复用
+        model = _already_open_model(sw, path)
+        borrowed = model is not None
+    return model, errors.value, warnings.value, borrowed
 
 
 def _load_error_text(code, path):
@@ -163,7 +194,7 @@ def preview_components(series, assembly=None):
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")
         sw.Visible = False
-        model, err, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
+        model, err, _, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
         if model is None:
             raise RuntimeError(_load_error_text(err, asm_path))
         return {"assembly": asm_path, "components": collect_components(model, search)}
@@ -176,7 +207,7 @@ def export_single_part(sw, part_path, step_output):
     if not os.path.exists(part_path):
         return False
     part_name = os.path.basename(part_path)
-    doc, _, _ = _open(sw, part_path, SW_DOC_PART)
+    doc, _, _, borrowed = _open(sw, part_path, SW_DOC_PART)
     if doc is None:
         return False
     sw.SetUserPreferenceIntegerValue(SW_USER_PREF_STEP_AP, SW_STEP_AP214)
@@ -189,10 +220,12 @@ def export_single_part(sw, part_path, step_output):
                                   SW_SAVE_OPTIONS_NONE, _nothing(), errors, warnings)
     except Exception:
         ok = False
-    try:
-        sw.CloseDoc(part_name)
-    except Exception:
-        pass
+    # 借用的文档(用户已在 SW 中打开)不能关,否则会关掉界面里的文件
+    if not borrowed:
+        try:
+            sw.CloseDoc(part_name)
+        except Exception:
+            pass
     return bool(ok) and os.path.exists(step_output) and os.path.getsize(step_output) > 0
 
 
@@ -255,7 +288,7 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")
         sw.Visible = False
-        model, err, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
+        model, err, _, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
         if model is None:
             raise RuntimeError(_load_error_text(err, asm_path))
         comps = collect_components(model, [os.path.dirname(asm_path), paths.LIB_ROOT])

@@ -85,16 +85,40 @@ def resolve_motor(config, motor):
     """确定本系列的电机:指定了要校验在可选范围内,未指定取系列默认
 
     各系列电机表不同(250 是 kw 三相电机,JDG 是汇川伺服),写死默认值
-    会让新系列拿到别的系列电机。
+    会让新系列拿到别的系列电机。motor 既可能是编号(D55),也可能是电机名
+    (5.5KW电机),统一归一为配置里的 key(编号)再查表。
     """
-    available = list(config.get("motor", {}).keys())
+    motor_cfg = config.get("motor", {})
+    available = list(motor_cfg.keys())
     if not available:
         return motor
-    if motor and motor not in available:
-        raise ValueError(f"本系列没有电机「{motor}」,可选: {available}")
+
+    # 名称 → 编号(仅 MOTOR_CODES 覆盖的 250 系列有效)
+    code_by_name = {name: code for code, name in MOTOR_CODES.items()}
+
+    def to_key(m):
+        if m in available:
+            return m
+        if m in code_by_name and code_by_name[m] in available:
+            return code_by_name[m]
+        for k, v in motor_cfg.items():  # 退一步:与配置里存的原始写法匹配
+            if v.get("name") == m:
+                return k
+        return None
+
     if not motor:
-        return DEFAULT_MOTOR if DEFAULT_MOTOR in available else available[0]
-    return motor
+        if DEFAULT_MOTOR in available:
+            return DEFAULT_MOTOR
+        if code_by_name.get(DEFAULT_MOTOR) in available:
+            return code_by_name[DEFAULT_MOTOR]
+        return available[0]
+
+    key = to_key(motor)
+    if key is None:
+        opts = [f"{k}({motor_cfg[k]['name']})" if motor_cfg[k].get("name") else k
+                for k in available]
+        raise ValueError(f"本系列没有电机「{motor}」,可选: {opts}")
+    return key
 
 
 def check_env():
@@ -1108,6 +1132,15 @@ def build_assembly(model_code, motor=None, series=None):
         series_name = f"{sel['series']}直连"
     else:
         series_name = f"{sel['series']}折返"
+
+    # 显式 series 找不到配置时(如前端误传 JDG 项目名 YRJ250),
+    # 回退按型号编码推导,避免旧前端包直接报 FileNotFoundError
+    if not os.path.exists(paths.config_path(series_name)):
+        derived = (f"{sel['series']}直连" if sel['type'].upper() == 'E'
+                   else f"{sel['series']}折返")
+        if series and derived != series_name:
+            log(f"指定系列 {series_name} 无配置,回退按型号推导: {derived}")
+            series_name = derived
 
     # 加载配置
     config_path = paths.config_path(series_name)

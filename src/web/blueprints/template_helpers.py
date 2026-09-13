@@ -61,6 +61,34 @@ def load_template_doc(template_id):
         return None, (jsonify({"ok": False, "error": f"模板读取失败: {e}"}), 500)
 
 
+def find_template_by_identity(identity):
+    """在已保存模板中查找指定系列身份(型号前三段)的模板
+
+    一个有系列可能保存过多个基准型号模板,这里挑标注最多的一个(视图/标注
+    更全,重绑成功率更高)。返回 (template_id, doc);无匹配返回 (None, None)。
+    """
+    if not identity or not os.path.isdir(TEMPLATES_DIR):
+        return None, None
+    best = None  # (score, template_id, doc)
+    for name in sorted(os.listdir(TEMPLATES_DIR)):
+        if not name.endswith(".json"):
+            continue
+        path = os.path.join(TEMPLATES_DIR, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                doc = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        doc_identity = doc.get("template_identity") or template_identity(
+            doc.get("model_id", ""))
+        if doc_identity != identity:
+            continue
+        score = len(doc.get("annotations", [])) * 100 + len(doc.get("views", []))
+        if best is None or score > best[0]:
+            best = (score, doc.get("model_id") or name[:-5], doc)
+    return (best[1], best[2]) if best else (None, None)
+
+
 def reject_cross_series(models, tmpl_identity):
     """不同系列几何差异过大,共用模板无意义,返回被拒型号列表"""
     rejected = [m for m in models if template_identity(m) != tmpl_identity]

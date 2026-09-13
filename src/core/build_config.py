@@ -58,10 +58,17 @@ def parse_feature_list(s):
 
 
 def strip_code(s):
-    """'H2(底部安装方式)' → 'H2';'K1(螺纹头)' → 'K1'"""
+    """'H2(底部安装方式)' → 'H2';'K1(螺纹头)' → 'K1';'D55(5.5KW电机）' → 'D55'
+
+    兼容半角 '(' 与全角 '（',取第一个括号前的内容。
+    """
     if not s:
         return ""
-    return str(s).split("(")[0].strip()
+    s = str(s)
+    for ch in ("(", "（"):
+        if ch in s:
+            return s.split(ch)[0].strip()
+    return s.strip()
 
 
 def read_xlsx_rows(path):
@@ -91,11 +98,16 @@ def build_mount_or_load(rows, label):
 
 
 def build_motor(rows):
-    """电机表 → {电机型号: {reducer, on:[...], off:[...]}}
+    """电机表 → {电机编号: {name, reducer, on:[...], off:[...]}}
 
-    两种表结构并存:[电机, 减速机, OnFeature, OffFeature] 与
-    [电机减速机, OnFeature, OffFeature]。按表头定位列,不按下标硬取,
-    否则少一列的系列(JDG 等)会 IndexError。
+    支持两种表头:
+      1) [电机, 减速机, OnFeature, OffFeature]   # 250:电机列写法"D55(5.5KW电机）"
+      2) [电机减速机, OnFeature, OffFeature]      # JDG 等无减速机/编号列
+    电机列既可是"D55(5.5KW电机）"合并写法,也可是纯名称/纯编号。按表头定位列,
+    不按下标硬取,否则少一列的系列(JDG 等)会 IndexError。
+
+    配置 key 统一用 strip_code 抽出的编号(便于型号里写编号),原始写法存回 name,
+    供 UI 展示与按名称反查。
     """
     header = [str(c).strip().lower() if c else "" for c in rows[0]]
     if "onfeature" in header and "offfeature" in header:
@@ -109,8 +121,13 @@ def build_motor(rows):
     for r in rows[1:]:  # 跳过表头
         if not r or not r[0]:
             continue
+        raw = str(r[0]).strip()
+        code = strip_code(raw)
+        if not code:
+            continue
         reducer = r[idx_reducer] if idx_reducer is not None and idx_reducer < len(r) else ""
-        cfg[str(r[0]).strip()] = {
+        cfg[code] = {
+            "name": raw,
             "reducer": str(reducer).strip() if reducer else "",
             "on": parse_feature_list(r[idx_on]) if idx_on < len(r) else [],
             "off": parse_feature_list(r[idx_off]) if idx_off < len(r) else [],

@@ -17,11 +17,51 @@ from flask import Blueprint, jsonify, request
 
 from web import common
 from web.drawing_spec_map import find_drawing_source, apply_spec
+from web.blueprints import template_helpers as th
 from drawing.drawing_source_render import render_drawing_source_pdf
 
 bp = Blueprint("render", __name__)
 
 _OUT_NAME = "drawing.pdf"
+
+
+def _try_autogen_drawing_source(model_id):
+    """drawing_source.json 缺失时,用同系列已保存的前端模板自动生成。
+
+    返回 (源文件路径, 错误说明)。仅在以下情况才会真正触发 OCC 重绑:
+      1) 该系列存在已保存的前端模板;
+      2) 本型号已生成 3D 模型(assembly.step/brep 存在)。
+    否则返回 (None, 错误说明/None),由调用方回退到原来的 404。
+    """
+    try:
+        identity = th.template_identity(model_id)
+        template_id, template_doc = th.find_template_by_identity(identity)
+    except Exception:
+        return None, None
+    if not template_doc:
+        return None, None
+
+    model_dir = os.path.join(common.OUT_DIR, model_id)
+    if not os.path.isdir(model_dir):
+        return None, None
+    has_shape = (os.path.isfile(os.path.join(model_dir, "assembly.step")) or
+                 os.path.isfile(os.path.join(model_dir, "assembly.brep")))
+    if not has_shape:
+        return None, (
+            f"未找到型号 {model_id} 的 drawing_source.json,"
+            f"且本型号尚未生成 3D 模型(缺少 assembly.step/brep),无法用模板重绑生成")
+
+    try:
+        results, err = th.generate_frontend_batch(
+            template_id, template_doc, [model_id])
+    except Exception as e:
+        return None, f"用模板自动生成失败: {e}"
+    if err is not None:
+        # err 为 (jsonify, code) 元组;给出明确文案,不再手动解析 Response
+        return None, "用模板自动生成失败(基准视图生成或出图异常)"
+    if not results or not results[0].get("ok"):
+        return None, f"用模板自动生成失败: {results[0].get('error') if results else '无结果'}"
+    return find_drawing_source(model_id), None
 
 
 @bp.route("/api/render-drawing", methods=["POST"])
@@ -34,13 +74,14 @@ def api_render_drawing():
 
     src_path = find_drawing_source(model_id)
     if not src_path:
-        return jsonify({
-            "ok": False,
-            "error": (
-                f"未找到型号 {model_id} 的 drawing_source.json,"
-                "请先在 cad-viewer-app 预生成或确认同系列模板已存在"
-            )
-        }), 404
+        # 自闭环:同系列已有模板时,自动重绑生成 drawing_source.json 再出图,
+        # 不必每次手动预跑模板流程。
+        src_path, gen_err = _try_autogen_drawing_source(model_id)
+    if not src_path:
+        reason = gen_err or (
+            f"未找到型号 {model_id} 的 drawing_source.json,"
+            "且未找到同系列已保存的前端模板,请先在 cad-viewer-app 预生成模板")
+        return jsonify({"ok": False, "error": reason}), 404
 
     try:
         with open(src_path, "r", encoding="utf-8") as f:

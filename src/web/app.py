@@ -32,6 +32,14 @@ def create_app() -> Flask:
     env_settings.load_env(common.PROJECT_ROOT)
     app = Flask(__name__)
 
+    # 小程序 H5 / 跨域联调需要:放开 CORS(本地调试用,生产可改白名单)
+    @app.after_request
+    def _cors(resp):
+        resp.headers.set("Access-Control-Allow-Origin", "*")
+        resp.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        resp.headers.set("Access-Control-Allow-Headers", "Content-Type")
+        return resp
+
     # OCC 任务池懒创建于子进程;此处仅初始化单例(读 worker 数、建日志目录)
     task_pool.get_pool()
 
@@ -73,7 +81,10 @@ def main() -> None:
           f" (环境变量 BUILD_POOL_WORKERS 可调)")
     print("=" * 56)
     try:
-        app.run(host="127.0.0.1", port=5001, debug=False, threaded=True)
+        # 默认监听 0.0.0.0,这样局域网内小程序/模拟器才能访问 192.168.1.6:5001;
+        # 需要仅本机时设环境变量 STEP_HOST=127.0.0.1 即可
+        host = os.environ.get("STEP_HOST", "0.0.0.0")
+        app.run(host=host, port=5001, debug=False, threaded=True)
     finally:
         task_pool.get_pool().shutdown(wait=False)
 
