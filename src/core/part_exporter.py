@@ -36,6 +36,23 @@ SW_STEP_AP214 = 2
 # 跨系列通用的标准件(电机/减速机),导出后统一移入 library/shared
 SHARED_KEYWORDS = ("kw", "ab180")
 
+# SolidWorks swFileLoadError_e(部分):OpenDoc6 打开失败的具体原因
+_SW_LOAD_ERRORS = {
+    0: "无错误",
+    1: "文件类型无效",
+    2: "文件不存在",
+    4: "导入失败",
+    5: "文档已打开",
+    8: "无法确定版本",
+    12: "一般错误",
+    13: "无法打开",
+    17: "不支持的文件",
+    18: "已在另一个实例中打开",
+    23: "文件是更高版本(本机 SolidWorks 版本过低,打不开用更新版本保存的文件)",
+    24: "需要强制重建",
+    26: "大装配体审阅模式",
+}
+
 
 def _int_ref():
     """SW COM 需要的 byref int 输出参数(errors / warnings)"""
@@ -127,8 +144,15 @@ def collect_components(asm, search_dirs):
 
 
 def _open(sw, path, doc_type):
+    """打开文档,返回 (model, 错误码, 警告码)。model 为 None 表示打开失败"""
     errors, warnings = _int_ref(), _int_ref()
-    return sw.OpenDoc6(path, doc_type, SW_OPEN_SILENT, "", errors, warnings)
+    model = sw.OpenDoc6(path, doc_type, SW_OPEN_SILENT, "", errors, warnings)
+    return model, errors.value, warnings.value
+
+
+def _load_error_text(code, path):
+    reason = _SW_LOAD_ERRORS.get(code, f"未知错误码 {code}")
+    return f"打开装配体失败({reason}): {path}"
 
 
 def preview_components(series, assembly=None):
@@ -139,9 +163,9 @@ def preview_components(series, assembly=None):
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")
         sw.Visible = False
-        model = _open(sw, asm_path, SW_DOC_ASSEMBLY)
+        model, err, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
         if model is None:
-            raise RuntimeError(f"打开装配体失败: {asm_path}")
+            raise RuntimeError(_load_error_text(err, asm_path))
         return {"assembly": asm_path, "components": collect_components(model, search)}
     finally:
         pythoncom.CoUninitialize()
@@ -152,7 +176,7 @@ def export_single_part(sw, part_path, step_output):
     if not os.path.exists(part_path):
         return False
     part_name = os.path.basename(part_path)
-    doc = _open(sw, part_path, SW_DOC_PART)
+    doc, _, _ = _open(sw, part_path, SW_DOC_PART)
     if doc is None:
         return False
     sw.SetUserPreferenceIntegerValue(SW_USER_PREF_STEP_AP, SW_STEP_AP214)
@@ -231,9 +255,9 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")
         sw.Visible = False
-        model = _open(sw, asm_path, SW_DOC_ASSEMBLY)
+        model, err, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
         if model is None:
-            raise RuntimeError(f"打开装配体失败: {asm_path}")
+            raise RuntimeError(_load_error_text(err, asm_path))
         comps = collect_components(model, [os.path.dirname(asm_path), paths.LIB_ROOT])
         emit("start", {"series": series, "assembly": asm_path, "total": len(comps)})
 
