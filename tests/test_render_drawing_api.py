@@ -1,0 +1,98 @@
+# -*- coding: utf-8 -*-
+"""render 出图端点测试
+
+覆盖 POST /api/render-drawing:同系列复用 drawing_source.json、规格回填、
+渲染出 PDF,且只写可编辑内容、不触发几何 build。
+
+用真实 output 下的某份 drawing_source.json 作为只读夹具,复制到 tmp_path 后
+monkeypatch OUT_DIR,落盘与源文件均不污染真实目录。
+"""
+import glob
+import json
+import os
+import shutil
+import sys
+
+import pytest
+
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
+
+from web import common, app as web_app  # noqa: E402
+from web.drawing_spec_map import find_drawing_source  # noqa: E402
+
+
+def _find_fixture_source():
+    hits = glob.glob(os.path.join(common.OUT_DIR, "*", "drawing_source.json"))
+    return hits[0] if hits else None
+
+
+@pytest.fixture
+def client_and_model(tmp_path, monkeypatch):
+    src = _find_fixture_source()
+    if not src:
+        pytest.skip("真实 output 下无 drawing_source.json 夹具")
+    model_id = os.path.basename(os.path.dirname(src))
+    dest_dir = tmp_path / model_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy(src, dest_dir / "drawing_source.json")
+    monkeypatch.setattr(common, "OUT_DIR", str(tmp_path))
+    web_app.app.config["TESTING"] = True
+    return web_app.app.test_client(), model_id
+
+
+def test_render_ok_and_fills_spec(client_and_model):
+    client, model_id = client_and_model
+    src_path = os.path.join(common.OUT_DIR, model_id, "drawing_source.json")
+    with open(src_path, "r", encoding="utf-8") as f:
+        before_source = f.read()
+    spec = {
+        "motor": "5.5KW电机",
+        "motorPower": "5.5",
+        "motorRatedSpeed": "3000",
+        "motorMaxSpeed": "4500",
+        "travel": "10",
+        "reductionRatio": "2",
+        "screwThrust": "5000",
+        "ratedSpeed": "500",
+        "sizeStandard": "标准",
+        "remark": "测试备注",
+    }
+    res = client.post("/api/render-drawing",
+                      json={"model_id": model_id, "spec": spec})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    assert body["pdf_url"].endswith("drawing.pdf")
+
+    pdf_path = os.path.join(common.OUT_DIR, model_id, "drawing.pdf")
+    assert os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 0
+
+    # 源文件未被写回:端点只渲染 PDF,不落盘 drawing_source.json
+    src_path = os.path.join(common.OUT_DIR, model_id, "drawing_source.json")
+    with open(src_path, "r", encoding="utf-8") as f:
+        after = f.read()
+    assert after == before_source, "端点不应修改 drawing_source.json"
+
+
+def test_render_rejects_empty_model(client_and_model):
+    client, _ = client_and_model
+    res = client.post("/api/render-drawing", json={"model_id": "", "spec": {}})
+    assert res.status_code == 400
+    assert res.get_json()["ok"] is False
+
+
+def test_render_404_when_source_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "OUT_DIR", str(tmp_path))
+    web_app.app.config["TESTING"] = True
+    client = web_app.app.test_client()
+    res = client.post("/api/render-drawing",
+                      json={"model_id": "250-E-H2K1-L999-无此型号电机", "spec": {}})
+    assert res.status_code == 404
+    assert res.get_json()["ok"] is False
+
+
+def test_find_drawing_source_uses_safe_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(common, "OUT_DIR", str(tmp_path))
+    assert find_drawing_source("../etc/passwd") is None
+    assert find_drawing_source("") is None

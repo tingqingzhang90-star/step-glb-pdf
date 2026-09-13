@@ -44,10 +44,12 @@ def create_app() -> Flask:
     from web.blueprints.symbols import bp as symbols_bp
     from web.blueprints.table_presets import bp as table_presets_bp
     from web.blueprints.drawing_sources import bp as drawing_sources_bp
+    from web.blueprints.render import bp as render_bp
 
     for bp in (assembly_bp, drawing_bp, template_bp,
                sw_view_bp, part_export_bp, sw_compare_bp,
-               symbols_bp, table_presets_bp, drawing_sources_bp):
+               symbols_bp, table_presets_bp, drawing_sources_bp,
+               render_bp):
         app.register_blueprint(bp)
     return app
 
