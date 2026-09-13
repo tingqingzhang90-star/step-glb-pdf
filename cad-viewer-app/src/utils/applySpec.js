@@ -79,12 +79,18 @@ function findParamTable(doc) {
   return null
 }
 
-function setCell(table, r, c, text) {
+function findCell(table, r, c) {
   for (const cell of table.cells || []) {
-    if (cell.r === r && cell.c === c) {
-      cell.text = text
-      return true
-    }
+    if (cell.r === r && cell.c === c) return cell
+  }
+  return null
+}
+
+function setCell(table, r, c, text) {
+  const cell = findCell(table, r, c)
+  if (cell) {
+    cell.text = text
+    return true
   }
   return false
 }
@@ -124,7 +130,14 @@ export function applySpec(doc, modelId, spec, seriesCfg = null) {
   if (!table) return doc
   const put = (label, text) => {
     const rc = PARAM_CELLS[label]
-    if (rc) setCell(table, rc[0], rc[1], text)
+    if (!rc) return
+    setCell(table, rc[0], rc[1], text)
+    // 保持值单元格字号与左侧标签一致,避免回填后字体大小不一
+    const labelCell = findCell(table, rc[0], rc[1] - 1)
+    const valueCell = findCell(table, rc[0], rc[1])
+    if (labelCell && valueCell && labelCell.font_size != null) {
+      valueCell.font_size = labelCell.font_size
+    }
   }
 
   put('产品型号', modelId)
