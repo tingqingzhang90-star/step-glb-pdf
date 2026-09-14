@@ -12,7 +12,8 @@ import json
 import os
 
 from web import common
-from web.blueprints.template_helpers import find_template_by_identity
+from web.blueprints.template_helpers import (
+    find_template_by_identity, load_template_defaults, load_template_index)
 
 
 def _series_type_from_name(name):
@@ -69,25 +70,45 @@ def enumerate_template_identities():
     return identities
 
 
+def _template_state(identity, index, defaults):
+    """单个身份的模板状态:采用的模板、是否人工指定、可选的候选模板
+
+    候选 = 该身份下已保存的全部模板,供看板下拉人工指定;指定后 saved/
+    pinned 都指向那一份,不再走"标注最多"的自动挑选。
+    """
+    candidates = sorted(
+        (i for i in index if i["identity"] == identity),
+        key=lambda i: (-i["annotation_count"], -i["view_count"], i["template_id"]))
+    chosen = defaults.get(identity)
+    tpl_id, doc = find_template_by_identity(identity, index=index)
+    if doc:
+        state = {
+            "saved": True,
+            "template_id": tpl_id,
+            "view_count": len(doc.get("views", [])),
+            "annotation_count": len(doc.get("annotations", [])),
+            "pinned": bool(chosen and tpl_id == chosen),
+        }
+    else:
+        state = {"saved": False, "template_id": None,
+                 "view_count": 0, "annotation_count": 0, "pinned": False}
+    state["candidates"] = [
+        {"template_id": c["template_id"], "view_count": c["view_count"],
+         "annotation_count": c["annotation_count"]} for c in candidates]
+    return state
+
+
 def coverage():
-    """逐个身份的覆盖度:模型是否生成、模板是否已保存"""
+    """逐个身份的覆盖度:模型是否生成、模板是否已保存、可指定哪些模板"""
+    index = load_template_index()
+    defaults = load_template_defaults()
     rows = []
     for item in enumerate_template_identities():
         base = item["base_model"]
         step_path = os.path.join(common.OUT_DIR, base, "assembly.step")
         model_built = os.path.isfile(step_path)
-        tpl_id, doc = find_template_by_identity(item["identity"])
-        if doc:
-            template = {
-                "saved": True,
-                "template_id": tpl_id,
-                "view_count": len(doc.get("views", [])),
-                "annotation_count": len(doc.get("annotations", [])),
-            }
-        else:
-            template = {"saved": False, "template_id": None,
-                        "view_count": 0, "annotation_count": 0}
-        rows.append({**item, "model_built": model_built, "template": template})
+        rows.append({**item, "model_built": model_built,
+                     "template": _template_state(item["identity"], index, defaults)})
     return rows
 
 

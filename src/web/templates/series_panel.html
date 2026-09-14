@@ -45,6 +45,10 @@
   .row-btn.gen.run{background:var(--warn)}
   .row-btn.annot{background:var(--accent2);color:#06281b}
   .row-btn.annot:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
+  .tpl-cell{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+  .tpl-pick{max-width:230px;padding:4px 6px;font-size:12px;border-radius:6px;
+            background:var(--panel2);color:var(--txt);border:1px solid var(--border)}
+  .tpl-pick:hover{border-color:var(--accent)}
   .empty{color:var(--txt2);text-align:center;padding:30px 0}
   .note{font-size:12px;color:var(--txt2);margin-top:10px;line-height:1.6}
   .note code{color:var(--accent);font-family:Consolas,monospace}
@@ -68,6 +72,8 @@
   <p class="note">
     每个模板身份(如 <code>250-E-H2K1</code>)只自动生成基准模型(L100 + 首电机),
     标注需人工在<code>模板标注编辑器</code>完成。"去标注"会打开编辑器并自动载入该基准模型。
+    同一身份下已保存多份模板时,可在「模板」列下拉指定该身份出图统一采用的那一份;
+    未指定则按标注最多的自动挑选。
   </p>
 </div>
 
@@ -94,6 +100,29 @@ function badge(ok, run) {
   return ok ? '<span class="badge ok">已生成</span>' : '<span class="badge no">缺失</span>';
 }
 
+function esc(s) {
+  return String(s).replace(/[&<>"]/g,
+    c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+}
+
+/** 模板格:状态徽标 + 已存模板下拉(无候选时只显示徽标) */
+function tplCell(r) {
+  const t = r.template;
+  const tag = t.saved
+    ? `<span class="badge ok">已标注 ${t.annotation_count} 注 / ${t.view_count} 视图</span>`
+    : '<span class="badge no">未标注</span>';
+  if (!t.candidates.length) return tag;
+  const opts = ['<option value="">自动(标注最多)</option>'].concat(
+    t.candidates.map(c => {
+      const on = t.pinned && c.template_id === t.template_id ? ' selected' : '';
+      return `<option value="${esc(c.template_id)}"${on}>` +
+        `${esc(c.template_id)}(${c.annotation_count} 注)</option>`;
+    })).join('');
+  return `<div class="tpl-cell">${tag}
+    <select class="tpl-pick" data-act="pin" data-identity="${esc(r.identity)}"
+      title="指定本身份生成工程图时统一采用的模板">${opts}</select></div>`;
+}
+
 function renderGroups(rows) {
   const bySeries = {};
   for (const r of rows) (bySeries[r.series] ||= []).push(r);
@@ -109,20 +138,17 @@ function renderGroups(rows) {
     const table = document.createElement('table');
     table.innerHTML = `<thead><tr>
       <th>连接</th><th>安装×负载</th><th>基准型号</th>
-      <th>基准模型</th><th>模板</th><th>操作</th></tr></thead>`;
+      <th>基准模型</th><th>模板 / 指定</th><th>操作</th></tr></thead>`;
     const tbody = document.createElement('tbody');
     for (const r of list) {
       const tr = document.createElement('tr');
       tr.dataset.base = r.base_model;
-      const tpl = r.template.saved
-        ? `<span class="badge ok">已标注 ${r.template.annotation_count} 注 / ${r.template.view_count} 视图</span>`
-        : `<span class="badge no">未标注</span>`;
       tr.innerHTML = `
         <td>${r.type}</td>
         <td class="mono">${r.mount}${r.load}</td>
         <td class="mono">${r.base_model}</td>
         <td data-cell="model">${badge(r.model_built, false)}</td>
-        <td data-cell="tpl">${tpl}</td>
+        <td data-cell="tpl">${tplCell(r)}</td>
         <td>
           <button class="row-btn gen" data-act="gen" ${r.model_built ? 'disabled' : ''}>生成模型</button>
           <button class="row-btn annot" data-act="annot" ${r.model_built ? '' : 'disabled'}>去标注</button>
@@ -204,6 +230,25 @@ async function genAll() {
   setTimeout(refresh, 500);
 }
 
+async function pinTemplate(sel) {
+  sel.disabled = true;
+  try {
+    const res = await fetch('/api/series/template-default', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        identity: sel.dataset.identity, template_id: sel.value || null
+      })
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '指定失败');
+  } catch (e) {
+    alert(`指定模板失败:${e.message}`);
+  } finally {
+    sel.disabled = false;
+    refresh();
+  }
+}
+
 function bindRows() {
   $('#groups').addEventListener('click', e => {
     const btn = e.target.closest('.row-btn');
@@ -212,6 +257,10 @@ function bindRows() {
     const base = tr.dataset.base;
     if (btn.dataset.act === 'gen') genModel(base, tr);
     if (btn.dataset.act === 'annot') window.open(`/editor?model=${encodeURIComponent(base)}`, '_blank');
+  });
+  $('#groups').addEventListener('change', e => {
+    const sel = e.target.closest('select[data-act="pin"]');
+    if (sel) pinTemplate(sel);
   });
 }
 
