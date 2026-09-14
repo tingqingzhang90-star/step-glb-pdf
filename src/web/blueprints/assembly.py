@@ -175,6 +175,35 @@ def api_build_info(model_code):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@bp.route("/api/resources/<model_code>")
+def api_resources(model_code):
+    """查询某型号已生成的资源,供前端"同型号复用"命中判断(只读,不触发构建)
+
+    同型号(型号前缀一致)已有产物时前端可直接取路径,跳过 OCC 构建。
+    cached 要求 3D(glb+step)与工程图源都已在盘上。
+    """
+    model_dir = os.path.join(common.OUT_DIR, model_code)
+
+    def rel(name):
+        return f"{model_code}/{name}" if os.path.isfile(os.path.join(model_dir, name)) else None
+
+    glb_file = rel("assembly.glb")
+    step_file = rel("assembly.step")
+    cylinder_file = rel("cylinder.step")
+    source_file = rel("drawing_source.json")
+    pdf_file = rel("drawing.pdf")
+    model_available = bool(glb_file and step_file)
+    return jsonify({
+        "ok": True,
+        "model_code": model_code,
+        "cached": model_available and bool(source_file),
+        "model": {"available": model_available, "glb_file": glb_file, "step_file": step_file},
+        "cylinder": {"available": bool(cylinder_file), "file": cylinder_file},
+        "drawing_source": {"available": bool(source_file), "file": source_file},
+        "drawing": {"available": bool(pdf_file), "pdf_url": pdf_file},
+    })
+
+
 @bp.route("/download/<path:filename>")
 def download(filename):
     return send_from_directory(common.OUT_DIR, filename, as_attachment=True)
