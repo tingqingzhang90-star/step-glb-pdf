@@ -73,12 +73,23 @@ def _stroke_number(model_id, spec):
     return int(m.group(1)) if m else None
 
 
+def _motor_name(motor_key, series_cfg):
+    """电机的完整写法:优先系列配置里的 name,其次全局编号表,最后原样返回 key
+
+    型号末段写编号(D75B)时,刹车/功率信息只存在 name 里,判定刹车必须走这里。
+    """
+    if not motor_key:
+        return ""
+    mc = (series_cfg or {}).get("motor", {}).get(motor_key) or {}
+    return mc.get("name") or rb.MOTOR_CODES.get(motor_key) or str(motor_key)
+
+
 def format_motor_installation(model_id, motor_key, series_cfg):
     """电机安装方式:方向(直连/折返) + 刹车 + 减速机"""
     sel = rb.parse_model_code(model_id)
     direction = "折返" if sel["type"].upper() == "F" else "直连"
     parts = [direction]
-    if motor_key and "刹车" in motor_key:
+    if "刹车" in _motor_name(motor_key, series_cfg):
         parts.append("带刹车")
     reducer = (series_cfg or {}).get("motor", {}).get(motor_key, {}).get("reducer")
     if reducer:

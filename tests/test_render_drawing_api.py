@@ -19,7 +19,7 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
 
 from web import common, app as web_app  # noqa: E402
-from web.drawing_spec_map import find_drawing_source  # noqa: E402
+from web.drawing_spec_map import find_drawing_source, format_motor_installation  # noqa: E402
 
 
 def _find_fixture_source():
@@ -96,3 +96,25 @@ def test_find_drawing_source_uses_safe_name(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "OUT_DIR", str(tmp_path))
     assert find_drawing_source("../etc/passwd") is None
     assert find_drawing_source("") is None
+
+
+# -------------------- 电机安装方式(刹车判定) --------------------
+
+@pytest.mark.parametrize("model_id,motor_key,series_cfg,expected", [
+    # 型号写编号:刹车信息在系列配置的 name 里
+    ("250-E-H2K1-L100-D75B", "D75B",
+     {"motor": {"D75B": {"name": "D75B(7.5kw电机刹车）", "reducer": "AB-182"}}},
+     "直连 带刹车 配AB-182"),
+    ("250-F-H2K1-L100-D55B", "D55B",
+     {"motor": {"D55B": {"name": "D55B(5.5KW刹车电机）", "reducer": "AB-182"}}},
+     "折返 带刹车 配AB-182"),
+    ("250-E-H2K1-L100-D75", "D75",
+     {"motor": {"D75": {"name": "D75(7.5kw电机）"}}},
+     "直连"),
+    # 配置里没写 name 时回退全局编号表:D11(11kw电机)不带刹车
+    ("250-E-H2K1-L100-D11", "D11", {}, "直连"),
+    # 旧型号写电机名,仍要能识别刹车
+    ("250-E-H2K1-L100-5.5KW刹车电机", "5.5KW刹车电机", {}, "直连 带刹车"),
+])
+def test_format_motor_installation_brake(model_id, motor_key, series_cfg, expected):
+    assert format_motor_installation(model_id, motor_key, series_cfg) == expected
