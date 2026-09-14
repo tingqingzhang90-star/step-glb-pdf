@@ -10,7 +10,7 @@ import io
 import os
 import traceback
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, jsonify, request, send_file, send_from_directory
 
 from web import common
 from web import task_pool
@@ -22,6 +22,26 @@ bp = Blueprint("drawing", __name__)
 @bp.route("/drawing")
 def drawing_editor():
     return send_file(common.DRAWING_EDITOR_HTML)
+
+
+@bp.route("/editor")
+@bp.route("/editor/<path:filename>")
+def editor_app(filename=""):
+    """托管 Vue 版模板标注编辑器(cad-viewer-app 构建产物)。
+
+    /editor 返回 index.html;/editor/<path> 返回对应静态资源。
+    未构建时给出明确提示,避免 404 无信息。
+    """
+    dist = common.EDITOR_DIST
+    if not os.path.isdir(dist):
+        return jsonify({"ok": False,
+                        "error": "前端未构建:请先在 cad-viewer-app 执行 npm run build"}), 503
+    if not filename:
+        return send_file(os.path.join(dist, "index.html"))
+    target = os.path.join(dist, filename)
+    if not os.path.isfile(target):
+        return jsonify({"ok": False, "error": "资源不存在: %s" % filename}), 404
+    return send_from_directory(dist, filename)
 
 
 @bp.route("/api/drawing-views/<model_code>")

@@ -1224,7 +1224,11 @@ onMounted(async () => {
   await loadTablePresets()
   await loadSourceList()
   centerSheet()
-  if (viewMode.value && viewSrc.value) {
+  const initModel = urlParams.get('model')
+  if (initModel && models.value.includes(initModel)) {
+    selectedModel.value = initModel
+    await loadViewPalette()
+  } else if (viewMode.value && viewSrc.value) {
     await loadViewSource(viewSrc.value)
   }
   window.addEventListener('mousemove', onGlobalMouseMove)
@@ -1371,7 +1375,7 @@ function onModelChange() {
 .sw-drawing-app {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--panel-nav-offset, 60px));
   overflow: hidden;
   background: #f0f2f5;
 }

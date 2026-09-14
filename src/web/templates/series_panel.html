@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系列模板看板</title>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2029; --panel2:#222b36; --border:#2d3744;
+    --txt:#e4e7eb; --txt2:#9aa5b1; --accent:#3b82f6; --accent2:#10b981;
+    --warn:#f59e0b; --err:#ef4444; --ok:#22c55e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Microsoft YaHei",Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--txt);min-height:100vh;padding:20px}
+  h1{font-size:20px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
+  h1 .dot{width:10px;height:10px;border-radius:50%;background:var(--accent2);box-shadow:0 0 8px var(--accent2)}
+  .wrap{max-width:1180px;margin:0 auto}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+  .stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center}
+  .stat .v{font-size:24px;font-weight:700}
+  .stat .v.warn{color:var(--warn)} .stat .v.err{color:var(--err)} .stat .v.ok{color:var(--ok)}
+  .stat .l{font-size:12px;color:var(--txt2);margin-top:4px}
+  .toolbar{display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+  .btn{padding:9px 14px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s}
+  .btn.primary{background:var(--accent);color:#fff}
+  .btn.primary:hover{background:#2563eb}
+  .btn.primary:disabled{background:#475569;cursor:not-allowed}
+  .btn.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--border)}
+  .btn.ghost:hover{border-color:var(--accent)}
+  .sec{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:16px}
+  .sec-h{font-size:14px;font-weight:700;color:var(--accent);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+  .sec-h .cnt{font-size:12px;color:var(--txt2);font-weight:400}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 10px;text-align:left;border-bottom:1px solid var(--border)}
+  th{color:var(--txt2);font-weight:600;white-space:nowrap}
+  td.mono{font-family:Consolas,Monaco,monospace}
+  .badge{display:inline-block;padding:2px 9px;border-radius:11px;font-size:12px;font-weight:600}
+  .badge.ok{background:rgba(34,197,94,.15);color:var(--ok)}
+  .badge.no{background:rgba(239,68,68,.15);color:var(--err)}
+  .badge.run{background:rgba(245,158,11,.15);color:var(--warn)}
+  .row-btn{padding:5px 10px;font-size:12px;border:none;border-radius:6px;cursor:pointer;margin-right:6px}
+  .row-btn.gen{background:var(--accent);color:#fff}
+  .row-btn.gen:disabled{background:#475569;cursor:not-allowed}
+  .row-btn.gen.run{background:var(--warn)}
+  .row-btn.annot{background:var(--accent2);color:#06281b}
+  .row-btn.annot:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
+  .empty{color:var(--txt2);text-align:center;padding:30px 0}
+  .note{font-size:12px;color:var(--txt2);margin-top:10px;line-height:1.6}
+  .note code{color:var(--accent);font-family:Consolas,monospace}
+</style>
+<script src="/static/panel_nav.js" defer></script>
+</head>
+<body>
+<div class="wrap">
+  <h1><span class="dot"></span>系列模板看板</h1>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="toolbar">
+    <button class="btn primary" id="genAll">一键生成缺失模型</button>
+    <button class="btn ghost" id="refresh">刷新</button>
+    <span class="note" id="genAllStatus" style="margin:0"></span>
+  </div>
+
+  <div id="groups"></div>
+
+  <p class="note">
+    每个模板身份(如 <code>250-E-H2K1</code>)只自动生成基准模型(L100 + 首电机),
+    标注需人工在<code>模板标注编辑器</code>完成。"去标注"会打开编辑器并自动载入该基准模型。
+  </p>
+</div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+
+async function loadCoverage() {
+  const res = await fetch('/api/series/coverage');
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || '加载失败');
+  return data;
+}
+
+function renderStats(summary) {
+  $('#stats').innerHTML = `
+    <div class="stat"><div class="v">${summary.total}</div><div class="l">身份总数</div></div>
+    <div class="stat"><div class="v err">${summary.no_model}</div><div class="l">缺基准模型</div></div>
+    <div class="stat"><div class="v warn">${summary.no_template}</div><div class="l">待标注</div></div>
+    <div class="stat"><div class="v ok">${summary.ready}</div><div class="l">已就绪</div></div>`;
+}
+
+function badge(ok, run) {
+  if (run) return '<span class="badge run">生成中</span>';
+  return ok ? '<span class="badge ok">已生成</span>' : '<span class="badge no">缺失</span>';
+}
+
+function renderGroups(rows) {
+  const bySeries = {};
+  for (const r of rows) (bySeries[r.series] ||= []).push(r);
+  const wrap = $('#groups');
+  wrap.innerHTML = '';
+  for (const series of Object.keys(bySeries).sort()) {
+    const list = bySeries[series];
+    const noModel = list.filter(r => !r.model_built).length;
+    const sec = document.createElement('div');
+    sec.className = 'sec';
+    sec.innerHTML = `<div class="sec-h">系列 ${series}
+      <span class="cnt">(${list.length} 个身份 · 缺模型 ${noModel})</span></div>`;
+    const table = document.createElement('table');
+    table.innerHTML = `<thead><tr>
+      <th>连接</th><th>安装×负载</th><th>基准型号</th>
+      <th>基准模型</th><th>模板</th><th>操作</th></tr></thead>`;
+    const tbody = document.createElement('tbody');
+    for (const r of list) {
+      const tr = document.createElement('tr');
+      tr.dataset.base = r.base_model;
+      const tpl = r.template.saved
+        ? `<span class="badge ok">已标注 ${r.template.annotation_count} 注 / ${r.template.view_count} 视图</span>`
+        : `<span class="badge no">未标注</span>`;
+      tr.innerHTML = `
+        <td>${r.type}</td>
+        <td class="mono">${r.mount}${r.load}</td>
+        <td class="mono">${r.base_model}</td>
+        <td data-cell="model">${badge(r.model_built, false)}</td>
+        <td data-cell="tpl">${tpl}</td>
+        <td>
+          <button class="row-btn gen" data-act="gen" ${r.model_built ? 'disabled' : ''}>生成模型</button>
+          <button class="row-btn annot" data-act="annot" ${r.model_built ? '' : 'disabled'}>去标注</button>
+        </td>`;
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    sec.appendChild(table);
+    wrap.appendChild(sec);
+  }
+}
+
+async function genModel(baseModel, tr) {
+  const btn = tr.querySelector('[data-act="gen"]');
+  const cell = tr.querySelector('[data-cell="model"]');
+  btn.disabled = true; btn.classList.add('run'); btn.textContent = '生成中…';
+  cell.innerHTML = '<span class="badge run">生成中</span>';
+  const res = await fetch('/api/build', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ model_code: baseModel })
+  });
+  const data = await res.json();
+  if (!data.ok && data.task_id === undefined) {
+    cell.innerHTML = '<span class="badge no">提交失败</span>';
+    btn.disabled = false; btn.classList.remove('run'); btn.textContent = '生成模型';
+    alert(`${baseModel} 提交失败: ${data.error}`);
+    return;
+  }
+  await pollTask(data.task_id, tr);
+}
+
+async function pollTask(taskId, tr) {
+  const cell = tr.querySelector('[data-cell="model"]');
+  const btn = tr.querySelector('[data-act="gen"]');
+  for (let i = 0; i < 180; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    const res = await fetch(`/api/task/${taskId}`);
+    const data = await res.json();
+    const st = data.ok ? data.task.status : 'error';
+    if (st === 'done') {
+      cell.innerHTML = '<span class="badge ok">已生成</span>';
+      btn.classList.remove('run'); btn.textContent = '已生成';
+      tr.querySelector('[data-act="annot"]').disabled = false;
+      return;
+    }
+    if (st === 'error') {
+      cell.innerHTML = '<span class="badge no">失败</span>';
+      btn.disabled = false; btn.classList.remove('run'); btn.textContent = '生成模型';
+      return;
+    }
+  }
+  cell.innerHTML = '<span class="badge run">超时</span>';
+  btn.disabled = false; btn.classList.remove('run'); btn.textContent = '生成模型';
+}
+
+async function genAll() {
+  const btn = $('#genAll');
+  btn.disabled = true;
+  const pending = [...document.querySelectorAll('tr[data-base]')]
+    .filter(tr => !tr.querySelector('[data-cell="model"] .badge.ok'));
+  $('#genAllStatus').textContent = `提交中:${pending.length} 个`;
+  const tasks = [];
+  for (const tr of pending) {
+    const base = tr.dataset.base;
+    const res = await fetch('/api/build', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ model_code: base })
+    });
+    const data = await res.json();
+    if (data.task_id) tasks.push([data.task_id, tr]);
+  }
+  let done = 0;
+  await Promise.all(tasks.map(async ([id, tr]) => {
+    await pollTask(id, tr);
+    done++; $('#genAllStatus').textContent = `已完成 ${done}/${tasks.length}`;
+  }));
+  $('#genAllStatus').textContent = '全部完成,刷新查看最新状态';
+  btn.disabled = false;
+  setTimeout(refresh, 500);
+}
+
+function bindRows() {
+  $('#groups').addEventListener('click', e => {
+    const btn = e.target.closest('.row-btn');
+    if (!btn) return;
+    const tr = btn.closest('tr[data-base]');
+    const base = tr.dataset.base;
+    if (btn.dataset.act === 'gen') genModel(base, tr);
+    if (btn.dataset.act === 'annot') window.open(`/editor?model=${encodeURIComponent(base)}`, '_blank');
+  });
+}
+
+async function refresh() {
+  try {
+    const data = await loadCoverage();
+    renderStats(data.summary);
+    renderGroups(data.rows);
+  } catch (e) {
+    $('#groups').innerHTML = `<div class="empty">加载失败:${e.message}</div>`;
+  }
+}
+
+$('#genAll').addEventListener('click', genAll);
+$('#refresh').addEventListener('click', refresh);
+bindRows();
+refresh();
+</script>
+</body>
+</html>

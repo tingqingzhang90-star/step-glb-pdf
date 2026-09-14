@@ -34,3 +34,6 @@ SW_COMPARE_PANEL_HTML = os.path.join(_HERE, "templates", "sw_compare_panel.html"
 PART_EXPORT_PANEL_HTML = os.path.join(_HERE, "part_export_panel.html")
 VIEWER_HTML = os.path.join(_HERE, "viewer.html")
 DRAWING_EDITOR_HTML = os.path.join(_HERE, "drawing_editor.html")
+SERIES_PANEL_HTML = os.path.join(_HERE, "templates", "series_panel.html")
+# Vue 版模板标注编辑器(cad-viewer-app)构建产物目录,由 /editor 路由托管
+EDITOR_DIST = os.path.join(PROJECT_ROOT, "cad-viewer-app", "dist")

@@ -23,7 +23,7 @@
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Roboto','Microsoft YaHei',Arial,sans-serif;
        background:var(--bg-canvas);color:var(--text-primary);overflow:hidden;
        -webkit-font-smoothing:antialiased}
-  .app{display:flex;height:100vh}
+  .app{display:flex;height:calc(100vh - var(--panel-nav-offset,60px))}
   /* 侧边栏 */
   .sidebar{width:320px;background:var(--bg-surface);display:flex;flex-direction:column;
            border-right:1px solid var(--border-normal);box-shadow:var(--shadow-lg)}
@@ -140,6 +140,7 @@
     .toolbar-btn:not(.menu-toggle):not(:first-child) span{display:none}
   }
 </style>
+<script src="/static/panel_nav.js" defer></script>
 </head>
 <body>
 <div class="sidebar-overlay" id="sidebarOverlay"></div>

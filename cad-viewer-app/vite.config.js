@@ -150,6 +150,8 @@ function resolveOptionalPeerDeps() {
 }
 
 export default defineConfig({
+  // 构建产物挂载到 Flask 的 /editor 子路径(统一由 5001 端口托管)
+  base: '/editor/',
   plugins: [vue(), createPatchDataModelPlugin(), resolveOptionalPeerDeps()],
   resolve: {
     alias: {
@@ -173,6 +175,11 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
+        target: 'http://127.0.0.1:5001',
+        changeOrigin: true
+      },
+      // 顶栏脚本由 Flask 托管,dev 下同样代理过来,保证与生产一致
+      '/static': {
         target: 'http://127.0.0.1:5001',
         changeOrigin: true
       }

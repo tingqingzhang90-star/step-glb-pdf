@@ -53,11 +53,12 @@ def create_app() -> Flask:
     from web.blueprints.table_presets import bp as table_presets_bp
     from web.blueprints.drawing_sources import bp as drawing_sources_bp
     from web.blueprints.render import bp as render_bp
+    from web.blueprints.series import bp as series_bp
 
     for bp in (assembly_bp, drawing_bp, template_bp,
                sw_view_bp, part_export_bp, sw_compare_bp,
                symbols_bp, table_presets_bp, drawing_sources_bp,
-               render_bp):
+               render_bp, series_bp):
         app.register_blueprint(bp)
     return app
 
@@ -76,6 +77,8 @@ def main() -> None:
     print("  工程图编辑器:  http://127.0.0.1:5001/drawing")
     print("  零件导出:     http://127.0.0.1:5001/part-export")
     print("  SW 选型对比:   http://127.0.0.1:5001/sw-compare")
+    print("  系列模板看板:  http://127.0.0.1:5001/series")
+    print("  模板标注编辑器: http://127.0.0.1:5001/editor")
     print("-" * 56)
     print(f"  OCC 任务池: {task_pool.get_pool().max_workers} 个并行 worker"
           f" (环境变量 BUILD_POOL_WORKERS 可调)")
