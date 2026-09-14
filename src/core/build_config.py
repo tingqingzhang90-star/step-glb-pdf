@@ -82,15 +82,21 @@ def read_xlsx_rows(path):
 
 
 def build_mount_or_load(rows, label):
-    """安装方式/负载连接方式表 → {代号: {on:[...], off:[...]}}"""
+    """安装方式/负载连接方式表 → {代号: {name, on:[...], off:[...]}}
+
+    首列写法带文字说明(如 "H2(底部安装方式)"):代号作 key 用于型号拼接,
+    原文整体存回 name,供选型面板展示。
+    """
     cfg = {}
     for r in rows[1:]:  # 跳过表头
         if not r or not r[0]:
             continue
-        code = strip_code(r[0])
+        raw = str(r[0]).strip()
+        code = strip_code(raw)
         if not code:
             continue
         cfg[code] = {
+            "name": raw,
             "on": parse_feature_list(r[1]),
             "off": parse_feature_list(r[2]),
         }

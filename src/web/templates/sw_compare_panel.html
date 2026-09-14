@@ -110,8 +110,8 @@ async function init(){
 function fillOpts(series){
   const o = OPTS.find(x=>x.series===series);
   if(!o) return;
-  document.getElementById('mount').innerHTML = o.mounts.map(m=>`<option>${m}</option>`).join('');
-  document.getElementById('load').innerHTML = o.loads.map(l=>`<option>${l}</option>`).join('');
+  document.getElementById('mount').innerHTML = o.mounts.map(m=>`<option value="${m.code}">${m.name}</option>`).join('');
+  document.getElementById('load').innerHTML = o.loads.map(l=>`<option value="${l.code}">${l.name}</option>`).join('');
   document.getElementById('stroke').innerHTML = o.strokes.map(s=>`<option>${s}</option>`).join('');
   updatePreview();
 }

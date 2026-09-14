@@ -55,10 +55,10 @@ def test_build_series_config_end_to_end(monkeypatch, tmp_path):
     lib.mkdir(parents=True)
     _write_xlsx(lib / "安装方式.xlsx",
                 [["安装方式", "OnFeature", "OffFeature"],
-                 ["H2", "测试前盖<1>", "测试前法兰<1>"]])
+                 ["H2(测试底部法兰)", "测试前盖<1>", "测试前法兰<1>"]])
     _write_xlsx(lib / "负载连接方式.xlsx",
                 [["负载连接方式", "OnFeature", "OffFeature"],
-                 ["K1", "测试螺纹头<1>", ""]])
+                 ["K1(测试螺纹头)", "测试螺纹头<1>", ""]])
     _write_xlsx(lib / "电机减速机.xlsx",
                 [["电机减速机", "OnFeature", "OffFeature"],
                  ["汇川100w", "汇川100w<1>", ""]])
@@ -80,6 +80,9 @@ def test_build_series_config_end_to_end(monkeypatch, tmp_path):
     assert list(config["motor"]) == ["汇川100w"]
     assert config["mount"]["H2"]["on"] == ["测试前盖"]
     assert config["mount"]["H2"]["off"] == ["测试前法兰"]
+    # 首列"代号(文字说明)"拆开:代号作 key 拼型号,原文留在 name 供面板展示
+    assert config["mount"]["H2"]["name"] == "H2(测试底部法兰)"
+    assert config["load"]["K1"]["name"] == "K1(测试螺纹头)"
     # 受控件 = 三张表 on/off 里出现过的名字(含电机本身),零件表里剩下的进 base_parts
     assert config["base_parts"] == ["测试缸体"]
     assert config["controlled_count"] == 4

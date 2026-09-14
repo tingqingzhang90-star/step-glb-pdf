@@ -30,6 +30,19 @@ def viewer():
     return send_file(common.VIEWER_HTML)
 
 
+def _code_name_list(table):
+    """配置里的 {代号: {name, on, off}} → [{code, name}]
+
+    name 为表首列原文(如 "H2(底部法兰）"),UI 展示用;code 用于型号拼接。
+    老配置无 name 时回退代号。
+    """
+    out = []
+    for code, v in (table or {}).items():
+        name = v.get("name") if isinstance(v, dict) else None
+        out.append({"code": code, "name": name or code})
+    return out
+
+
 @bp.route("/api/options")
 def api_options():
     """装配面板与 SW 对比面板共用的选型选项端点
@@ -56,8 +69,8 @@ def api_options():
         })
         options.append({
             "series": name,
-            "mounts": list(cfg.get("mount", {}).keys()),
-            "loads": list(cfg.get("load", {}).keys()),
+            "mounts": _code_name_list(cfg.get("mount", {})),
+            "loads": _code_name_list(cfg.get("load", {})),
             "motors": list(cfg.get("motor", {}).keys()),
             "strokes": list(cfg.get("cylinder", {}).get("table", {}).keys()),
         })
