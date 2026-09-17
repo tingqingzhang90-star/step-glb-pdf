@@ -60,7 +60,10 @@ def _run_export(series, assembly, overwrite):
         elif event == "component":
             _task["done"] = payload["index"]
             _task["stats"][payload["status"]] = _task["stats"].get(payload["status"], 0) + 1
-            _log(f"[{payload['index']}/{_task['total']}] {payload['name']} → {payload['status']}")
+            reason = payload.get("reason")
+            tail = f" ({reason})" if reason else ""
+            _log(f"[{payload['index']}/{_task['total']}] {payload['name']} → "
+                 f"{payload['status']}{tail}")
         elif event == "done":
             _task["result"] = payload
             _log(f"共享件: {payload.get('shared') or '无'}")

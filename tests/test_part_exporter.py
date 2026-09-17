@@ -191,3 +191,59 @@ def test_export_series_reports_progress(monkeypatch, tmp_path):
     assert events[0] == "start"
     assert "component" in events
     assert events[-1] == "done"
+
+
+class _FakeOpenPart:
+    """模拟「已在本机 SolidWorks 中打开」的零件:路径与本机解析路径不同(设计机旧路径)"""
+
+    def __init__(self, title):
+        self.GetPathName = f"Z:\\设计机旧路径\\{title}.SLDPRT"
+        self.Extension = _FakeExtension()
+
+
+class _FakeSWAlreadyOpen:
+    """OpenDoc6 对零件返回 None(等同 SW 错误码 65536),靠 GetDocuments 复用已打开文档"""
+
+    def __init__(self, comps):
+        self._comps = comps
+        self.Visible = True
+
+    def OpenDoc6(self, path, doc_type, _options, _config, _errors, _warnings):
+        if doc_type == pe.SW_DOC_ASSEMBLY:
+            return _FakeAsm(self._comps)
+        return None
+
+    def GetDocuments(self):
+        return [_FakeOpenPart(os.path.splitext(os.path.basename(p))[0])
+                for p in (c.GetPathName for c in self._comps)]
+
+    def SetUserPreferenceIntegerValue(self, _id, _value):
+        return True
+
+    def SetUserPreferenceToggle(self, _id, _value):
+        return True
+
+    def CloseDoc(self, _name):
+        return True
+
+
+def _install_already_open_sw(monkeypatch, comps):
+    monkeypatch.setattr(pe.pythoncom, "CoInitialize", lambda: None)
+    monkeypatch.setattr(pe.pythoncom, "CoUninitialize", lambda: None)
+    monkeypatch.setattr(pe.win32com.client, "Dispatch",
+                        lambda _name: _FakeSWAlreadyOpen(comps))
+
+
+def test_export_reuses_already_open_doc_by_title(monkeypatch, tmp_path):
+    """零件已在 SW 中打开(路径不一致)时,按文件名复用而非判为失败"""
+    part = tmp_path / "测试缸体.SLDPRT"
+    part.write_text("", encoding="utf-8")
+    _use_tmp_library(monkeypatch, tmp_path)
+    _install_already_open_sw(monkeypatch, [_FakeComp("测试缸体-1", str(part))])
+
+    result = pe.export_series("测试系列")
+
+    assert result["exported"] == 1
+    assert result.get("failed", 0) == 0
+    assert os.path.isfile(os.path.join(paths.parts_dir("测试系列"), "测试缸体.step"))
+

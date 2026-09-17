@@ -54,6 +54,21 @@ _SW_LOAD_ERRORS = {
     65536: "同名文档已在 SolidWorks 中打开(代码将自动复用已打开的文档;若仍失败请先关闭该文件)",
 }
 
+# SolidWorks swFileSaveError_e(部分):SaveAs 返回 False 但无异常时的具体原因
+_SW_SAVE_ERRORS = {
+    0: "无错误",
+    1: "文件已被打开,无法另存",
+    2: "文件只读",
+    4: "未选择要保存的对象",
+    8: "文件名为空",
+    16: "源文件不存在",
+    32: "目标格式不可用",
+    64: "用户取消另存",
+    128: "装配体含在位编辑特征,无法另存",
+    256: "需要同时保存引用",
+    512: "另存成功但未关闭源文档",
+}
+
 
 def _int_ref():
     """SW COM 需要的 byref int 输出参数(errors / warnings)"""
@@ -144,24 +159,53 @@ def collect_components(asm, search_dirs):
     return [_component_state(c, search_dirs) for c in (asm.GetComponents(False) or [])]
 
 
-def _already_open_model(sw, path):
-    """文档已被同一 SW 实例打开时(如用户在界面里开着),取回已打开的模型"""
+def _doc_title(doc):
+    """取文档标题(不带扩展名),CloseDoc / 同名匹配用。GetPathName 在某些版本是方法。"""
     try:
-        docs = sw.GetDocuments()
+        p = doc.GetPathName
+        if callable(p):
+            p = p()
+        return os.path.splitext(os.path.basename(p or ""))[0] if p else ""
     except Exception:
-        return None
+        return ""
+
+
+def _open_documents(sw):
+    """取 SW 当前已打开的文档列表,兼容 GetDocuments 是属性还是方法两种暴露方式"""
+    try:
+        getter = sw.GetDocuments
+        docs = getter() if callable(getter) else getter
+    except Exception:
+        return []
+    if not docs:
+        return []
+    return list(docs)
+
+
+def _already_open_model(sw, path):
+    """文档已被同一 SW 实例打开时(如用户在界面里开着),取回已打开的模型
+
+    先按完整路径匹配;匹配不到再按标题(文件名)匹配 —— 用户在交互式会话里打开的
+    零件,其路径往往是设计机的旧路径,与本机解析出的路径不一致,OpenDoc6 会返回 65536,
+    必须靠文件名复用,否则该零件永远打不开、导出失败。
+    """
+    docs = _open_documents(sw)
     if not docs:
         return None
     target = os.path.abspath(path).lower()
+    target_title = os.path.splitext(os.path.basename(path))[0].lower()
     for doc in docs:
         try:
             p = doc.GetPathName
             if callable(p):
                 p = p()
         except Exception:
-            continue
-        if p and os.path.abspath(p).lower() == target:
-            return doc
+            p = ""
+        if p:
+            if os.path.abspath(p).lower() == target:
+                return doc
+            if os.path.splitext(os.path.basename(p))[0].lower() == target_title:
+                return doc
     return None
 
 
@@ -203,13 +247,16 @@ def preview_components(series, assembly=None):
 
 
 def export_single_part(sw, part_path, step_output):
-    """打开单个零件另存为 STEP AP214,成功返回 True"""
+    """打开单个零件另存为 STEP AP214,返回 (成功, 失败原因)
+
+    失败原因用于面板日志与产物诊断;成功时原因为空串。
+    """
     if not os.path.exists(part_path):
-        return False
+        return False, f"零件文件不存在: {part_path}"
     part_name = os.path.basename(part_path)
-    doc, _, _, borrowed = _open(sw, part_path, SW_DOC_PART)
+    doc, open_err, _, borrowed = _open(sw, part_path, SW_DOC_PART)
     if doc is None:
-        return False
+        return False, _load_error_text(open_err, part_path)
     sw.SetUserPreferenceIntegerValue(SW_USER_PREF_STEP_AP, SW_STEP_AP214)
     sw.SetUserPreferenceToggle(33, True)  # 导出外观
     sw.SetUserPreferenceToggle(34, True)  # 导出面/边属性
@@ -218,15 +265,25 @@ def export_single_part(sw, part_path, step_output):
         # options 必须为 0:非 PDF 导出传 Silent 会触发 DISP_E_TYPEMISMATCH
         ok = doc.Extension.SaveAs(step_output, SW_SAVE_CURRENT_VERSION,
                                   SW_SAVE_OPTIONS_NONE, _nothing(), errors, warnings)
-    except Exception:
+    except Exception as exc:
         ok = False
+        reason = f"SaveAs 异常: {exc}"
+    else:
+        reason = ""
+        if not ok:
+            # SaveAs 返回 False 但无异常:用错误/警告码给出可读原因
+            reason = (_SW_SAVE_ERRORS.get(errors.value)
+                      or f"SaveAs 失败(err={errors.value}, warn={warnings.value})")
     # 借用的文档(用户已在 SW 中打开)不能关,否则会关掉界面里的文件
     if not borrowed:
         try:
-            sw.CloseDoc(part_name)
+            sw.CloseDoc(_doc_title(doc) or os.path.splitext(part_name)[0])
         except Exception:
             pass
-    return bool(ok) and os.path.exists(step_output) and os.path.getsize(step_output) > 0
+    saved = bool(ok) and os.path.exists(step_output) and os.path.getsize(step_output) > 0
+    if not saved and not reason:
+        reason = "STEP 输出为空(另存未生成有效文件)"
+    return saved, reason
 
 
 def _move_shared_parts(parts_dir, parts_data):
@@ -288,7 +345,7 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")
         sw.Visible = False
-        model, err, _, _ = _open(sw, asm_path, SW_DOC_ASSEMBLY)
+        model, err, _, asm_borrowed = _open(sw, asm_path, SW_DOC_ASSEMBLY)
         if model is None:
             raise RuntimeError(_load_error_text(err, asm_path))
         comps = collect_components(model, [os.path.dirname(asm_path), paths.LIB_ROOT])
@@ -300,6 +357,7 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
         for i, c in enumerate(comps, 1):
             step_name = ""
             status = "no_path"
+            reason = ""
             if c["path"]:
                 base = os.path.splitext(os.path.basename(c["path"]))[0]
                 step_name = f"{base}.step"
@@ -307,11 +365,13 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
                 has_file = os.path.exists(target) and os.path.getsize(target) > 0
                 if step_name in done or (has_file and not overwrite):
                     status = "skipped"
-                elif export_single_part(sw, c["path"], target):
-                    done.add(step_name)
-                    status = "exported"
                 else:
-                    status = "failed"
+                    ok, reason = export_single_part(sw, c["path"], target)
+                    if ok:
+                        done.add(step_name)
+                        status = "exported"
+                    else:
+                        status = "failed"
                 stats[status] = stats.get(status, 0) + 1
             parts_data[c["name"]] = {
                 "step_file": step_name,
@@ -319,8 +379,10 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
                 "transform_matrix": c["transform_matrix"],
                 "suppressed": c["suppressed"],
             }
+            if reason:
+                parts_data[c["name"]]["reason"] = reason
             emit("component", {"index": i, "name": c["name"],
-                               "status": status, "file": step_name})
+                               "status": status, "file": step_name, "reason": reason})
 
         shared = _move_shared_parts(parts_dir, parts_data)
         _write_outputs(series, asm_path, parts_data, shared)
@@ -328,6 +390,12 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
         return dict(stats, series=series, assembly=asm_path,
                     components=len(comps), shared=shared)
     finally:
+        # 装配体是我们打开的才关,借用(用户已在 SW 中打开)的不关
+        if not asm_borrowed:
+            try:
+                sw.CloseDoc(_doc_title(model) or os.path.splitext(os.path.basename(asm_path))[0])
+            except Exception:
+                pass
         pythoncom.CoUninitialize()
 
 
