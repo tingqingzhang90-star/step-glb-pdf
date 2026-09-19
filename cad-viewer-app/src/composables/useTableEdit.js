@@ -24,23 +24,29 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
   // 悬浮预览格:鼠标移到格上即显示输入框外观,单击才真正进入编辑
   const hoverCell = ref(null)        // {tableId, r, c}
 
-  /** 进入编辑:聚焦指定格(选中样式由 selectedCells/editingCell 共同体现) */
-  function editCell(table, r, c) {
+  /** 进入编辑:聚焦指定格(选中样式由 selectedCells/editingCell 共同体现)。
+   *  part 为拆分子格下标,未拆分时不传 */
+  function editCell(table, r, c, part) {
     focusTable(table.id)
     selectedCells.value = [{ r, c }]
-    editingCell.value = { tableId: table.id, r, c }
+    editingCell.value = { tableId: table.id, r, c, part: part == null ? undefined : part }
   }
 
-  function startEdit(event, table, r, c) {
+  function startEdit(event, table, r, c, part) {
     event.stopPropagation()
-    editCell(table, r, c)
+    editCell(table, r, c, part)
   }
 
-  /** 回车或失焦提交:取 input 当前值写回单元格 */
+  /** 回车或失焦提交:取 input 当前值写回单元格(或拆分子格) */
   function commitEdit(event) {
     const v = event?.target?.value
     const ec = editingCell.value
-    if (ec && v !== undefined) updateCellText(ec.tableId, ec.r, ec.c, v)
+    if (ec && v !== undefined) updateCellText(ec.tableId, ec.r, ec.c, v, ec.part)
+    editingCell.value = null
+  }
+
+  /** Esc 取消编辑:丢弃输入,不写回(失焦随之触发的 commit 会因 editingCell 为空而跳过) */
+  function cancelEdit() {
     editingCell.value = null
   }
 
@@ -82,12 +88,12 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
   }
 
   // ---- 悬浮预览:移到格上显示输入框外观,离开清除(编辑中不清除) ----
-  function onCellHover(table, r, c) {
+  function onCellHover(table, r, c, part) {
     if (selDragging.value) {
       extendCellSelect(table, r, c)
       return
     }
-    hoverCell.value = { tableId: table.id, r, c }
+    hoverCell.value = { tableId: table.id, r, c, part: part == null ? undefined : part }
   }
   function clearHover() {
     if (!editingCell.value) hoverCell.value = null
@@ -211,7 +217,7 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
 
   return {
     editingCell, hoverCell, contextMenu, activeFontSize,
-    startEdit, editCell, commitEdit, onCellClick,
+    startEdit, editCell, commitEdit, cancelEdit, onCellClick,
     startCellSelect, extendCellSelect, endCellSelect,
     onCellHover, clearHover,
     openContextMenu, closeContextMenu,

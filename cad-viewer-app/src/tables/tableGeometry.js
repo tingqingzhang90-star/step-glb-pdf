@@ -115,6 +115,66 @@ export function cellRectAt(t, r, c) {
   return { r, c, ...rect, text: cell.text || '' }
 }
 
+/** 单元格"格内子分割"后的子格矩形:在自身范围内等分为 N 份。
+ *  split_dir='h' 左右等分(N 列);'v' 上下等分(N 行)。未拆分返回 []。 */
+export function cellPartRects(t, cell) {
+  if (!cell || !cell.split_dir) return []
+  const n = cell.split_count || 0
+  if (n < 2) return []
+  const r = cellRect(t, cell)
+  const out = []
+  for (let i = 0; i < n; i++) {
+    out.push(cell.split_dir === 'h'
+      ? { i, x: r.x + (r.w * i) / n, y: r.y, w: r.w / n, h: r.h }
+      : { i, x: r.x, y: r.y + (r.h * i) / n, w: r.w, h: r.h / n })
+  }
+  return out
+}
+
+/** 子格内文字锚点(对齐方式沿用所属单元格) */
+export function textAnchorXInRect(rect, cell) {
+  const a = hAlign(cell)
+  if (a === 'h-center') return rect.x + rect.w / 2
+  if (a === 'h-right') return rect.x + rect.w - 1
+  return rect.x + 1
+}
+
+export function textAnchorYInRect(rect, cell) {
+  const fs = cellFontSize(cell)
+  const v = vAlign(cell)
+  if (v === 'v-top') return rect.y + fs * 0.8 + 1
+  if (v === 'v-bottom') return rect.y + rect.h - fs * 0.2 - 1
+  return rect.y + rect.h / 2
+}
+
+/** 单元格/子格文字按换行符拆成多行 */
+export function textLines(text) {
+  return String(text == null ? '' : text).split('\n')
+}
+
+/** sheet 坐标点落在哪个子格(需已拆分);未命中返回 -1 */
+export function partIndexAtPoint(t, cell, pt) {
+  for (const r of cellPartRects(t, cell)) {
+    if (pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h) {
+      return r.i
+    }
+  }
+  return -1
+}
+
+/** 多行文字各行的 central-baseline y(仅 n>1 使用;n=1 走原 cellTextY/单行路径)。
+ *  按垂直对齐把整块文字摆进矩形。 */
+export function multiLineYs(rect, cell, n) {
+  const fs = cellFontSize(cell)
+  const lh = fs * 1.25
+  const blockH = n * lh
+  const v = vAlign(cell)
+  let top = rect.y + rect.h / 2 - blockH / 2
+  if (v === 'v-top') top = rect.y + 1
+  else if (v === 'v-bottom') top = rect.y + rect.h - blockH - 1
+  return Array.from({ length: n }, (_, i) => top + lh * (i + 0.5))
+}
+
 
 
 /** 单元格文字水平对齐 → SVG text-anchor */

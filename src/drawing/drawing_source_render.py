@@ -18,6 +18,11 @@ from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
+from drawing.table_split import (
+    LINE_SPACING, cell_text_rects, draw_split_dividers, line_baselines,
+    parse_align,
+)
+
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
 
@@ -265,28 +270,59 @@ def _draw_table(c, table, fy):
         xc, yc_top, w, h = _cell_rect(table, r, c_, cs, rs)
         c.rect(xc, fy(yc_top + h), w, h, stroke=1, fill=0)
 
-    # 文本
+    # 拆分单元格内部分隔线
     for cell in table.get("cells", []):
-        text = cell.get("text")
-        if not text:
+        if not (cell.get("split_dir") and (cell.get("split_count") or 0) >= 2
+                and cell.get("parts")):
             continue
+        xc, yc_top, w, h = _cell_rect(
+            table, cell.get("r"), cell.get("c"),
+            cell.get("colspan", 1), cell.get("rowspan", 1))
+        draw_split_dividers(c, cell, lambda x, y: (x, fy(y)),
+                            xc, yc_top, xc + w, yc_top + h, _C_EDGE, _W_TABLE)
+
+    # 文本:拆分格按子格逐块绘制,未拆分画整格
+    for cell in table.get("cells", []):
         r, c_ = cell.get("r"), cell.get("c")
         cs = cell.get("colspan", 1)
         rs = cell.get("rowspan", 1)
         xc, yc_top, w, h = _cell_rect(table, r, c_, cs, rs)
-        fs = (cell.get("font_size") or 20) / _PX_PER_MM
-        fs = max(1.5, min(fs, h * 0.7))
-        c.setFillColorRGB(*_C_EDGE)
-        c.setFont(_CN_FONT, fs)
-        align = cell.get("align", "") or ""
-        # 基线:单元底部(屏幕 y 向下)对应 PDF 顶 - h + 文字偏置
-        ty = fy(yc_top + h) + (h - fs) / 2.0
-        if "h-center" in align:
-            c.drawCentredString(xc + w / 2.0, ty, text)
-        elif "h-right" in align:
-            c.drawRightString(xc + w - 1.5, ty, text)
-        else:
-            c.drawString(xc + 1.5, ty, text)
+        for rect in cell_text_rects(xc, yc_top, xc + w, yc_top + h, cell):
+            _draw_cell_text_src(c, fy, rect, cell)
+
+
+def _draw_cell_text_src(c, fy, rect, cell):
+    """在子矩形 rect=(x1,y1,x2,y2,text)(SVG mm)内按单元格对齐绘制文字,支持 \\n 多行。"""
+    xc, yc_top, xc2, yc_bot, text = rect
+    if not text:
+        return
+    w = xc2 - xc
+    h = yc_bot - yc_top
+    lines = str(text).split("\n")
+    fs = (cell.get("font_size") or 20) / _PX_PER_MM
+    cap = h * 0.7 if len(lines) <= 1 else h / (len(lines) * LINE_SPACING)
+    fs = max(1.5, min(fs, cap))
+    c.setFillColorRGB(*_C_EDGE)
+    c.setFont(_CN_FONT, fs)
+    align = cell.get("align", "") or ""
+    if "h-center" in align:
+        tx = xc + w / 2.0
+        draw = c.drawCentredString
+    elif "h-right" in align:
+        tx = xc + w - 1.5
+        draw = c.drawRightString
+    else:
+        tx = xc + 1.5
+        draw = c.drawString
+    if len(lines) == 1:
+        # 单行沿用旧的居中 baseline(零回归)
+        draw(tx, fy(yc_top + h) + (h - fs) / 2.0, lines[0])
+        return
+    _, va = parse_align(align)
+    ys = line_baselines(fs, len(lines), fs * LINE_SPACING,
+                        fy(yc_top), fy(yc_top + h), va)
+    for ty, line in zip(ys, lines):
+        draw(tx, ty, line)
 
 
 # --------------------------------------------------------------------------

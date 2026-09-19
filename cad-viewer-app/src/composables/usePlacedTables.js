@@ -6,6 +6,13 @@ import { findCellAt } from '@/tables/tableGeometry'
 
 let tableIdCounter = 0
 
+/** 深拷贝单元格(parts 是数组,浅拷贝会跨表共享,必须单独复制) */
+function cloneCell(c) {
+  const out = { ...c }
+  if (c.parts) out.parts = c.parts.map(p => ({ ...p }))
+  return out
+}
+
 export function usePlacedTables() {
   const placedTables = ref([])
   const selectedTableId = ref(null)
@@ -24,7 +31,7 @@ export function usePlacedTables() {
       row_heights: [...template.row_heights],
       border: { ...template.border },
       text_color: template.text_color || '#303133',
-      cells: template.cells.map(c => ({ ...c }))
+      cells: template.cells.map(c => cloneCell(c))
     }
     placedTables.value.push(t)
     selectedTableId.value = t.id
@@ -61,11 +68,14 @@ export function usePlacedTables() {
     selectedCells.value = []
   }
 
-  function updateCellText(tableId, r, c, text) {
+  function updateCellText(tableId, r, c, text, part) {
     const t = placedTables.value.find(t => t.id === tableId)
     if (!t) return
     const cell = findCellAt(t, r, c)
-    if (cell) cell.text = text
+    if (!cell) return
+    // part 有值且该格已拆分时写入对应子格,否则写整格文字
+    if (part != null && cell.parts && cell.parts[part]) cell.parts[part].text = text
+    else cell.text = text
   }
 
   /** 写入单元格符号(存相对 data/symbols 的文件名)。拖拽放置与双击清除共用 */
@@ -109,13 +119,27 @@ export function usePlacedTables() {
       ElMessage.warning('请选择完整的矩形区域再合并')
       return
     }
-    // 移除区域内所有现有 cell(要求其矩形完全落在选中区内,避免半截合并)
-    t.cells = t.cells.filter(cell => {
+    // 相交即移除:已合并格的左上角可能落在选区之外(例如选纵合并格下半部再向下扩),
+    // 若用"矩形完全落在选区内"判断会漏删,导致新旧合并格在覆盖格处重叠、合并看似失效。
+    // 被删合并格超出新选区的条带拆回独立 1x1 单格,避免留下空白。横向合并同理适用。
+    const survivors = []
+    const leftover = []
+    for (const cell of t.cells) {
       const cs2 = cell.colspan || 1, rs2 = cell.rowspan || 1
       const er = cell.r + rs2 - 1, ec = cell.c + cs2 - 1
-      const inside = cell.r >= r0 && er <= r1 && cell.c >= c0 && ec <= c1
-      return !inside
-    })
+      const hit = cell.r <= r1 && er >= r0 && cell.c <= c1 && ec >= c0
+      if (!hit) { survivors.push(cell); continue }
+      for (let rr = cell.r; rr <= er; rr++) {
+        for (let cc = cell.c; cc <= ec; cc++) {
+          if (rr >= r0 && rr <= r1 && cc >= c0 && cc <= c1) continue
+          if (!findCellAt({ cells: survivors }, rr, cc) &&
+              !findCellAt({ cells: leftover }, rr, cc)) {
+            leftover.push({ r: rr, c: cc, text: '', align: cell.align || 'h-center v-center' })
+          }
+        }
+      }
+    }
+    t.cells = survivors.concat(leftover)
     t.cells.push({
       r: r0, c: c0,
       colspan: c1 - c0 + 1, rowspan: r1 - r0 + 1,
@@ -138,6 +162,24 @@ export function usePlacedTables() {
     for (let i = 0; i < rs; i++)
       for (let j = 0; j < cs; j++)
         t.cells.push({ r: r0 + i, c: c0 + j, text: '', align: 'h-center v-center' })
+    selectedCells.value = []
+  }
+
+  /** 单元格"格内子分割":在自身范围内等分为 N 份,不改动表格行列。
+   *  dir='h' 左右分成 N 列;dir='v' 上下分成 N 行。原格文字并入第一个子格。 */
+  function splitCell(tableId, r, c, dir, count) {
+    const t = placedTables.value.find(x => x.id === tableId)
+    if (!t) return
+    const cell = findCellAt(t, r, c)
+    if (!cell) return
+    const n = Math.min(20, Math.max(2, Math.floor(count) || 2))
+    const old = cell.parts || []
+    cell.split_dir = dir === 'v' ? 'v' : 'h'
+    cell.split_count = n
+    cell.parts = Array.from({ length: n }, (_, i) => ({
+      text: (old[i] && old[i].text) || (i === 0 ? (cell.text || '') : '')
+    }))
+    cell.text = ''
     selectedCells.value = []
   }
 
@@ -288,15 +330,26 @@ export function usePlacedTables() {
 
   /** 从源文件批量载入表格 */
   function setTables(tables) {
-    placedTables.value = (tables || []).map(t => ({
-      id: t.id || `table_${++tableIdCounter}`,
-      x: t.x, y: t.y,
-      col_widths: [...(t.col_widths || [])],
-      row_heights: [...(t.row_heights || [])],
-      border: { ...(t.border || {}) },
-      text_color: t.text_color || '#303133',
-      cells: (t.cells || []).map(c => ({ ...c }))
-    }))
+    // 载入的 id 原样保留(联动按 id 引用),但必须保证唯一,并把计数器推到已用
+    // 序号之后;否则页面刷新后计数器归零,再插图会生成与已载入表同号的 id,
+    // 造成选中/拖动/改样式串到另一张表,且两张表同时显示选中框
+    const used = new Set()
+    placedTables.value = (tables || []).map(t => {
+      let id = t.id
+      if (!id || used.has(id)) id = `table_${++tableIdCounter}`
+      used.add(id)
+      const m = /^table_(\d+)$/.exec(id)
+      if (m) tableIdCounter = Math.max(tableIdCounter, Number(m[1]))
+      return {
+        id,
+        x: t.x, y: t.y,
+        col_widths: [...(t.col_widths || [])],
+        row_heights: [...(t.row_heights || [])],
+        border: { ...(t.border || {}) },
+        text_color: t.text_color || '#303133',
+        cells: (t.cells || []).map(c => cloneCell(c))
+      }
+    })
     selectedTableId.value = null
     selectedCells.value = []
   }
@@ -305,7 +358,7 @@ export function usePlacedTables() {
     placedTables, selectedTableId, selectedTable, selectedCells,
     placeTable, selectTable, focusTable, deleteSelectedTable, clearTables,
     setTables,
-    updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected,
+    updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected, splitCell,
     findCellAt,
     insertRow, deleteRow, insertCol, deleteCol,
     resizeCol, resizeRow, resizeTable, resizeFromTopLeft,

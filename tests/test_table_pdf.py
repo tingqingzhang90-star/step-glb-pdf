@@ -51,6 +51,11 @@ class FakeCanvas:
     def drawRightString(self, x, y, text):
         self.calls.append(("right", (round(x, 1), round(y, 1), text)))
 
+    def line(self, x1, y1, x2, y2):
+        self.calls.append(("line",
+                           (round(x1, 1), round(y1, 1),
+                            round(x2, 1), round(y2, 1))))
+
 
 def _table():
     """2 列 × 3 行,首行合并为标题"""
@@ -207,3 +212,108 @@ def test_table_style_constants_match_shared_config():
     assert mod._TBL_TEXT_COLOR == tbl["text"]["color"]
     assert mod._TBL_BORDER_W == tbl["border"]["stroke_mm"]
     assert mod._TBL_BORDER_COLOR == tbl["border"]["color"]
+
+
+def _split_table(dir_char, count, parts):
+    """单格表,该格被拆分成 count 份,parts 为各子格文字"""
+    return {
+        "x": 0, "y": 0,
+        "col_widths": [20], "row_heights": [30],
+        "cells": [{
+            "r": 0, "c": 0, "split_dir": dir_char, "split_count": count,
+            "text": "", "parts": [{"text": t} for t in parts],
+            "align": "h-center v-center", "font_size": 12,
+        }],
+    }
+
+
+def test_split_h_draws_one_vertical_divider_and_part_texts():
+    """'h' 左右分 2 列 → 1 条竖线,且文字取 parts 而非已清空的 cell.text"""
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _split_table("h", 2, ["左", "右"]), m)
+    lines = [a for k, a in c.calls if k == "line"]
+    assert len(lines) == 1
+    x1, y1, x2, y2 = lines[0]
+    assert x1 == x2 and y1 != y2        # 竖线跨整格高
+    texts = [a[2] for k, a in c.calls if k in ("string", "center", "right")]
+    assert texts == ["左", "右"]
+
+
+def test_split_v_draws_horizontal_dividers_per_gap():
+    """'v' 上下分 3 行 → 2 条横线,文字逐块绘制"""
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _split_table("v", 3, ["A", "B", "C"]), m)
+    lines = [a for k, a in c.calls if k == "line"]
+    assert len(lines) == 2
+    for x1, y1, x2, y2 in lines:
+        assert y1 == y2 and x1 != x2      # 横线跨整格宽
+    texts = [a[2] for k, a in c.calls if k in ("string", "center", "right")]
+    assert texts == ["A", "B", "C"]
+
+
+def test_split_empty_cell_text_still_renders_parts():
+    """整格 text 清空后,拆分格必须靠 parts 出字,否则 PDF 空白(回归)"""
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _split_table("h", 2, ["甲", "乙"]), m)
+    texts = [a[2] for k, a in c.calls if k in ("string", "center", "right")]
+    assert texts == ["甲", "乙"]
+
+
+def test_source_render_split_h_draws_divider_and_parts():
+    """drawing_source 路径同样要支持拆分:'h' → 竖线 + 子格文字"""
+    from drawing.drawing_source_render import _draw_table
+    c, fy = FakeCanvas(), (lambda v: 100 - v)
+    _draw_table(c, _split_table("h", 2, ["左", "右"]), fy)
+    lines = [a for k, a in c.calls if k == "line"]
+    assert len(lines) == 1
+    x1, y1, x2, y2 = lines[0]
+    assert x1 == x2 and y1 != y2
+    texts = [a[2] for k, a in c.calls if k in ("string", "center", "right")]
+    assert texts == ["左", "右"]
+
+
+def _ml_table(text, align="h-center v-center"):
+    """单格表,用于验证 \\n 多行排版"""
+    return {"x": 0, "y": 0, "col_widths": [30], "row_heights": [30],
+            "cells": [{"r": 0, "c": 0, "text": text, "align": align,
+                       "font_size": 12}]}
+
+
+def test_multiline_text_draws_each_line_top_to_bottom():
+    """单元格 \\n 换行 → 逐行绘制,且第一行在上(PDF y 更大)"""
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _ml_table("A\nB\nC"), m)
+    drawn = [a for k, a in c.calls if k == "center"]
+    assert [d[2] for d in drawn] == ["A", "B", "C"]
+    assert drawn[0][1] > drawn[1][1] > drawn[2][1]
+
+
+def test_multiline_single_line_keeps_old_baseline():
+    """单行不走多行布局(零回归):仍是原来的居中 baseline"""
+    from drawing.dim import dim_pdf_sheet as mod
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _ml_table("单行"), m)
+    y = [a[1] for k, a in c.calls if k == "center"][0]
+    fs = 12 * mod._PX2MM
+    assert y == round(100 - 15 - 0.35 * fs, 1)
+
+
+def test_split_part_multiline_text_drawn_per_line():
+    """拆分子格内的换行同样逐行绘制"""
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, _split_table("v", 2, ["X\nY", "Z"]), m)
+    texts = [a[2] for k, a in c.calls if k in ("string", "center", "right")]
+    assert texts == ["X", "Y", "Z"]
+
+
+def test_source_render_multiline_cell():
+    """drawing_source 路径同样支持 \\n 多行"""
+    from drawing.drawing_source_render import _draw_table
+    t = {"x": 0, "y": 0, "col_widths": [30], "row_heights": [30],
+         "cells": [{"r": 0, "c": 0, "text": "A\nB", "align": "h-left",
+                    "font_size": 12}]}
+    c, fy = FakeCanvas(), (lambda v: 100 - v)
+    _draw_table(c, t, fy)
+    drawn = [a for k, a in c.calls if k == "string"]
+    assert [d[2] for d in drawn] == ["A", "B"]
+    assert drawn[0][1] > drawn[1][1]

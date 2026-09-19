@@ -15,6 +15,10 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 
 from drawing.dim.dim_style import CFG as _CFG, PX2MM as _PX2MM
+from drawing.table_split import (
+    LINE_SPACING, cell_text_rects, draw_split_dividers, line_baselines,
+    parse_align,
+)
 # 后端常量(从 px 换算成 mm)
 _W_VISIBLE = _CFG["edge"]["visible"]["stroke_px"] * _PX2MM   # 0.265
 _W_HIDDEN = _CFG["edge"]["hidden"]["stroke_px"] * _PX2MM     # 0.212
@@ -168,39 +172,43 @@ def _draw_table_placement(c, table, mapper):
         if sym:
             _draw_cell_symbol(c, sym, rx, ry, rw, rh)
 
-        text = cell.get("text") or ""
-        if not text:
-            continue
-        fs_mm = cell.get("font_size", _TBL_FONT_PX) * _PX2MM
-        c.setFont(_CN_FONT, fs_mm)
-        c.setFillColorRGB(*tc)
-        # 水平对齐:left/center/right;padding 1mm
-        align = cell.get("align", "h-left v-center")
-        ha = "h-left"
-        for part in align.split():
-            if part.startswith("h-"):
-                ha = part
-        if ha == "h-center":
-            tx = (px1 + px2) / 2
-            draw = c.drawCentredString
-        elif ha == "h-right":
-            tx = max(px1, px2) - 1
-            draw = c.drawRightString
-        else:
-            tx = min(px1, px2) + 1
-            draw = c.drawString
-        # 垂直:按 v-align 计算 baseline
-        va = 'v-center'
-        for part in align.split():
-            if part.startswith('v-'):
-                va = part
-        if va == 'v-top':
-            cy = py_top - 0.8 * fs_mm
-        elif va == 'v-bottom':
-            cy = py_bot + 0.2 * fs_mm
-        else:
-            cy = (py_top + py_bot) / 2 - 0.35 * fs_mm
-        draw(tx, cy, text)
+        # 拆分单元格内部分隔线
+        if cell.get("split_dir") and (cell.get("split_count") or 0) >= 2:
+            draw_split_dividers(c, cell, mapper.pt, sx1, sy1, sx2, sy2, bc, bw)
+
+        # 文字:拆分格按子格逐块绘制,未拆分画整格
+        for rect in cell_text_rects(sx1, sy1, sx2, sy2, cell):
+            _draw_cell_text(c, mapper, rect, cell, tc, _CN_FONT)
+
+
+def _draw_cell_text(c, mapper, rect, cell, tc, cn_font):
+    """在 SVG 子矩形 rect=(x1,y1,x2,y2,text) 内按单元格对齐绘制文字,支持 \\n 多行。"""
+    sx1, sy1, sx2, sy2, text = rect
+    if not text:
+        return
+    px1, py_top = mapper.pt(sx1, sy1)
+    px2, py_bot = mapper.pt(sx2, sy2)
+    lines = str(text).split("\n")
+    fs_mm = cell.get("font_size", _TBL_FONT_PX) * _PX2MM
+    # 多行时按可用高度限一行距,避免超出格高(单行沿用原字号,零回归)
+    if len(lines) > 1:
+        fs_mm = min(fs_mm, abs(py_top - py_bot) / (len(lines) * LINE_SPACING))
+    c.setFont(cn_font, fs_mm)
+    c.setFillColorRGB(*tc)
+    ha, va = parse_align(cell.get("align", "h-left v-center"))
+    if ha == "h-center":
+        tx = (px1 + px2) / 2
+        draw = c.drawCentredString
+    elif ha == "h-right":
+        tx = max(px1, px2) - 1
+        draw = c.drawRightString
+    else:
+        tx = min(px1, px2) + 1
+        draw = c.drawString
+    ys = line_baselines(fs_mm, len(lines), fs_mm * LINE_SPACING,
+                        py_top, py_bot, va)
+    for cy, line in zip(ys, lines):
+        draw(tx, cy, line)
 
 
 def _draw_cell_symbol(c, rel_file, rx, ry, rw, rh):

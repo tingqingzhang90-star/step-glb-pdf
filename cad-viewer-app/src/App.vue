@@ -91,7 +91,23 @@
           </template>
         </el-dropdown>
         <el-button size="small" :disabled="selectedCells.length < 2" @click="mergeSelected">合并</el-button>
-        <el-button size="small" :disabled="selectedCells.length !== 1" @click="splitSelected">拆分</el-button>
+        <el-button size="small" :disabled="selectedCells.length !== 1" @click="splitSelected">取消合并</el-button>
+        <el-popover trigger="click" :width="230" v-model:visible="showSplitPicker">
+          <template #reference>
+            <el-button size="small" :disabled="selectedCells.length !== 1">拆分单元格</el-button>
+          </template>
+          <div class="split-picker">
+            <el-radio-group v-model="splitDir" size="small">
+              <el-radio-button label="h">横向(左右)</el-radio-button>
+              <el-radio-button label="v">纵向(上下)</el-radio-button>
+            </el-radio-group>
+            <div class="split-count-row">
+              <span>份数</span>
+              <el-input-number v-model="splitCount" :min="2" :max="20" size="small" />
+            </div>
+            <el-button type="primary" size="small" class="split-apply" @click="applySplit">确定拆分</el-button>
+          </div>
+        </el-popover>
         <TableStyleBar
           :selected-id="selectedTableId"
           :selected-cells="selectedCells"
@@ -313,6 +329,7 @@
               :selected-cells="selectedCells"
               :editing-cell="editingCell"
               :hover-cell="hoverCell"
+              :readonly="viewMode"
               :snap-guides="tableSnapGuides"
               @table-mousedown="onTableMouseDown"
               @cell-click="onCellClick"
@@ -325,6 +342,7 @@
               @col-mousedown="startColResize"
               @row-mousedown="startRowResize"
               @edit-commit="commitEdit"
+              @edit-cancel="cancelEdit"
             />
             <TableSnapGuides
               :guides="tableSnapGuides"
@@ -772,6 +790,7 @@ import { useSymbolDrag } from '@/composables/useSymbolDrag'
 import { usePlacedTables } from '@/composables/usePlacedTables'
 import { useTableDrag } from '@/composables/useTableDrag'
 import { useTableEdit } from '@/composables/useTableEdit'
+import { partIndexAtPoint } from '@/tables/tableGeometry'
 import { buildDrawingDocument, previewDocument } from '@/utils/drawingDocument'
 import { exportSheetScreenshotPdf } from '@/utils/drawingPdf'
 import { parseDrawingDocument, applyDrawingDocument } from '@/utils/loadDrawingDocument'
@@ -936,7 +955,7 @@ const {
   placedTables, selectedTableId, selectedTable, selectedCells,
   placeTable, selectTable, deleteSelectedTable: removeSelectedTable, clearTables,
   setTables,
-  updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected, findCellAt,
+  updateCellText, setCellSymbol, clearCellSymbol, toggleCellSelect, mergeSelected, splitSelected, splitCell, findCellAt,
   insertRow, deleteRow, insertCol, deleteCol,
   resizeCol, resizeRow, resizeTable,
   setCellFontSize, setTableBorder
@@ -962,7 +981,7 @@ const {
 // 编辑交互:inline 编辑 / 右键菜单 / 样式 / 键盘 / 插入
 const {
   editingCell, hoverCell, contextMenu, activeFontSize,
-  startEdit, editCell, commitEdit, onCellClick,
+  startEdit, editCell, commitEdit, cancelEdit, onCellClick,
   startCellSelect, extendCellSelect, endCellSelect,
   onCellHover, clearHover,
   openContextMenu, closeContextMenu,
@@ -981,27 +1000,39 @@ function onTableMouseDown(event, table) {
 const cellPointer = ref(null)
 const DRAG_THRESHOLD = 4
 
-function onCellMouseDown(event, table, r, c) {
+/** 拆分单元格:把点击位置解析到具体子格。
+ *  整格 cell.text 在拆分后不再显示,若落到整格会造成"输入了却看不到",故按坐标兜底。 */
+function resolveEditPart(table, r, c, part, event) {
+  if (part != null) return part
+  const cell = findCellAt(table, r, c)
+  if (!cell || !cell.split_dir || (cell.split_count || 0) < 2) return part
+  const pt = coords.eventToSheetPoint(event)
+  const idx = pt ? partIndexAtPoint(table, cell, pt) : -1
+  return idx >= 0 ? idx : 0
+}
+
+function onCellMouseDown(event, table, r, c, part) {
   startCellSelect(event, table, r, c)   // Shift 走框选(内部已 stopPropagation)
   if (event.shiftKey) return
   // 非 Shift:拦截冒泡,避免触发表格整体拖动;先记录,移动超阈值才当作拖动
   event.stopPropagation()
-  cellPointer.value = { table, r, c, event, startX: event.clientX, startY: event.clientY, moved: false }
+  const p = resolveEditPart(table, r, c, part, event)
+  cellPointer.value = { table, r, c, part: p, event, startX: event.clientX, startY: event.clientY, moved: false }
 }
 
-function onCellMouseEnter(event, table, r, c) {
-  onCellHover(table, r, c)
+function onCellMouseEnter(event, table, r, c, part) {
+  onCellHover(table, r, c, part)
 }
 
 // 双击单元格:若已含符号则清除,否则进入文字编辑
-function onCellDblClick(event, table, r, c) {
+function onCellDblClick(event, table, r, c, part) {
   const cell = findCellAt(table, r, c)
   if (cell && cell.symbol) {
     clearCellSymbol(table.id, r, c)
     ElMessage.success('已清除单元格符号')
     return
   }
-  startEdit(event, table, r, c)
+  startEdit(event, table, r, c, resolveEditPart(table, r, c, part, event))
 }
 
 // 字号控件显示用户最后设置的字号,切到别的单元格不再变回该单元格原字号
@@ -1012,6 +1043,19 @@ const showTablePicker = ref(false)
 function onPickTableSize(rows, cols) {
   showTablePicker.value = false
   insertEmptyTable(rows, cols)
+}
+
+// 拆分单元格:在选中格内等分为 N 份(横向=左右,纵向=上下),不改动表格行列
+const showSplitPicker = ref(false)
+const splitDir = ref('h')
+const splitCount = ref(2)
+function applySplit() {
+  const t = selectedTable.value
+  const cells = selectedCells.value
+  if (t && cells.length === 1) {
+    splitCell(t.id, cells[0].r, cells[0].c, splitDir.value, splitCount.value)
+  }
+  showSplitPicker.value = false
 }
 
 // 表格模板:整套表格存后端,按原坐标灌回(幅面一致,坐标可直接复用)
@@ -1351,10 +1395,10 @@ function onGlobalMouseUp() {
   endTableDrag()
   endCellSelect()
   onGlobalDimMouseUp()
-  // 单元格仅点击(未拖动):进入编辑
+  // 单元格仅点击(未拖动):进入编辑(part 有值时编辑对应拆分子格)
   if (cellPointer.value && !cellPointer.value.moved) {
-    const { table, r, c } = cellPointer.value
-    editCell(table, r, c)
+    const { table, r, c, part } = cellPointer.value
+    editCell(table, r, c, part)
   }
   cellPointer.value = null
 }
@@ -1752,6 +1796,24 @@ function onModelChange() {
 }
 .preset-del:hover {
   color: #f56c6c;
+}
+
+/* ===== 拆分单元格弹窗:方向选择 + 份数 ===== */
+.split-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.split-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: #606266;
+}
+.split-apply {
+  width: 100%;
 }
 
 /* ===== 标注工具样式 ===== */
