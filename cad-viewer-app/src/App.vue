@@ -120,11 +120,17 @@
       <div class="toolbar-left">
         <span class="app-title">工程图预览</span>
         <el-divider direction="vertical" />
+        <el-button-group>
+          <el-button size="small" :icon="ZoomIn" :disabled="!viewerReady" @click="zoomCanvas(1.2)">放大</el-button>
+          <el-button size="small" :icon="ZoomOut" :disabled="!viewerReady" @click="zoomCanvas(0.8)">缩小</el-button>
+          <el-button size="small" :disabled="!viewerReady" @click="resetCanvas">适应</el-button>
+        </el-button-group>
         <span v-if="viewLoading" class="status-text">加载中...</span>
         <span v-else-if="selectedModel" class="status-text">{{ selectedModel }}</span>
+        <span v-if="viewError" class="status-err">{{ viewError }}</span>
       </div>
       <div class="toolbar-right">
-        <el-button size="small" type="primary" :loading="exportingPdf" :disabled="!placedViews.length" @click="exportPdf">导出 PDF</el-button>
+        <el-button size="small" type="primary" :loading="exportingPdf" :disabled="!viewerReady" @click="exportPdf">导出 PDF</el-button>
       </div>
     </header>
 
@@ -587,10 +593,25 @@
             </g>
           </svg>
 
-          <div v-if="!viewsLoaded && !loadingViews" class="empty-state">
-            <el-icon :size="48"><DocumentAdd /></el-icon>
-            <p>选择型号并导入模型以开始</p>
-            <p class="sub">导入后可从左侧拖拽视图到图纸</p>
+          <div v-if="showEmptyState" class="empty-state">
+            <template v-if="!viewMode">
+              <el-icon :size="48"><DocumentAdd /></el-icon>
+              <p>选择型号并导入模型以开始</p>
+              <p class="sub">导入后可从左侧拖拽视图到图纸</p>
+            </template>
+            <template v-else-if="viewLoading">
+              <el-icon class="is-loading"><Loading /></el-icon>
+              <p>正在加载工程图…</p>
+            </template>
+            <template v-else-if="viewError">
+              <el-icon :size="48"><WarningFilled /></el-icon>
+              <p>工程图加载失败</p>
+              <p class="sub">{{ viewError }}</p>
+            </template>
+            <template v-else>
+              <el-icon :size="48"><DocumentAdd /></el-icon>
+              <p>暂无工程图内容</p>
+            </template>
           </div>
         </div>
       </section>
@@ -735,7 +756,7 @@
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh } from '@element-plus/icons-vue'
+import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh, WarningFilled } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
 import { useTouchCanvas } from '@/composables/useTouchCanvas'
@@ -772,10 +793,14 @@ const urlParams = new URLSearchParams(window.location.search)
 const viewMode = ref(urlParams.has('view') || urlParams.has('src'))
 const viewSrc = ref(urlParams.get('src') || '')
 const viewLoading = ref(false)
+const viewError = ref('')
+const viewerReady = ref(false)
 
 async function loadViewSource(srcUrl) {
   if (!srcUrl) return
   viewLoading.value = true
+  viewError.value = ''
+  viewerReady.value = false
   try {
     const res = await fetch(srcUrl)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -803,8 +828,10 @@ async function loadViewSource(srcUrl) {
     if (parsed.droppedAnnotations) {
       ElMessage.warning(`已跳过 ${parsed.droppedAnnotations} 条标注(它引用的视图不在文件中)`)
     }
+    viewerReady.value = true
     ElMessage.success('源文件已加载')
   } catch (e) {
+    viewError.value = e.message
     ElMessage.error(`加载源文件失败: ${e.message}`)
   } finally {
     viewLoading.value = false
@@ -884,6 +911,14 @@ function closeAllContextMenus() {
   closeContextMenu()
   closeDimContextMenu()
 }
+
+// 预览模式(外部 ?src= 打开)下,编辑工具栏/调色板/属性面板已隐藏;
+// 这里把空状态切到加载/错误文案并屏蔽画布编辑交互,保证只能看不能改。
+const showEmptyState = computed(() =>
+  viewMode.value
+    ? !viewerReady.value && !viewLoading.value
+    : !viewsLoaded.value && !loadingViews.value
+)
 
 // 需要命中圆的标注工具(其余工具下圆不参与命中)
 const circleHitTools = ['diameter', 'linear', 'center-mark']
@@ -1440,6 +1475,15 @@ function onModelChange() {
 
 .editor-shell.view-mode {
   grid-template-columns: minmax(0, 1fr);
+}
+
+/* 预览模式:屏蔽画布上的视图/表格/标注编辑交互,只能看不能改;
+   缩放与平移由 svg 根节点的 wheel/中键事件处理,不受影响 */
+.editor-shell.view-mode .placed-view,
+.editor-shell.view-mode .placed-table,
+.editor-shell.view-mode .dimensions-layer,
+.editor-shell.view-mode .dim-hit-dims {
+  pointer-events: none;
 }
 
 .view-palette,
