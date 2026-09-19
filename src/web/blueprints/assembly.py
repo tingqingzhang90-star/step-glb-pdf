@@ -15,6 +15,7 @@ from flask import (Blueprint, jsonify, request, send_file,
 from web import common
 from web import task_pool
 from core import rebuild_assembly as rb
+from core import build_config
 
 pool = task_pool.get_pool()
 bp = Blueprint("assembly", __name__)
@@ -76,6 +77,28 @@ def api_options():
         })
     motor_codes = [{"code": k, "name": v} for k, v in rb.MOTOR_CODES.items()]
     return jsonify({"series": series_list, "motor_codes": motor_codes, "options": options})
+
+
+@bp.route("/api/series/motor-table")
+def api_series_motor_table():
+    """某系列电机表(图库项目/<系列>/电机.xlsx)→ 含功率(kW)与额定扭矩(Nm)
+
+    选型界面电机功率下拉与扭矩不再在前端硬编码,统一由本接口从 Excel 下发,
+    保证单一数据源。扭矩列缺失时 torque 为 null,前端回退公式估算。
+    """
+    series = (request.args.get("series") or "").strip()
+    if not series:
+        return jsonify({"ok": False, "error": "缺少 series 参数"}), 400
+    table = build_config.motor_table_for_series(series)
+    motors = [{
+        "code": code,
+        "name": m.get("name"),
+        "reducer": m.get("reducer"),
+        "power_kw": m.get("power_kw"),
+        "torque": m.get("torque"),
+        "brake": m.get("brake"),
+    } for code, m in table.items()]
+    return jsonify({"ok": True, "series": series, "motors": motors})
 
 
 def _build_result_payload(result):

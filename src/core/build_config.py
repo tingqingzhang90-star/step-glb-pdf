@@ -104,7 +104,7 @@ def build_mount_or_load(rows, label):
 
 
 def build_motor(rows):
-    """电机表 → {电机编号: {name, reducer, on:[...], off:[...]}}
+    """电机表 → {电机编号: {name, reducer, on, off, torque, power_kw, brake}}
 
     支持两种表头:
       1) [电机, 减速机, OnFeature, OffFeature]   # 250:电机列写法"D55(5.5KW电机）"
@@ -112,8 +112,12 @@ def build_motor(rows):
     电机列既可是"D55(5.5KW电机）"合并写法,也可是纯名称/纯编号。按表头定位列,
     不按下标硬取,否则少一列的系列(JDG 等)会 IndexError。
 
-    配置 key 统一用 strip_code 抽出的编号(便于型号里写编号),原始写法存回 name,
+    配置 key 统一用 strip_code 抽出的编号(便于型号拼接),原始写法存回 name,
     供 UI 展示与按名称反查。
+
+    扭矩列(如「扭矩(Nm)」)为可选:存在则一并读取,供选型界面按电机直接取额定扭矩,
+    缺失时前端回退 T=P*9550/n 估算。功率从电机名列解析(kW/KW 或 W,汇川1500w 等),
+    统一为 kW;刹车由名称含"刹车/抱闸"或编号以 B 结尾判断。
     """
     header = [str(c).strip().lower() if c else "" for c in rows[0]]
     if "onfeature" in header and "offfeature" in header:
@@ -122,6 +126,7 @@ def build_motor(rows):
     else:
         idx_on, idx_off = (2, 3) if len(rows[0]) >= 4 else (1, 2)
     idx_reducer = 1 if idx_on >= 2 else None
+    idx_torque = next((i for i, h in enumerate(header) if "扭矩" in h), None)
 
     cfg = {}
     for r in rows[1:]:  # 跳过表头
@@ -132,13 +137,46 @@ def build_motor(rows):
         if not code:
             continue
         reducer = r[idx_reducer] if idx_reducer is not None and idx_reducer < len(r) else ""
+        # 功率:从电机名解析 kW/KW 或 W(汇川1500w 等),统一为 kW
+        power_kw = None
+        m = re.search(r"([\d.]+)\s*(kw|w)", raw, re.I)
+        if m:
+            v = float(m.group(1))
+            power_kw = v / 1000 if m.group(2).lower() == "w" else v
+        # 刹车:名称含"刹车/抱闸"或编号以 B 结尾
+        brake = ("刹车" in raw) or ("抱闸" in raw) or (code.endswith("B"))
+        # 扭矩:可选列,取数值(Nm)
+        torque = None
+        if idx_torque is not None and idx_torque < len(r) and r[idx_torque] not in (None, ""):
+            try:
+                torque = float(r[idx_torque])
+            except (TypeError, ValueError):
+                torque = None
         cfg[code] = {
             "name": raw,
             "reducer": str(reducer).strip() if reducer else "",
             "on": parse_feature_list(r[idx_on]) if idx_on < len(r) else [],
             "off": parse_feature_list(r[idx_off]) if idx_off < len(r) else [],
+            "torque": torque,
+            "power_kw": power_kw,
+            "brake": brake,
         }
     return cfg
+
+
+def motor_table_for_series(series_name):
+    """读取系列电机.xlsx → {code: {...含 torque/power_kw/brake}};无表返回 {}。
+
+    供后端 /api/series/motor-table 下发,使选型界面电机(功率/扭矩)数据单一来源为
+    图库项目/<系列>/电机.xlsx,不在前端重复维护。
+    """
+    series_dir = os.path.join(LIB_ROOT, series_name)
+    if not os.path.isdir(series_dir):
+        return {}
+    rows = _read_tables(series_dir).get("motor")
+    if not rows:
+        return {}
+    return build_motor(rows)
 
 
 def build_cylinder(rows):
