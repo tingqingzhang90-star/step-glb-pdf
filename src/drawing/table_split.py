@@ -60,11 +60,11 @@ def cell_text_rects(sx1: float, sy1: float, sx2: float, sy2: float,
             text = (parts[i] or {}).get("text") or ""
             if dir_h:
                 x0 = sx1 + (sx2 - sx1) * i / n
-                x1 = sx1 + (sx2 - sx1) * (i + 1)
+                x1 = sx1 + (sx2 - sx1) * (i + 1) / n
                 out.append((x0, sy1, x1, sy2, text))
             else:
                 y0 = sy1 + (sy2 - sy1) * i / n
-                y1 = sy1 + (sy2 - sy1) * (i + 1)
+                y1 = sy1 + (sy2 - sy1) * (i + 1) / n
                 out.append((sx1, y0, sx2, y1, text))
         return out
     return [(sx1, sy1, sx2, sy2, cell.get("text") or "")]

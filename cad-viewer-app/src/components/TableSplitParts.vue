@@ -13,7 +13,7 @@
         :x="textAnchorXInRect(pt, cell)"
         :y="textAnchorYInRect(pt, cell)"
         :font-size="cellFontSize(cell)"
-        :fill="table.text_color || TABLE_STYLE.textColor"
+        :fill="cellTextColor(cell, table)"
         :text-anchor="cellTextAnchor(cell)"
         :dominant-baseline="cellTextBaseline(cell)"
         :style="{ fontWeight: cell.bold ? 'bold' : 'normal' }"
@@ -48,7 +48,7 @@
 import { computed } from 'vue'
 import {
   cellPartRects, textAnchorXInRect, textAnchorYInRect,
-  cellFontSize, cellTextAnchor, cellTextBaseline, textLines, multiLineYs
+  cellFontSize, cellTextAnchor, cellTextBaseline, cellTextColor, textLines, multiLineYs
 } from '@/tables/tableGeometry'
 import { TABLE_STYLE } from '@/composables/useStyleConfig'
 

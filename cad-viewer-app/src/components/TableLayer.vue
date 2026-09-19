@@ -43,7 +43,7 @@
           :x="cellTextX(t, lc.cell)"
           :y="cellTextY(t, lc.cell)"
           :font-size="cellFontSize(lc.cell)"
-          :fill="t.text_color || TABLE_STYLE.textColor"
+          :fill="cellTextColor(lc.cell, t)"
           :text-anchor="cellTextAnchor(lc.cell)"
           :dominant-baseline="cellTextBaseline(lc.cell)"
           :style="{ fontWeight: lc.cell.bold ? 'bold' : 'normal' }"
@@ -150,7 +150,7 @@ import { symbolUrl } from '@/api/symbols'
 import {
   tableColLefts, tableRowTops, tableW, tableH, tableLogicalCells,
   cornerHandles, cornerHandlePath, colResizeHandles, rowResizeHandles,
-  cellRect, cellRectAt, cellPartRects, cellTextX, cellTextY, cellTextAnchor, cellTextBaseline, cellFontSize,
+  cellRect, cellRectAt, cellPartRects, cellTextX, cellTextY, cellTextAnchor, cellTextBaseline, cellFontSize, cellTextColor,
   textLines, multiLineYs,
   findCellAt
 } from '@/tables/tableGeometry'

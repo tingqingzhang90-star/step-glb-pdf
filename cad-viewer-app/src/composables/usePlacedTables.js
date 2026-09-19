@@ -297,6 +297,14 @@ export function usePlacedTables() {
     if (cell) cell.font_size = size
   }
 
+  /** 设置单元格字体颜色(拆分子格随整格颜色),table.text_color 作为回退默认 */
+  function setCellColor(tableId, r, c, color) {
+    const t = placedTables.value.find(x => x.id === tableId)
+    if (!t) return
+    const cell = findCellAt(t, r, c)
+    if (cell) cell.text_color = color
+  }
+
   /** 解析并规范化 align 字符串,保持另一轴不变,缺省值居中 */
   function normalizeAlign(align) {
     const parts = (align || '').split(/\s+/).filter(Boolean)
@@ -362,6 +370,6 @@ export function usePlacedTables() {
     findCellAt,
     insertRow, deleteRow, insertCol, deleteCol,
     resizeCol, resizeRow, resizeTable, resizeFromTopLeft,
-    setCellFontSize, setCellAlign, setTableBorder
+    setCellFontSize, setCellAlign, setTableBorder, setCellColor
   }
 }

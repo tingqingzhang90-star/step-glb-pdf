@@ -219,6 +219,11 @@ export function cellFontSize(cell) {
   return (cell.font_size || TABLE_STYLE.fontPx) * PX_TO_MM
 }
 
+/** 单元格文字颜色:优先单元格 text_color,回退表级 text_color,最后用样式默认 */
+export function cellTextColor(cell, table) {
+  return cell.text_color || (table && table.text_color) || TABLE_STYLE.textColor
+}
+
 function hAlign(cell) {
   return (cell.align || 'h-center').split(/\s+/).find(s => s.startsWith('h-')) || 'h-center'
 }

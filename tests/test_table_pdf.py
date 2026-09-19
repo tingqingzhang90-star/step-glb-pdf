@@ -259,6 +259,28 @@ def test_split_empty_cell_text_still_renders_parts():
     assert texts == ["甲", "乙"]
 
 
+def test_split_part_rects_equal_division_within_cell():
+    """子格矩形必须等分且逐块落在格内(回归:曾漏除份数,后几块跑到表格外)"""
+    from drawing.table_split import cell_text_rects
+
+    v_cell = {"split_dir": "v", "split_count": 3,
+              "parts": [{"text": "A"}, {"text": "B"}, {"text": "C"}]}
+    rects = cell_text_rects(0, 10, 20, 40, v_cell)
+    assert [r[1] for r in rects] == pytest.approx([10, 20, 30])
+    assert [r[3] for r in rects] == pytest.approx([20, 30, 40])
+    assert [r[4] for r in rects] == ["A", "B", "C"]
+    for x1, _, x2, _, _ in rects:
+        assert (x1, x2) == (0, 20)
+
+    h_cell = {"split_dir": "h", "split_count": 2,
+              "parts": [{"text": "左"}, {"text": "右"}]}
+    rects = cell_text_rects(0, 0, 30, 5, h_cell)
+    assert [r[0] for r in rects] == pytest.approx([0, 15])
+    assert [r[2] for r in rects] == pytest.approx([15, 30])
+    for _, y1, _, y2, _ in rects:
+        assert (y1, y2) == (0, 5)
+
+
 def test_source_render_split_h_draws_divider_and_parts():
     """drawing_source 路径同样要支持拆分:'h' → 竖线 + 子格文字"""
     from drawing.drawing_source_render import _draw_table
@@ -317,3 +339,37 @@ def test_source_render_multiline_cell():
     drawn = [a for k, a in c.calls if k == "string"]
     assert [d[2] for d in drawn] == ["A", "B"]
     assert drawn[0][1] > drawn[1][1]
+
+
+def test_cell_text_color_overrides_table_default():
+    """单元格 text_color 优先于表级 text_color(逐单元格取色)"""
+    from drawing.dim import dim_pdf_sheet as mod
+    t = {
+        "x": 0, "y": 0, "col_widths": [10, 10], "row_heights": [8],
+        "text_color": "#303133",
+        "cells": [
+            {"r": 0, "c": 0, "text": "默认色"},
+            {"r": 0, "c": 1, "text": "红字", "text_color": "#ff0000"},
+        ],
+    }
+    c, m = FakeCanvas(), SheetMapper(100, 100)
+    _draw_table_placement(c, t, m)
+    fills = [a for k, a in c.calls if k == "fill"]
+    assert fills == [mod._hex_rgb("#303133"), mod._hex_rgb("#ff0000")]
+
+
+def test_source_render_cell_text_color_overrides_table_default():
+    """drawing_source 路径同样逐单元格取色,单元格色优先于表级"""
+    from drawing.drawing_source_render import _draw_table, _hex_rgb
+    t = {
+        "x": 0, "y": 0, "col_widths": [10, 10], "row_heights": [8],
+        "text_color": "#303133",
+        "cells": [
+            {"r": 0, "c": 0, "text": "默认色"},
+            {"r": 0, "c": 1, "text": "红字", "text_color": "#ff0000"},
+        ],
+    }
+    c, fy = FakeCanvas(), (lambda v: 100 - v)
+    _draw_table(c, t, fy)
+    fills = [a for k, a in c.calls if k == "fill"]
+    assert fills == [_hex_rgb("#303133", (0, 0, 0)), _hex_rgb("#ff0000", (0, 0, 0))]

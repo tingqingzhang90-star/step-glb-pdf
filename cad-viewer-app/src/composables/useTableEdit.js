@@ -11,11 +11,13 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     placedTables, selectedTableId, selectedTable, selectedCells,
     selectTable, focusTable, deleteSelectedTable, updateCellText, toggleCellSelect,
     insertRow, deleteRow, insertCol, deleteCol,
-    setCellFontSize, setCellAlign, setTableBorder, placeTable
+    setCellFontSize, setCellAlign, setTableBorder, setCellColor, placeTable
   } = tables
 
   // 当前字号“画笔”:用户设置一次后保持,切换到其他单元格时不再被该单元格原字号覆盖
   const activeFontSize = ref(TABLE_STYLE.fontPx)
+  // 当前字体色“画笔”:与字号同理,设置一次后保持
+  const activeColor = ref(TABLE_STYLE.textColor)
 
   // ---- inline 编辑 ----
   // editingCell 只标记"哪个格在编辑",input 的聚焦由渲染层(TableLayer)
@@ -159,12 +161,23 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
     }
   }
 
-  // 切换单元格时把当前字号刷过去,避免到下一格就“变回”原字号
+  function setColorOfSelected(v) {
+    activeColor.value = v || TABLE_STYLE.textColor
+    const t = selectedTable.value
+    const cells = selectedCells.value
+    if (!t || !cells.length) return
+    for (const { r, c } of cells) {
+      setCellColor(t.id, r, c, activeColor.value)
+    }
+  }
+
+  // 切换单元格时把当前字号/字体色刷过去,避免到下一格就“变回”原值
   watch(selectedCells, (cells) => {
     const t = selectedTable.value
     if (!t || !cells.length) return
     for (const { r, c } of cells) {
       setCellFontSize(t.id, r, c, activeFontSize.value)
+      setCellColor(t.id, r, c, activeColor.value)
     }
   }, { deep: true })
   function setBorderWidth(v) {
@@ -216,13 +229,13 @@ export function useTableEdit(tables, { sheetWidth, sheetHeight }) {
   }
 
   return {
-    editingCell, hoverCell, contextMenu, activeFontSize,
+    editingCell, hoverCell, contextMenu, activeFontSize, activeColor,
     startEdit, editCell, commitEdit, cancelEdit, onCellClick,
     startCellSelect, extendCellSelect, endCellSelect,
     onCellHover, clearHover,
     openContextMenu, closeContextMenu,
     ctxInsertRow, ctxDeleteRow, ctxInsertCol, ctxDeleteCol,
-    setAlignOfSelected, setFontOfSelected, setBorderWidth, setBorderColor,
+    setAlignOfSelected, setFontOfSelected, setColorOfSelected, setBorderWidth, setBorderColor,
     handleKeydown, insertEmptyTable, insertPresetTable
   }
 }

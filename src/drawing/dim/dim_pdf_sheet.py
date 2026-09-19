@@ -144,7 +144,6 @@ def _draw_table_placement(c, table, mapper):
     border = table.get("border", {})
     bw = border.get("width", _TBL_BORDER_W)
     bc = _hex_rgb(border.get("color", _TBL_BORDER_COLOR))
-    tc = _hex_rgb(table.get("text_color", _TBL_TEXT_COLOR))
 
     try:
         from drawing.dim.dim_render import _CN_FONT
@@ -177,6 +176,7 @@ def _draw_table_placement(c, table, mapper):
             draw_split_dividers(c, cell, mapper.pt, sx1, sy1, sx2, sy2, bc, bw)
 
         # 文字:拆分格按子格逐块绘制,未拆分画整格
+        tc = _hex_rgb(cell.get("text_color") or table.get("text_color", _TBL_TEXT_COLOR))
         for rect in cell_text_rects(sx1, sy1, sx2, sy2, cell):
             _draw_cell_text(c, mapper, rect, cell, tc, _CN_FONT)
 
@@ -363,23 +363,6 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
     # 表格:整批只读 template_doc["tables"],逐个画
     for table in template_doc.get("tables", []):
         _draw_table_placement(c, table, mapper)
-
-    # 标题栏 / BOM:变量按型号实时解析,选型配置变化后出图自动跟随
-    from drawing.dim.dim_render import _CN_FONT
-    from drawing.dim.dim_titleblock import (
-        model_params, draw_title_block, draw_bom_table)
-    try:
-        tb_params = model_params(model_code)
-    except (OSError, ValueError, KeyError):
-        tb_params = {"model_code": model_code}
-    # 标题栏在 BOM 上方,两者都贴在右下角内框线内
-    margin = 20
-    frame_bottom = getattr(mapper, "sheet_h", 297) - margin - 1
-    bom_top = draw_bom_table(c, template_doc.get("bom_table"), mapper,
-                             _CN_FONT, _FS_TEXT_MM, bottom_y=frame_bottom)
-    tb_bottom = (bom_top - 2) if bom_top is not None else frame_bottom
-    draw_title_block(c, template_doc.get("title_block"), tb_params,
-                     mapper, _CN_FONT, _FS_TEXT_MM, bottom_y=tb_bottom)
 
     unmatched = 0
     for item in rebound:

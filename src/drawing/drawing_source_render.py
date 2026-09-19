@@ -34,8 +34,6 @@ _PX_PER_MM = 2.0
 _W_VISIBLE = 0.4
 _W_HIDDEN = 0.3
 _W_TABLE = 0.3
-_W_TITLE = 0.3
-_FS_TITLE = 3.0
 _W_DIM = 0.5
 _W_EXT = 0.3
 _FS_DIM = 3.0
@@ -92,8 +90,6 @@ def render_drawing_source_pdf(doc, output_pdf):
     _draw_annotations(c, doc, fy)
     for t in doc.get("tables", []):
         _draw_table(c, t, fy)
-    _draw_title_block(c, doc.get("title_block"), fy)
-    _draw_bom(c, doc.get("bom_table"), fy)
 
     c.showPage()
     c.save()
@@ -288,10 +284,10 @@ def _draw_table(c, table, fy):
         rs = cell.get("rowspan", 1)
         xc, yc_top, w, h = _cell_rect(table, r, c_, cs, rs)
         for rect in cell_text_rects(xc, yc_top, xc + w, yc_top + h, cell):
-            _draw_cell_text_src(c, fy, rect, cell)
+            _draw_cell_text_src(c, fy, rect, cell, table)
 
 
-def _draw_cell_text_src(c, fy, rect, cell):
+def _draw_cell_text_src(c, fy, rect, cell, table):
     """在子矩形 rect=(x1,y1,x2,y2,text)(SVG mm)内按单元格对齐绘制文字,支持 \\n 多行。"""
     xc, yc_top, xc2, yc_bot, text = rect
     if not text:
@@ -302,7 +298,8 @@ def _draw_cell_text_src(c, fy, rect, cell):
     fs = (cell.get("font_size") or 20) / _PX_PER_MM
     cap = h * 0.7 if len(lines) <= 1 else h / (len(lines) * LINE_SPACING)
     fs = max(1.5, min(fs, cap))
-    c.setFillColorRGB(*_C_EDGE)
+    tc = _hex_rgb(cell.get("text_color") or table.get("text_color", "#303133"), _C_EDGE)
+    c.setFillColorRGB(*tc)
     c.setFont(_CN_FONT, fs)
     align = cell.get("align", "") or ""
     if "h-center" in align:
@@ -325,59 +322,4 @@ def _draw_cell_text_src(c, fy, rect, cell):
         draw(tx, ty, line)
 
 
-# --------------------------------------------------------------------------
-# 标题栏字段(带绝对 x/y)
-# --------------------------------------------------------------------------
-def _draw_title_block(c, title_block, fy):
-    fields = (title_block or {}).get("fields", []) or []
-    if not fields:
-        return
-    c.setFillColorRGB(*_C_EDGE)
-    c.setFont(_CN_FONT, _FS_TITLE)
-    for f in fields:
-        x = f.get("x")
-        y = f.get("y")
-        if x is None or y is None:
-            continue
-        value = f.get("value")
-        if value is None:
-            value = f.get("source") or ""
-        if not value:
-            continue
-        # 只画 value(模板 label 已在图纸固定位置印出)
-        c.drawString(x, fy(y), str(value))
 
-
-# --------------------------------------------------------------------------
-# BOM 表
-# --------------------------------------------------------------------------
-def _draw_bom(c, bom, fy):
-    if not bom or not bom.get("columns"):
-        return
-    x0 = bom.get("x", 0)
-    y0 = bom.get("y", 0)
-    cols = bom["columns"]
-    rows = bom.get("rows", [])
-    # 列宽按比例分配(文档未存,用页数均分近似)
-    n = len(cols)
-    colw = [40.0] * n if n else [40]
-    rowh = 8.0
-    c.setStrokeColorRGB(*_C_EDGE)
-    c.setLineWidth(_W_TABLE)
-    c.setFillColorRGB(*_C_EDGE)
-    c.setFont(_CN_FONT, 2.6)
-    # 表头
-    for i, col in enumerate(cols):
-        c.rect(x0 + i * colw[i], fy(y0 + rowh), colw[i], rowh, stroke=1, fill=0)
-        c.drawCentredString(x0 + i * colw[i] + colw[i] / 2.0,
-                            fy(y0 + rowh) + (rowh - 2.6) / 2.0, str(col))
-    # 数据行
-    for ri, row in enumerate(rows):
-        yy = y0 + (ri + 1) * rowh
-        vals = [str(row.get("name", "")), str(row.get("qty", "")),
-                str(row.get("code") or ""), str(row.get("material") or "")]
-        for i in range(n):
-            c.rect(x0 + i * colw[i], fy(yy + rowh), colw[i], rowh, stroke=1, fill=0)
-            c.drawString(x0 + i * colw[i] + 1.0,
-                         fy(yy + rowh) + (rowh - 2.6) / 2.0,
-                         vals[i] if i < len(vals) else "")

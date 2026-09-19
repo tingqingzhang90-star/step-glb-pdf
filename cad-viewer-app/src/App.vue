@@ -112,9 +112,11 @@
           :selected-id="selectedTableId"
           :selected-cells="selectedCells"
           :font-size="selectedCellFontSize"
+          :cell-color="selectedCellColor"
           :border-width="selectedTable?.border?.width ?? 0.3"
           :border-color="selectedTable?.border?.color ?? '#303133'"
           @font-size="setFontOfSelected"
+          @cell-color="setColorOfSelected"
           @border-width="setBorderWidth"
           @border-color="setBorderColor"
         />
@@ -980,13 +982,13 @@ const {
 
 // 编辑交互:inline 编辑 / 右键菜单 / 样式 / 键盘 / 插入
 const {
-  editingCell, hoverCell, contextMenu, activeFontSize,
+  editingCell, hoverCell, contextMenu, activeFontSize, activeColor,
   startEdit, editCell, commitEdit, cancelEdit, onCellClick,
   startCellSelect, extendCellSelect, endCellSelect,
   onCellHover, clearHover,
   openContextMenu, closeContextMenu,
   ctxInsertRow, ctxDeleteRow, ctxInsertCol, ctxDeleteCol,
-  setAlignOfSelected, setFontOfSelected, setBorderWidth, setBorderColor,
+  setAlignOfSelected, setFontOfSelected, setColorOfSelected, setBorderWidth, setBorderColor,
   handleKeydown, insertEmptyTable, insertPresetTable
 } = useTableEdit(tables, { sheetWidth, sheetHeight })
 
@@ -1037,6 +1039,7 @@ function onCellDblClick(event, table, r, c, part) {
 
 // 字号控件显示用户最后设置的字号,切到别的单元格不再变回该单元格原字号
 const selectedCellFontSize = computed(() => activeFontSize.value)
+const selectedCellColor = computed(() => activeColor.value)
 
 // 插入表格:尺寸选择器 → 空表格(Office 风格,无占位文字)
 const showTablePicker = ref(false)
