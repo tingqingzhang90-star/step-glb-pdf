@@ -5,7 +5,8 @@
   1. 根据 model_id 定位 output/<model_id>/drawing_source.json(同系列复用)。
   2. 把前端传来的 spec(规格字段)回填进 drawing_source.json 的
      title_block.fields[].value 与 技术参数表 cells[].text。
-  3. 几何字段(stroke / motor / series)驱动派生值(行程、缸长 D1、电机安装方式)。
+  3. 几何字段(stroke / motor / series)驱动派生值(行程、缸长 D1);
+     电机安装方式/品牌型号优先取前端选中的显示名(installationName/motorBrandName)。
 
 不改动 views / annotations 几何,只写可编辑内容;路径经白名单校验,杜绝穿越。
 """
@@ -19,14 +20,15 @@ from core import rebuild_assembly as rb
 
 SOURCE_NAME = "drawing_source.json"
 
-# 技术参数表中,标签 → (r, c) 的回填位置(其余标签如缸径/额定扭矩/丝杆型号/
-# 重复定位精度按业务要求先不动,保持原值)
+# 技术参数表中,标签 → (r, c) 的回填位置(值单元格)。
+# 缸径/丝杆型号/额定扭矩按 spec 回填;重复定位精度等业务字段保持原值。
 PARAM_CELLS = {
     "产品型号": (1, 1),
     "有效行程(mm)": (2, 3),
     "电机功率(KW)": (3, 1),
     "额定转速(rpm)": (3, 3),
     "最高转速（rpm）": (4, 3),
+    "额定扭矩(N.W)": (4, 1),
     "丝杆导程（mm）": (5, 3),
     "减速比": (6, 1),
     "额定推力(KN)": (7, 1),
@@ -130,6 +132,17 @@ def _set_cell(table, r, c, text):
     return False
 
 
+def _put_by_label(table, label, text):
+    """按标签文字在技术参数表里找值单元格(右侧一格)写入;标签不存在返回 False
+
+    缸径/丝杆型号等表内既有行用标签定位,避免硬编码行列随模板变动失效。
+    """
+    for cell in table.get("cells", []):
+        if cell.get("text") == label:
+            return _set_cell(table, cell.get("r"), (cell.get("c") or 0) + 1, text)
+    return False
+
+
 def apply_spec(doc, model_id, spec, series_cfg=None):
     """原地回填 spec 到 doc,返回 doc。只写 title_block.value 与 tables.cells.text。"""
     if series_cfg is None:
@@ -172,9 +185,18 @@ def apply_spec(doc, model_id, spec, series_cfg=None):
     maxsp = spec.get("motorMaxSpeed")
     if maxsp is not None and str(maxsp) != "":
         put("最高转速（rpm）", str(maxsp))
+    torque = spec.get("motorRatedTorque")
+    if torque not in (None, ""):
+        put("额定扭矩(N.W)", str(torque))
     travel = spec.get("travel")
     if travel is not None and str(travel) != "":
         put("丝杆导程（mm）", f"{travel}mm")
+    screw_model = spec.get("screwModel")
+    if screw_model not in (None, ""):
+        _put_by_label(table, "丝杆型号", str(screw_model))
+    bore = spec.get("bore")
+    if bore not in (None, ""):
+        _put_by_label(table, "缸径", str(bore))
     ratio = spec.get("reductionRatio")
     if ratio is not None and str(ratio) != "":
         put("减速比", str(ratio))
@@ -191,9 +213,17 @@ def apply_spec(doc, model_id, spec, series_cfg=None):
     if speed is not None and str(speed) != "":
         put("额定速度(mm/s)", str(speed))
 
-    if motor:
-        put("电机安装方式", format_motor_installation(model_id, motor, series_cfg))
-        put("电机品牌型号", format_motor_brand_model(motor, series_cfg))
+    # 安装方式/电机品牌优先用前端选中的显示名(installationName/motorBrandName),
+    # 缺省(旧记录/无配置)时回退按 model_id+电机表派生,避免填错或留空
+    install_name = spec.get("installationName") or (
+        format_motor_installation(model_id, motor, series_cfg) if motor else "")
+    if install_name:
+        put("电机安装方式", str(install_name))
+
+    brand_name = spec.get("motorBrandName") or (
+        format_motor_brand_model(motor, series_cfg) if motor else "")
+    if brand_name:
+        put("电机品牌型号", str(brand_name))
 
     remark_parts = []
     if spec.get("sizeStandard"):

@@ -19,7 +19,8 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
 
 from web import common, app as web_app  # noqa: E402
-from web.drawing_spec_map import find_drawing_source, format_motor_installation  # noqa: E402
+from web.drawing_spec_map import (  # noqa: E402
+    find_drawing_source, format_motor_installation, apply_spec)
 
 
 def _find_fixture_source():
@@ -73,6 +74,32 @@ def test_render_ok_and_fills_spec(client_and_model):
     with open(src_path, "r", encoding="utf-8") as f:
         after = f.read()
     assert after == before_source, "端点不应修改 drawing_source.json"
+
+
+def test_apply_spec_fills_rated_torque(client_and_model):
+    client, model_id = client_and_model
+    src_path = os.path.join(common.OUT_DIR, model_id, "drawing_source.json")
+    with open(src_path, encoding="utf-8") as f:
+        doc = json.load(f)
+    apply_spec(doc, model_id, {"motorRatedTorque": 2.4})
+    table = next(t for t in doc["tables"]
+                 if any(c.get("text") == "技术参数" for c in t.get("cells", [])))
+    cell = next(c for c in table["cells"] if c.get("r") == 4 and c.get("c") == 1)
+    assert cell["text"] == "2.4"
+
+
+def test_apply_spec_prefers_selection_names(client_and_model):
+    client, model_id = client_and_model
+    src_path = os.path.join(common.OUT_DIR, model_id, "drawing_source.json")
+    with open(src_path, encoding="utf-8") as f:
+        doc = json.load(f)
+    apply_spec(doc, model_id, {"installationName": "H3(前法兰)", "motorBrandName": "安川"})
+    table = next(t for t in doc["tables"]
+                 if any(c.get("text") == "技术参数" for c in t.get("cells", [])))
+    install = next(c for c in table["cells"] if c.get("r") == 9 and c.get("c") == 1)
+    brand = next(c for c in table["cells"] if c.get("r") == 10 and c.get("c") == 1)
+    assert install["text"] == "H3(前法兰)"
+    assert brand["text"] == "安川"
 
 
 def test_render_rejects_empty_model(client_and_model):

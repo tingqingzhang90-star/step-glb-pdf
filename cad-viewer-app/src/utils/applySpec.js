@@ -7,7 +7,8 @@
 // 说明:后端 apply_spec 依赖 series_cfg(系列配置,含缸长常数 C、电机 reducer/brand)。
 // 该配置来自后端图库,客户端暂未内置;series_cfg 缺省时:
 //   - 缸长 D1 不回填(几何相关,源文件自带)
-//   - 电机安装方式/品牌型号降级为「方向 + 刹车」/电机 key 原值
+//   - 电机安装方式/品牌型号优先用 spec 的选中显示名(installationName/motorBrandName),
+//     缺省降级为「方向 + 刹车」/电机 key 原值
 // 其余字段(行程/功率/转速/减速比/推力/速度/型号等)均正常回填。
 
 // 技术参数表中,标签 → (r, c) 的回填位置(与后端 PARAM_CELLS 一致)
@@ -18,6 +19,7 @@ const PARAM_CELLS = {
   '电机功率(KW)': [3, 1],
   '额定转速(rpm)': [3, 3],
   '最高转速（rpm）': [4, 3],
+  '额定扭矩(N.W)': [4, 1],
   '丝杆导程（mm）': [5, 3],
   '减速比': [6, 1],
   '额定推力(KN)': [7, 1],
@@ -95,6 +97,24 @@ function setCell(table, r, c, text) {
   return false
 }
 
+// 缸径/丝杆型号等表内既有行用标签文字定位值单元格(右侧一格),
+// 避免硬编码行列随模板变动失效;标签不存在则跳过。
+function putByLabel(table, label, text) {
+  for (const cell of table.cells || []) {
+    if (cell.text !== label) continue
+    const r = cell.r
+    const c = cell.c + 1
+    setCell(table, r, c, text)
+    const labelCell = findCell(table, r, cell.c)
+    const valueCell = findCell(table, r, c)
+    if (labelCell && valueCell && labelCell.font_size != null) {
+      valueCell.font_size = labelCell.font_size
+    }
+    return true
+  }
+  return false
+}
+
 function formatDate() {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
@@ -150,8 +170,14 @@ export function applySpec(doc, modelId, spec, seriesCfg = null) {
   if (rated != null && String(rated) !== '') put('额定转速(rpm)', String(rated))
   const maxsp = spec && spec.motorMaxSpeed
   if (maxsp != null && String(maxsp) !== '') put('最高转速（rpm）', String(maxsp))
+  const torque = spec && spec.motorRatedTorque
+  if (torque != null && String(torque) !== '') put('额定扭矩(N.W)', String(torque))
   const travel = spec && spec.travel
   if (travel != null && String(travel) !== '') put('丝杆导程（mm）', `${travel}mm`)
+  const screwModel = spec && spec.screwModel
+  if (screwModel != null && String(screwModel) !== '') putByLabel(table, '丝杆型号', String(screwModel))
+  const bore = spec && spec.bore
+  if (bore != null && String(bore) !== '') putByLabel(table, '缸径', String(bore))
   const ratio = spec && spec.reductionRatio
   if (ratio != null && String(ratio) !== '') put('减速比', String(ratio))
 
@@ -166,10 +192,12 @@ export function applySpec(doc, modelId, spec, seriesCfg = null) {
   const speed = spec && spec.ratedSpeed
   if (speed != null && String(speed) !== '') put('额定速度(mm/s)', String(speed))
 
-  if (motor) {
-    put('电机安装方式', formatMotorInstallation(modelId, motor, seriesCfg))
-    put('电机品牌型号', formatMotorBrandModel(motor, seriesCfg))
-  }
+  const installName = (spec && spec.installationName) ||
+    (motor ? formatMotorInstallation(modelId, motor, seriesCfg) : '')
+  if (installName) put('电机安装方式', installName)
+  const brandName = (spec && spec.motorBrandName) ||
+    (motor ? formatMotorBrandModel(motor, seriesCfg) : '')
+  if (brandName) put('电机品牌型号', brandName)
 
   const remarkParts = []
   if (spec && spec.sizeStandard) remarkParts.push(String(spec.sizeStandard))

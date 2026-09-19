@@ -179,6 +179,92 @@ def motor_table_for_series(series_name):
     return build_motor(rows)
 
 
+# 系列「名称 → 丝杆型号/导程/缸径」对照表(后端维护,单 xlsx 多 sheet):
+# 选型按系列取导程下拉,选定导程后回填丝杆型号与缸径到工程图规格表。
+# 路径相对项目根(data/ 下),迁移部署只需把文件放到 data/screw_table.xlsx。
+SCREW_TABLE_XLSX = os.path.join(paths.DATA_DIR, "screw_table.xlsx")
+
+
+def _norm_series(name):
+    """系列归一化:取首个数字段(YRJ45 / EDA45 / 45 → "45"),兼容前端不带前缀的写法"""
+    m = re.search(r"\d+", str(name or ""))
+    return m.group(0) if m else str(name or "").strip()
+
+
+def _cell(row, j):
+    return row[j] if (j is not None and 0 <= j < len(row)) else None
+
+
+def _find_screw_header(rows):
+    """定位含「丝杆型号」的表头行 → (行号, {name/screw/lead/bore: 列号});无则 None"""
+    for i, r in enumerate(rows):
+        labels = [str(c).strip() for c in r if c is not None]
+        if "丝杆型号" not in labels:
+            continue
+        cols = {}
+        for j, c in enumerate(r):
+            t = str(c).strip() if c is not None else ""
+            if t == "名称":
+                cols["name"] = j
+            elif t == "丝杆型号":
+                cols["screw"] = j
+            elif t == "导程":
+                cols["lead"] = j
+            elif t == "缸径":
+                cols["bore"] = j
+        if "screw" in cols:
+            return i, cols
+    return None
+
+
+def _screw_cell(v):
+    """单元格值 → 展示用字符串(整数去掉小数尾零)"""
+    if v is None:
+        return None
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return str(v).strip()
+
+
+def _screw_groups():
+    """data/screw_table.xlsx → {归一化系列: [{screw_model, lead, bore}]}
+
+    「名称」列即系列,非空即开启新分组,该系列从本行起直到下一个名称前都属于它。
+    """
+    if not os.path.isfile(SCREW_TABLE_XLSX):
+        return {}
+    from openpyxl import load_workbook
+    wb = load_workbook(SCREW_TABLE_XLSX, data_only=True, read_only=True)
+    groups = {}
+    for ws in wb.worksheets:
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        found = _find_screw_header(rows)
+        if not found:
+            continue
+        h_idx, cols = found
+        cur = None
+        for r in rows[h_idx + 1:]:
+            name = _cell(r, cols.get("name"))
+            if name is not None and str(name).strip():
+                cur = _norm_series(name)
+                groups.setdefault(cur, [])
+            screw = _cell(r, cols.get("screw"))
+            if cur is None or screw is None or not str(screw).strip():
+                continue
+            groups[cur].append({
+                "screw_model": str(screw).strip(),
+                "lead": _screw_cell(_cell(r, cols.get("lead"))),
+                "bore": _screw_cell(_cell(r, cols.get("bore"))),
+            })
+    wb.close()
+    return groups
+
+
+def screw_table_for_series(series_name):
+    """系列(兼容无 YRJ/EDA 前缀)→ [{screw_model, lead, bore}];无匹配返回 []"""
+    return _screw_groups().get(_norm_series(series_name), [])
+
+
 def build_cylinder(rows):
     """缸体长度表 → {C, base_D1, base_stroke, formula, table}
 

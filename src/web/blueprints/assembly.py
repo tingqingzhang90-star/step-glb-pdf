@@ -101,6 +101,20 @@ def api_series_motor_table():
     return jsonify({"ok": True, "series": series, "motors": motors})
 
 
+@bp.route("/api/series/screw-table")
+def api_series_screw_table():
+    """系列(表「名称」列)→ 丝杆选项(丝杆型号/导程/缸径),读 data/screw_table.xlsx
+
+    选型界面据此下发导程下拉,并在选定导程后回填丝杆型号与缸径到工程图规格表。
+    系列名兼容无 YRJ/EDA 前缀(按数字段匹配)。
+    """
+    series = (request.args.get("series") or "").strip()
+    if not series:
+        return jsonify({"ok": False, "error": "缺少 series 参数"}), 400
+    screws = build_config.screw_table_for_series(series)
+    return jsonify({"ok": True, "series": series, "screws": screws})
+
+
 def _build_result_payload(result):
     """构建结果里的绝对路径转相对(便于前端下载)"""
     result = dict(result or {})
