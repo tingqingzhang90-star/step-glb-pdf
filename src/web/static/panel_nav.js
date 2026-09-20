@@ -17,8 +17,20 @@
     return location.pathname.replace(/\/+$/, '') || '/';
   }
 
+  function isEmbedded() {
+    // 内嵌模式(小程序 webview 等):URL 带 embedded=1 或 hideNav=1 时不注入顶栏
+    var p = new URLSearchParams(location.search);
+    return p.get('embedded') === '1' || p.get('hideNav') === '1';
+  }
+
   function build() {
     var style = document.createElement('style');
+    if (isEmbedded()) {
+      // 仍保留偏移变量(置 0),页面 calc(100vh - var(--panel-nav-offset)) 布局不塌陷
+      style.textContent = ':root{--panel-nav-h:0px;--panel-nav-offset:0px}';
+      document.head.appendChild(style);
+      return;
+    }
     style.textContent = [
       ':root{--panel-nav-h:' + NAV_H + 'px;--panel-nav-offset:' + OFFSET + 'px}',
       '.panel-nav{position:fixed;top:0;left:0;right:0;z-index:99999;display:flex;',

@@ -6,8 +6,8 @@
 <title>3D 模型查看器</title>
 <!-- o3dv 渲染库(本地静态资源,defer 不阻塞 HTML 渲染) -->
 <script src="/static/o3dv/o3dv.min.js" defer></script>
-<!-- Feather Icons CDN(defer 不阻塞页面) -->
-<script src="https://cdn.bootcdn.net/ajax/libs/feather-icons/4.29.0/feather.min.js" defer></script>
+<!-- Feather Icons(本地静态资源,defer 不阻塞页面;不依赖公网 CDN,webview 内也可用) -->
+<script src="/static/feather.min.js" defer></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
   :root{
