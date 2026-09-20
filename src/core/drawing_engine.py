@@ -1386,11 +1386,60 @@ def _project_standard_view_worker(args):
 _MIN_PARALLEL_VIEWS = 2
 
 
+# ============ 出图算法切换(由 .env 的 DRAWING_ALGO 配置) ============
+# algo : 精确 HLRBRep_Algo(默认, 保留原生圆/弧语义)
+# poly : HLRBRep_PolyAlgo 离散 + 圆弧拟合恢复语义, 速度更快
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _read_env_value(key):
+    """从项目根 .env 读取键值(仅当 os.environ 未设时),用于本地未走 web 加载的场景。"""
+    try:
+        with open(os.path.join(_PROJECT_ROOT, ".env"), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == key:
+                    return v.strip().strip("'\"")
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_drawing_algo(algo=None):
+    if algo in ("algo", "poly"):
+        return algo
+    val = os.environ.get("DRAWING_ALGO") or _read_env_value("DRAWING_ALGO")
+    return "poly" if val == "poly" else "algo"
+
+
+def _resolve_poly_opts():
+    def num(name, default):
+        v = os.environ.get(name) or _read_env_value(name)
+        if v is None:
+            return default
+        try:
+            return float(v)
+        except ValueError:
+            return default
+
+    def flag(name, default):
+        v = os.environ.get(name) or _read_env_value(name)
+        if v is None:
+            return default
+        return v.strip().lower() in ("1", "true", "yes", "on")
+
+    return {"deflection": num("DRAWING_POLY_DEFLECTION", 2.0),
+            "do_fit": flag("DRAWING_POLY_DO_FIT", True)}
+
+
 def generate_all_standard_views(step_path, include_hidden=False,
                                 thumb_width=200, thumb_height=150,
                                 canvas_width=400, canvas_height=300,
                                 view_names=None, parallel=True,
-                                max_workers=None):
+                                max_workers=None, algo=None):
     """生成标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
 
     使用 HLRBRep_Algo 精确算法 + OutLineVCompound 只提取外轮廓边。
@@ -1444,6 +1493,17 @@ def generate_all_standard_views(step_path, include_hidden=False,
             "timing": {"read": float, "project": float, "total": float}
         }
     """
+    if _resolve_drawing_algo(algo) == "poly":
+        from drawing.hlr_poly import generate_all_standard_views_poly
+        opts = _resolve_poly_opts()
+        return generate_all_standard_views_poly(
+            step_path, include_hidden=include_hidden,
+            thumb_width=thumb_width, thumb_height=thumb_height,
+            canvas_width=canvas_width, canvas_height=canvas_height,
+            view_names=view_names, parallel=parallel,
+            max_workers=max_workers,
+            deflection=opts["deflection"], do_fit=opts["do_fit"])
+
     t0 = time.time()
 
     # 读取 shape(使用 BRep 缓存)
