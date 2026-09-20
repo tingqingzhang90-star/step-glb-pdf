@@ -17,7 +17,7 @@
     data = generate_all_standard_views_poly(
         "output/250-E-H2K1-L100/assembly.step",
         view_names=["front", "left", "left_top"],   # 工程图常用 3 视图
-        deflection=2.0, do_fit=True,
+        deflection=0.5, do_fit=True,
     )
     # data 结构与 drawing_engine.generate_all_standard_views 完全一致
 """
@@ -35,6 +35,12 @@ from OCC.Core.BRepBndLib import brepbndlib
 
 from core import drawing_engine as DE
 from drawing.hlr_arcfit import fit_circular_features
+
+
+# 离散弦最短保留长度(mm)：PolyAlgo 输出的圆/弧是高密度三角化弦，粗网格下
+# 大量弦只有 0.5-2mm，套用精确 HLR 的"最小边长 2mm"过滤会把小圆/短弧整段
+# 删掉(视图残缺)。这里只剔除退化碎片，噪声抑制交给拟合后的实体级判定。
+_SLIVER_MM = 0.05
 
 
 # 进程级 shape 缓存: key = (model_path, deflection)。
@@ -93,7 +99,7 @@ def _project_discrete_one(shape, view_dir, up_dir, show_hidden, max_extent):
     vis_raw.extend(DE._extract_2d_segments(pts.OutLineVCompound(), max_extent=max_extent))
     vis_raw.extend(DE._extract_2d_segments(pts.VCompound(), max_extent=max_extent))
     vis_raw.extend(DE._extract_2d_segments(pts.Rg1LineVCompound(), max_extent=max_extent))
-    vis = DE._filter_short_segments(vis_raw, min_length=2.0)
+    vis = DE._filter_short_segments(vis_raw, min_length=_SLIVER_MM)
     vis = DE._drop_out_of_bounds_segments(vis, bounds)
 
     hid = []
@@ -101,12 +107,22 @@ def _project_discrete_one(shape, view_dir, up_dir, show_hidden, max_extent):
         hid_raw = []
         hid_raw.extend(DE._extract_2d_segments(pts.HCompound(), max_extent=max_extent))
         hid_raw.extend(DE._extract_2d_segments(pts.OutLineHCompound(), max_extent=max_extent))
-        hid = DE._filter_short_segments(hid_raw, min_length=2.0)
+        hid = DE._filter_short_segments(hid_raw, min_length=_SLIVER_MM)
         hid = DE._drop_out_of_bounds_segments(hid, bounds)
     return vis, hid
 
 
-def project_view_subset(model_path, view_names, deflection=2.0,
+def _fit_one(segments, deflection, max_radius):
+    """恢复圆/弧语义并合并离散链：小圆在粗网格下只有 4-5 条弦，故 min_points=4；
+    用 1.5×deflection 的矢高上限挡掉把六角/方形轮廓误判成圆；未成圆的链按
+    近似直线/曲线合并为 line/polyline，避免一条模型边被打散成几十条短弦。"""
+    return fit_circular_features(
+        segments, min_points=4, max_radius=max_radius,
+        sagitta_tol=1.5 * max(deflection, 0.05),
+        straight_tol=max(0.2, deflection))
+
+
+def project_view_subset(model_path, view_names, deflection=0.5,
                         show_hidden=False, do_fit=True):
     """worker 任务:投影一组视图,返回 {view: {visible, hidden, project_time}}。
 
@@ -122,8 +138,8 @@ def project_view_subset(model_path, view_names, deflection=2.0,
         t0 = time.perf_counter()
         vis, hid = _project_discrete_one(shape, cfg["dir"], cfg["up"],
                                          show_hidden, max_ext)
-        fv = fit_circular_features(vis, max_radius=max_r) if do_fit else vis
-        fh = (fit_circular_features(hid, max_radius=max_r)
+        fv = _fit_one(vis, deflection, max_r) if do_fit else vis
+        fh = (_fit_one(hid, deflection, max_r)
               if (do_fit and show_hidden) else hid)
         out[v] = {
             "visible": fv,
@@ -137,7 +153,7 @@ def generate_all_standard_views_poly(step_path, include_hidden=False,
                                      thumb_width=200, thumb_height=150,
                                      canvas_width=400, canvas_height=300,
                                      view_names=None, parallel=True,
-                                     max_workers=None, deflection=2.0,
+                                     max_workers=None, deflection=0.5,
                                      do_fit=True):
     """生成标准视图(离散 HLR + 圆弧拟合),输出结构与 generate_all_standard_views 一致。
 

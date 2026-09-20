@@ -4,12 +4,22 @@
 project_discrete_view（PolyAlgo）把圆/弧离散成直线段，丢失几何语义。
 本模块把共端点的 line 连成链，最小二乘拟合圆，判定整圆/弧，恢复
 type="circle"/"arc" 与 meta.center_mm/radius，使 SVG 圆平滑、下游标注
-关联所需的元数据完整。纯 Python 实现，不依赖 numpy。
+关联所需的元数据完整。
 
-集成到 step__glb_pdf 后由 drawing.hlr_poly 调用，也可独立使用：
+未拟合为圆的链同样要合并：一条模型边在三角化后是几十条短弦，若原样下发，
+下游按边线指纹(mm_coords/length)匹配尺寸标注会全部失配，数据量也会膨胀。
+合并规则为——近似直线 → line(补 orientation/midpoint/mm_coords)，其余 → polyline。
+
+纯 Python 实现，不依赖 numpy。集成到 step__glb_pdf 后由 drawing.hlr_poly 调用，
+也可独立使用：
 
     from drawing.hlr_arcfit import fit_circular_features
-    vis2 = fit_circular_features(vis_final, max_radius=shape_max_extent(shape) * 2)
+    vis2 = fit_circular_features(vis_final, min_points=4, max_radius=extent * 2,
+                                 sagitta_tol=1.5 * deflection,
+                                 straight_tol=deflection)
+
+sagitta_tol 是"圆柱面 vs 多边形"的必要判据：三角化弦中点到拟合圆的偏差不超过
+三角化容差，而六角/方形轮廓在同样半径下偏差约 0.134r，据此可避免把棱柱面误判成圆。
 """
 import math
 
@@ -129,6 +139,85 @@ def _chain_lines(lines, tol):
     return chains
 
 
+def _chain_sagitta(chain, cx, cy, r):
+    """链上各弦中点到拟合圆的最大偏差(mm)。
+
+    三角化弦的中点相对拟合圆最多偏离三角化容差(deflection);而多边形
+    (六角/方形轮廓)的中点在同样半径下偏离 0.134r 量级,据此可把"多边形
+    被误判成圆"挡掉 —— 前提是三角化足够细(deflection 远小于 0.134r)。
+    """
+    worst = 0.0
+    for ln in chain:
+        mx = (ln["x1"] + ln["x2"]) / 2.0
+        my = (ln["y1"] + ln["y2"]) / 2.0
+        d = abs(math.hypot(mx - cx, my - cy) - r)
+        if d > worst:
+            worst = d
+    return worst
+
+
+def _chain_points(chain):
+    pts = [(ln["x1"], ln["y1"]) for ln in chain]
+    pts.append((chain[-1]["x2"], chain[-1]["y2"]))
+    return pts
+
+
+def _deviation(pts, p1, p2):
+    """点到首尾连线的最大垂距(mm)，用于判断链是否近似直线。"""
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    seg = math.hypot(dx, dy)
+    if seg < 1e-9:
+        return max(math.hypot(p[0] - p1[0], p[1] - p1[1]) for p in pts)
+    worst = 0.0
+    for x, y in pts:
+        d = abs(dy * (x - p1[0]) - dx * (y - p1[1])) / seg
+        if d > worst:
+            worst = d
+    return worst
+
+
+def _merge_chain(chain, straight_tol):
+    """把未拟合为圆的链合并成一个实体，保留几何与匹配所需的 mm 元数据。
+
+    近似直线 → type=line（补 orientation/midpoint/mm_coords，供包围盒角色与
+    尺寸重绑识别）；弯曲链(样条等) → type=polyline。离散弦本身没有这些
+    元数据，若不合并，下游按边线指纹匹配尺寸标注会全部失配。
+    """
+    pts = _chain_points(chain)
+    p1, p2 = pts[0], pts[-1]
+    chord = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+    total = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
+    # 垂距小 + 弧长约等于弦长才算直线:薄片/重叠边会走出"折返路径",垂距同样
+    # 很小但弧长远大于弦长,若直接合并成首尾直线会整段丢掉折返部分。
+    if _deviation(pts, p1, p2) <= straight_tol and total <= chord * 1.05 + straight_tol:
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        if abs(dy) < 0.1:
+            orientation = "horizontal"
+        elif abs(dx) < 0.1:
+            orientation = "vertical"
+        else:
+            orientation = "diagonal"
+        return {
+            "type": "line",
+            "x1": p1[0], "y1": p1[1], "x2": p2[0], "y2": p2[1],
+            "meta": {
+                "orientation": orientation,
+                "length": round(total, 4),
+                "midpoint": [round((p1[0] + p2[0]) / 2, 2),
+                             round((p1[1] + p2[1]) / 2, 2)],
+                "mm_coords": [round(p1[0], 6), round(p1[1], 6),
+                              round(p2[0], 6), round(p2[1], 6)],
+            },
+        }
+    return {
+        "type": "polyline",
+        "points": pts,
+        "meta": {"length": round(total, 2),
+                 "mm_coords": [round(p1[0], 6), round(p1[1], 6),
+                               round(p2[0], 6), round(p2[1], 6)]},
+    }
+
+
 def _make_circle(cx, cy, r, rms):
     return {
         "type": "circle",
@@ -143,8 +232,7 @@ def _make_circle(cx, cy, r, rms):
 
 
 def _make_arc(cx, cy, r, chain, span, rms):
-    pts = [(ln["x1"], ln["y1"]) for ln in chain]
-    pts.append((chain[-1]["x2"], chain[-1]["y2"]))
+    pts = _chain_points(chain)
     return {
         "type": "polyline",
         "points": pts,
@@ -161,11 +249,24 @@ def _make_arc(cx, cy, r, chain, span, rms):
 
 
 def fit_circular_features(segments, point_tol=0.5, chord_tol=1.0,
-                          min_points=6, close_tol=1.5, max_radius=1e4):
+                          min_points=6, close_tol=1.5, max_radius=1e4,
+                          sagitta_tol=0.75, straight_tol=0.2):
     """对离散投影段做圆弧拟合，恢复 circle/arc 语义。
 
     segments 为 project_discrete_view 的 vis/hid 列表（含 type=line 的离散段）。
-    返回新 segments：拟合成功的圆/弧替换原 line，其余 line 原样保留。
+    返回新 segments：拟合成功的圆/弧替换该链；未拟合的链合并为 line/polyline
+    （补 mm_coords/length 等元数据），单条 line 原样保留。
+
+    Args:
+        point_tol: 端点量化容差(mm)，用于把共端点的 line 连成链
+        chord_tol: 拟合残差上限(mm)，弦端点到拟合圆的 RMS
+        min_points: 最少弦数；三角化弦的小圆可能只有 4-5 条弦，粗网格下
+            取 6 会让小圆全部漏检
+        sagitta_tol: 弦中点到拟合圆的最大偏差上限(mm)，用于挡掉把多边形
+            (六角/方形)误判成圆；调用方按三角化容差给值(约 1.5×deflection)。
+            None 表示不做该判定(仅当输入已是精确圆弧时可用)
+        max_radius: 半径上限(mm)，超过视为拟合退化
+        straight_tol: 合并链时判定"近似直线"的最大垂距(mm)，给三角化容差量级
     """
     lines = [s for s in segments if s.get("type") == "line"]
     others = [s for s in segments if s.get("type") != "line"]
@@ -176,17 +277,19 @@ def fit_circular_features(segments, point_tol=0.5, chord_tol=1.0,
     out = list(others)
     for ch in chains:
         if len(ch) < min_points:
-            out.extend(ch)
+            out.append(_merge_chain(ch, straight_tol) if len(ch) > 1 else ch[0])
             continue
-        pts = [(ln["x1"], ln["y1"]) for ln in ch]
-        pts.append((ch[-1]["x2"], ch[-1]["y2"]))
+        pts = _chain_points(ch)
         res = _fit_circle_kasa(pts)
         if res is None:
-            out.extend(ch)
+            out.append(_merge_chain(ch, straight_tol))
             continue
         cx, cy, r, rms = res
         if r < 0.5 or r > max_radius or rms > chord_tol:
-            out.extend(ch)
+            out.append(_merge_chain(ch, straight_tol))
+            continue
+        if sagitta_tol is not None and _chain_sagitta(ch, cx, cy, r) > sagitta_tol:
+            out.append(_merge_chain(ch, straight_tol))
             continue
         span = _angle_span(pts, cx, cy)
         closed = math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) <= close_tol

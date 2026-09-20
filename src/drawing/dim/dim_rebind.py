@@ -128,6 +128,19 @@ def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _kind_compatible(k1, k2):
+    """line 与 polyline(非圆弧)同为"线段类"指纹，允许互匹配。
+
+    模板按 algo(精确 HLR)输出记录基准边线：直边记为 line、样条/离散边记为
+    polyline；poly 离散链路可能把同一条边表示成另一种(长直边被三角化切成
+    若干弦后合并为 line，或反之)。二者指纹结构一致(p1/p2/length)，按 kind
+    严格相等会失配，故归为同一类。
+    """
+    if k1 in ("line", "polyline") and k2 in ("line", "polyline"):
+        return True
+    return k1 == k2
+
+
 def match_edge(base_seg, view_name, ctx, target_segs):
     """在目标边线列表中寻找基准边线的对应边
 
@@ -143,9 +156,9 @@ def match_edge(base_seg, view_name, ctx, target_segs):
     best, best_score = None, None
     for seg in target_segs:
         key = _target_key(seg)
-        if key is None or key["kind"] != exp["kind"]:
+        if key is None or not _kind_compatible(key["kind"], exp["kind"]):
             continue
-        if exp["kind"] in ("line", "polyline"):
+        if exp["kind"] in ("line", "polyline") or key["kind"] in ("line", "polyline"):
             # 线段/折线:中点位置匹配 + 长度作 score 软约束
             # 缸体沿轴向拉伸时,同名位置线段长度会变(L100→L200 多 100mm),
             # 不能用 LEN_TOL 硬卡;改用 LEN_TOL*10 软罚分,仅 POS_TOL 硬过滤

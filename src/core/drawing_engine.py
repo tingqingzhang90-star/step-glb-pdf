@@ -1431,7 +1431,7 @@ def _resolve_poly_opts():
             return default
         return v.strip().lower() in ("1", "true", "yes", "on")
 
-    return {"deflection": num("DRAWING_POLY_DEFLECTION", 2.0),
+    return {"deflection": num("DRAWING_POLY_DEFLECTION", 0.5),
             "do_fit": flag("DRAWING_POLY_DO_FIT", True)}
 
 
