@@ -69,3 +69,40 @@ def test_resources_partial_model_not_available(client, tmp_path):
     assert body["model"]["available"] is False
     assert body["cached"] is False
     assert body["drawing_source"]["available"] is True
+
+
+def test_resources_tolerant_of_yrj_brand_prefix(client, tmp_path):
+    """产物按无前缀目录存储时,带 YRJ 前缀的型号也能命中,且路径指向真实目录"""
+    from core import rebuild_assembly as rb
+
+    no_prefix_dir = tmp_path / MODEL
+    no_prefix_dir.mkdir(parents=True, exist_ok=True)
+    for name in _FULL_ARTIFACTS:
+        _touch(no_prefix_dir / name)
+
+    branded = rb.with_brand(MODEL)
+    body = client.get(f"/api/resources/{branded}").get_json()
+    assert body["ok"] is True
+    assert body["cached"] is True
+    # 返回的路径必须按真实(无前缀)目录拼,下载才不 404
+    assert body["model"]["glb_file"] == f"{MODEL}/assembly.glb"
+    assert body["drawing_source"]["file"] == f"{MODEL}/drawing_source.json"
+    assert body["drawing"]["pdf_url"] == f"{MODEL}/drawing.pdf"
+
+
+def test_download_tolerant_of_yrj_brand_prefix(client, tmp_path):
+    """/download 用带 YRJ 前缀型号请求、文件按无前缀目录存储时也能下载到"""
+    from core import rebuild_assembly as rb
+
+    no_prefix_dir = tmp_path / MODEL
+    no_prefix_dir.mkdir(parents=True, exist_ok=True)
+    _touch(no_prefix_dir / "drawing_source.json")
+
+    branded = rb.with_brand(MODEL)
+    res = client.get(f"/download/{branded}/drawing_source.json")
+    assert res.status_code == 200
+
+    # 原始(无前缀)写法仍正常
+    assert client.get(f"/download/{MODEL}/drawing_source.json").status_code == 200
+    # 不存在的文件仍 404
+    assert client.get(f"/download/{branded}/not-exist.json").status_code == 404

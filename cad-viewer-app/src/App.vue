@@ -833,7 +833,8 @@ async function loadViewSource(srcUrl) {
       try {
         // decodeURIComponent 对纯 JSON(无 %) 为无操作,故同时兼容 uni 已解码/未解码两种传入
         const spec = JSON.parse(decodeURIComponent(specParam))
-        applySpec(parsed, parsed.modelId || urlParams.get('modelId') || '', spec)
+        // 优先用调用方透传的展示型号(可能带 YRJ 品牌前缀),缺省再回退源文件自带 model_id
+        applySpec(parsed, urlParams.get('modelId') || parsed.modelId || '', spec)
       } catch (se) {
         console.warn('[spec] 解析失败,跳过规格回填:', se)
       }

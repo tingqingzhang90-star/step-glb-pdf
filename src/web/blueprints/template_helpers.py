@@ -9,6 +9,7 @@ import os
 
 from flask import jsonify, request
 
+from core.rebuild_assembly import normalize_model_code
 from web import common
 from web import task_pool
 
@@ -18,8 +19,12 @@ DEFAULTS_FILENAME = "identity_defaults.json"
 
 
 def template_identity(model_id):
-    """模板身份 = 型号前三段(系列-连接-安装负载),后两段为系列内变量"""
-    return "-".join(str(model_id).split("-")[:3])
+    """模板身份 = 型号前三段(系列-连接-安装负载),后两段为系列内变量。
+
+    品牌前缀 YRJ 不影响系列身份,按去前缀写法归一(与 drawing.frontend_template
+    保持一致),如 YRJ250-E-H3K2 == 250-E-H3K2,避免带前缀型号匹配不到无前缀模板。
+    """
+    return "-".join(normalize_model_code(model_id).split("-")[:3])
 
 
 def parse_uploaded_template():

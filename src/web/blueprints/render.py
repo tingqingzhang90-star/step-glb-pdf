@@ -15,6 +15,7 @@ import os
 
 from flask import Blueprint, jsonify, request
 
+from core import rebuild_assembly as rb
 from web import common
 from web.drawing_spec_map import find_drawing_source, apply_spec
 from web.blueprints import template_helpers as th
@@ -41,8 +42,14 @@ def _try_autogen_drawing_source(model_id):
     if not template_doc:
         return None, None
 
-    model_dir = os.path.join(common.OUT_DIR, model_id)
-    if not os.path.isdir(model_dir):
+    # 型号可能带 YRJ 品牌前缀,后端目录可能带也可能不带,候选写法逐一尝试
+    model_dir = None
+    for cand in rb.model_code_candidates(model_id):
+        d = os.path.join(common.OUT_DIR, cand)
+        if os.path.isdir(d):
+            model_dir = d
+            break
+    if not model_dir:
         return None, None
     has_shape = (os.path.isfile(os.path.join(model_dir, "assembly.step")) or
                  os.path.isfile(os.path.join(model_dir, "assembly.brep")))
@@ -99,11 +106,12 @@ def api_render_drawing():
     except Exception as e:  # 渲染失败不污染已有源文件
         return jsonify({"ok": False, "error": f"渲染失败: {e}"}), 500
 
-    # pdf_url 为 OUT_DIR 下未编码相对路径,编码由前端 downloadUrl() 按段处理
-    rel = f"{model_id}/{_OUT_NAME}"
+    # pdf_url 为 OUT_DIR 下真实落盘的相对路径(可能按去品牌前缀目录存储),
+    # 编码由前端 downloadUrl() 按段处理
+    rel = os.path.relpath(out_abs, common.OUT_DIR).replace("\\", "/")
     return jsonify({
         "ok": True,
         "model_id": model_id,
         "pdf_url": rel,
-        "pdf_path": os.path.relpath(out_abs, common.OUT_DIR).replace("\\", "/"),
+        "pdf_path": rel,
     })

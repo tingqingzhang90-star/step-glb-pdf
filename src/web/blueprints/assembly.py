@@ -221,8 +221,17 @@ def api_resources(model_code):
     """
     model_dir = os.path.join(common.OUT_DIR, model_code)
 
+    # 型号可能带 YRJ 品牌前缀,后端目录可能带也可能不带,候选写法逐一尝试,
+    # 命中真实目录后用其名拼资源路径(否则按带前缀目录拼的下载地址会 404)
+    real_code = model_code
+    for cand in rb.model_code_candidates(model_code):
+        if os.path.isdir(os.path.join(common.OUT_DIR, cand)):
+            real_code = cand
+            model_dir = os.path.join(common.OUT_DIR, cand)
+            break
+
     def rel(name):
-        return f"{model_code}/{name}" if os.path.isfile(os.path.join(model_dir, name)) else None
+        return f"{real_code}/{name}" if os.path.isfile(os.path.join(model_dir, name)) else None
 
     glb_file = rel("assembly.glb")
     step_file = rel("assembly.step")
@@ -243,4 +252,19 @@ def api_resources(model_code):
 
 @bp.route("/download/<path:filename>")
 def download(filename):
+    """下载 OUT_DIR 下的产物文件。
+
+    品牌前缀容错:型号目录可能带也可能不带 YRJ 前缀(前端可能用带前缀型号
+    直接拼下载地址),首段按候选写法逐一尝试;命中即返回真实文件,否则回退原路径。
+    """
+    norm = (filename or "").replace("\\", "/")
+    parts = [p for p in norm.split("/") if p not in ("", ".")]
+    out_root = os.path.abspath(common.OUT_DIR)
+    if len(parts) >= 2 and parts[0] not in ("..",):
+        for cand in rb.model_code_candidates(parts[0]):
+            if not cand or cand == parts[0] or cand.startswith("."):
+                continue
+            alt = os.path.abspath(os.path.join(out_root, cand, *parts[1:]))
+            if alt.startswith(out_root + os.sep) and os.path.isfile(alt):
+                return send_file(alt, as_attachment=True)
     return send_from_directory(common.OUT_DIR, filename, as_attachment=True)

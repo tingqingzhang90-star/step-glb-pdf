@@ -39,6 +39,40 @@ def test_parse_model_code_without_motor_segment():
     assert sel["motor"] is None
 
 
+def test_parse_model_code_strips_yrj_brand_prefix():
+    """型号带 YRJ 前缀时,解析出的系列号仍为 250(后端存储可能不带前缀)"""
+    sel = rb.parse_model_code("YRJ250-E-H2K1-L100-D11")
+    assert sel["series"] == "250"
+    assert sel["motor"] == "11kw电机"
+
+
+def test_parse_model_code_lowercase_yrj_brand_prefix():
+    sel = rb.parse_model_code("yrj250-E-H2K1-L100-D11")
+    assert sel["series"] == "250"
+
+
+def test_template_identity_ignores_yrj_prefix():
+    from drawing import frontend_template as th
+    assert th.template_identity("YRJ250-E-H2K1-L100-D11") == "250-E-H2K1"
+    assert th.template_identity("250-E-H2K1") == "250-E-H2K1"
+
+
+def test_find_model_shape_tolerant_of_yrj_prefix(tmp_path):
+    from drawing import frontend_template as th
+    # 目录以无前缀写法存储,传入带前缀型号仍能找到
+    no_brand = tmp_path / "250-E-H2K1-L100"
+    no_brand.mkdir()
+    step = no_brand / "assembly.step"
+    step.write_text("dummy")
+    assert th.find_model_shape(str(tmp_path), "YRJ250-E-H2K1-L100") == str(step)
+    # 目录以带前缀写法存储,传入无前缀型号也能找到
+    with_brand = tmp_path / "YRJ250-E-H3K2-L200"
+    with_brand.mkdir()
+    ystep = with_brand / "assembly.step"
+    ystep.write_text("dummy")
+    assert th.find_model_shape(str(tmp_path), "250-E-H3K2-L200") == str(ystep)
+
+
 def test_resolve_motor_uses_series_default_when_unspecified():
     config = {"motor": {"汇川100w": {}, "汇川100w刹车": {}}}
     assert rb.resolve_motor(config, None) == "汇川100w"

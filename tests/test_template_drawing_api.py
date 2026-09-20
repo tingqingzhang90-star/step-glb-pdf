@@ -47,6 +47,15 @@ def client(srv):
     return srv.app.test_client()
 
 
+def test_template_identity_ignores_yrj_brand_prefix():
+    """带 YRJ 前缀的型号须与去前缀写法得到相同系列身份,否则带前缀型号
+    匹配不到按无前缀存储的同系列模板(如 YRJ250-E-H3K2 vs 250-E-H3K2)。"""
+    assert th.template_identity("YRJ250-E-H3K2-L50-D11") == "250-E-H3K2"
+    assert th.template_identity("YRJ250-E-H3K2-L100-D11") == \
+        th.template_identity("250-E-H3K2-L100-D11")
+    assert th.template_identity("250-E-H3K2-L100-D11") == "250-E-H3K2"
+
+
 def _template_doc(model_id="250-E-H2K1-L100-D11"):
     return {
         "model_id": model_id,

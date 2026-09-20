@@ -9,6 +9,7 @@ import json
 import os
 
 from core import drawing_engine
+from core.rebuild_assembly import normalize_model_code, model_code_candidates
 
 
 def load_frontend_template(path):
@@ -23,18 +24,19 @@ def load_frontend_template(path):
 
 
 def template_identity(model_id):
-    """模板身份 = 型号前三段,同身份共用一份模板"""
-    return "-".join(str(model_id).split("-")[:3])
+    """模板身份 = 型号前三段,同身份共用一份模板(忽略 YRJ 品牌前缀)"""
+    return "-".join(normalize_model_code(model_id).split("-")[:3])
 
 
 def find_model_shape(out_dir, model_code):
-    """模型形状文件(优先 STEP,回退 BRep 缓存)"""
-    model_dir = os.path.join(out_dir, model_code)
-    for name in ("assembly.step", "assembly.brep"):
-        p = os.path.join(model_dir, name)
-        if os.path.isfile(p):
-            return p
-    raise FileNotFoundError(f"未找到模型文件: {model_dir}/assembly.step|brep")
+    """模型形状文件(优先 STEP,回退 BRep 缓存),兼容带/不带 YRJ 前缀的目录名"""
+    for code in model_code_candidates(model_code):
+        model_dir = os.path.join(out_dir, code)
+        for name in ("assembly.step", "assembly.brep"):
+            p = os.path.join(model_dir, name)
+            if os.path.isfile(p):
+                return p
+    raise FileNotFoundError(f"未找到模型文件: {model_code}/assembly.step|brep")
 
 
 def template_view_names(template_doc):

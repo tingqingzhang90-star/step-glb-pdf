@@ -380,6 +380,35 @@ def _to_ascii_name(name):
     return result if result else 'PART'
 
 
+# YRJ 品牌前缀:选型界面展示型号统一加前缀,但后端存储/配置可能带也可能不带,
+# 解析与目录匹配都需兼容两种写法(见 normalize_model_code / model_code_candidates)。
+_BRAND_PREFIX = "YRJ"
+_BRAND_RE = re.compile(r"(?i)^yrj")
+
+
+def normalize_model_code(code):
+    """去掉可选的 YRJ 品牌前缀,统一为 系列-类型-... 形式"""
+    if not code:
+        return code
+    return _BRAND_RE.sub("", code.strip())
+
+
+def with_brand(code):
+    """补上 YRJ 前缀(已带则原样返回)"""
+    code = (code or "").strip()
+    return code if _BRAND_RE.match(code) else f"{_BRAND_PREFIX}{code}"
+
+
+def model_code_candidates(code):
+    """目录/身份容错:同时尝试原始、去前缀、加前缀三种写法(去重)"""
+    code = (code or "").strip()
+    cands = []
+    for c in (code, normalize_model_code(code), with_brand(normalize_model_code(code))):
+        if c and c not in cands:
+            cands.append(c)
+    return cands
+
+
 def parse_model_code(code):
     """解析型号编码 → 选型参数
 
@@ -388,6 +417,7 @@ def parse_model_code(code):
     行程可能是 L100 或纯数字(100),统一归一为 L100 形式
     电机编号可选(D11/D55/D55B/D75/D75B),不填则 motor=None(回退 --motor 参数)
     """
+    code = normalize_model_code(code)
     parts = code.split("-")
     if len(parts) < 4:
         raise ValueError(f"型号格式错误(需 系列-类型-H*K*-行程[-电机]): {code}")

@@ -119,6 +119,31 @@ def test_render_404_when_source_missing(tmp_path, monkeypatch):
     assert res.get_json()["ok"] is False
 
 
+def test_render_tolerant_of_yrj_brand_prefix(client_and_model):
+    """源文件按无前缀目录存储时,带 YRJ 前缀的型号也能出图,且 pdf_url 指向真实目录"""
+    from core import rebuild_assembly as rb
+
+    client, model_id = client_and_model
+    branded_id = rb.with_brand(model_id)
+    if branded_id == model_id:
+        # 夹具目录本身已带前缀,改为构造一个无前缀目录再带前缀请求
+        no_prefix_id = rb.normalize_model_code(model_id)
+        if no_prefix_id != model_id and os.path.isdir(os.path.join(common.OUT_DIR, model_id)):
+            alt_dir = os.path.join(common.OUT_DIR, no_prefix_id)
+            if not os.path.isdir(alt_dir):
+                shutil.copytree(os.path.join(common.OUT_DIR, model_id), alt_dir)
+            model_id, branded_id = no_prefix_id, model_id
+
+    res = client.post("/api/render-drawing",
+                      json={"model_id": branded_id, "spec": {}})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["ok"] is True
+    # pdf_url 必须指向真实落盘目录(去前缀),而非拼接原始带前缀型号
+    pdf_path = os.path.join(common.OUT_DIR, body["pdf_url"])
+    assert os.path.isfile(pdf_path) and os.path.getsize(pdf_path) > 0
+
+
 def test_find_drawing_source_uses_safe_name(tmp_path, monkeypatch):
     monkeypatch.setattr(common, "OUT_DIR", str(tmp_path))
     assert find_drawing_source("../etc/passwd") is None

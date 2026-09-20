@@ -49,11 +49,20 @@ def _safe_name(name):
 
 
 def find_drawing_source(model_id):
-    """返回 output/<model_id>/drawing_source.json 的绝对路径,不存在返回 None"""
-    if not _safe_name(model_id):
+    """返回 output/<model_id>/drawing_source.json 的绝对路径,不存在返回 None
+
+    容错:选型界面型号可能带 YRJ 品牌前缀(如 YRJ250-E-H3K2-L100-D11),
+    而后端源文件可能按去前缀写法(250-E-H3K2-L100-D11)存储,两种写法逐一尝试。
+    """
+    if not model_id:
         return None
-    p = os.path.join(common.OUT_DIR, model_id, SOURCE_NAME)
-    return p if os.path.isfile(p) else None
+    for cand in rb.model_code_candidates(model_id):
+        if not _safe_name(cand):
+            continue
+        p = os.path.join(common.OUT_DIR, cand, SOURCE_NAME)
+        if os.path.isfile(p):
+            return p
+    return None
 
 
 def _load_series_config(model_id):
