@@ -209,9 +209,10 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         view_names = frontend_template.template_view_names(template_doc)
     shape_path = frontend_template.find_model_shape(out_dir, model_code)
     # 只投影模板实际用到的视图(通常 1~3 个),HLR 是这里的主要耗时;
-    # 本函数在 OCC 任务池子进程内执行,parallel=False 防嵌套建池
+    # 3 视图进程并行实测 13s → 6.6s(spawn 开销被并行收益覆盖),
+    # 每个视图独立投影、按固定顺序归位,输出与串行逐边一致
     palette = drawing_engine.generate_all_standard_views(
-        shape_path, view_names=view_names, parallel=False)
+        shape_path, view_names=view_names, parallel=True)
     target_profile = anchor_resolver.resolve_anchors(model_code)
     ctx = dim_rebind.compensation_ctx(base_profile, target_profile)
 
@@ -265,15 +266,20 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
     }
 
 
-def prepare_base(template_doc, out_dir, parallel_views=False):
+def prepare_base(template_doc, out_dir, parallel_views=True):
     """算基准型号的视图/标注引用/锚点档案,返回可 JSON 序列化的 dict
 
     整批只算一次,结果发给每个型号的出图任务。抽出来是为了让多型号能在
     任务池里并行:基准数据若不共享,每个型号都得重投影一遍基准型号。
 
+    结果按「模板全文 + 基准 shape 指纹 + 管线版本」做磁盘缓存:
+    同模板每个新型号首次出图都要重算基准,命中缓存即省掉整轮 HLR
+    投影(实测一轮 13s 串行 / 7s 并行)。模板编辑或基准模型重建后
+    缓存自动失效。
+
     Args:
-        parallel_views: 基准视图投影是否内部并行。调用方已在任务池子进程
-            内时保持 False,避免嵌套建池。
+        parallel_views: 基准视图投影是否内部并行。嵌套进程池的 spawn
+            开销远小于多视图串行投影耗时,默认开启;单视图自动串行。
     """
     base_model = template_doc["model_id"]
     # 基准与目标共用同一视图子集:子集决定 uniform_scale,两边必须一致。
@@ -281,14 +287,30 @@ def prepare_base(template_doc, out_dir, parallel_views=False):
     view_names = frontend_template.template_view_names(template_doc)
     print(f"模板视图集: {view_names}(共 {len(view_names)} 个,不生成其余标准视图)",
           flush=True)
+
+    cache_path = None
+    try:
+        cache_path = frontend_template.base_cache_path(template_doc, out_dir)
+    except FileNotFoundError:
+        cache_path = None  # 基准 shape 缺失:走原路径,由投影报明确错误
+    if cache_path:
+        cached = frontend_template.load_base_cache(cache_path)
+        if cached is not None:
+            print(f"基准数据命中缓存,跳过投影: {os.path.basename(cache_path)}",
+                  flush=True)
+            return cached
+
     base_views = frontend_template.resolve_base_views(
         template_doc, out_dir, view_names, parallel=parallel_views)
-    return {
+    base = {
         "view_names": view_names,
         "views": base_views,
         "refs": frontend_template.resolve_base_refs(template_doc, base_views),
         "profile": anchor_resolver.resolve_anchors(base_model),
     }
+    if cache_path:
+        frontend_template.save_base_cache(cache_path, base)
+    return base
 
 
 def run_frontend(models, template_doc, out_dir):

@@ -105,7 +105,11 @@ def _run_view_single(p):
 
 
 def _run_template_base(p):
-    """算基准数据(整批一次),结果 JSON 化后供各型号任务复用"""
+    """算基准数据(整批一次),结果 JSON 化后供各型号任务复用
+
+    内部默认并行投影 + 磁盘缓存:同模板重复请求直接命中缓存,
+    不再重跑基准型号的整轮 HLR 投影。
+    """
     from batch import batch_drawing as bd
     return bd.prepare_base(p["template_doc"], p["out_dir"])
 

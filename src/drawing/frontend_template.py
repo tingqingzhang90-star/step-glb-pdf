@@ -5,6 +5,7 @@
 型号重新生成同一套调色板视图,把下标还原成带 mm 真值的边线对象。
 调色板生成管线与前端 /api/drawing-view-palette 完全同源,保证下标一致。
 """
+import hashlib
 import json
 import os
 
@@ -61,7 +62,9 @@ def resolve_base_views(template_doc, out_dir, view_names=None, parallel=True):
     Args:
         view_names: 只投影这些视图,None 表示按模板视图集自动推导。
             出图时只需模板用到的那几个,不必生成全部 9+3 个。
-        parallel: 调用方已在 OCC 任务池子进程内时传 False,避免嵌套建池。
+        parallel: 视图间是否用进程池并行投影。嵌套进程池的 spawn 开销
+            (~2s,各 worker 导入 pythonOCC)远小于 3 视图串行投影耗时
+            (实测 13s → 6.6s),默认开启;单视图自动退化为串行。
 
     Returns:
         dict: view_id -> {"source_view", "edges", "hidden_edges", "bbox"}
@@ -84,6 +87,51 @@ def resolve_base_views(template_doc, out_dir, view_names=None, parallel=True):
             "bbox": pv.get("bbox", {}),
         }
     return views
+
+
+# 基准缓存键版本:投影管线输出行为变更时 +1,旧缓存全部失效
+_BASE_CACHE_VERSION = "v1"
+
+
+def base_cache_path(template_doc, out_dir):
+    """基准数据的磁盘缓存路径
+
+    键 = 模板全文哈希 + 基准 shape 文件指纹(mtime/size)+ 管线版本,
+    模板编辑、基准模型重建、投影代码变更任一发生即自动失效。
+    """
+    shape_path = find_model_shape(out_dir, template_doc["model_id"])
+    stat = os.stat(shape_path)
+    payload = json.dumps(template_doc, sort_keys=True, ensure_ascii=False)
+    tpl_digest = hashlib.md5(payload.encode("utf-8")).hexdigest()
+    key = "%s:%s:%d:%d" % (_BASE_CACHE_VERSION, tpl_digest,
+                           stat.st_mtime_ns, stat.st_size)
+    name = hashlib.md5(key.encode("utf-8")).hexdigest()
+    return os.path.join(out_dir, "_base_cache", name + ".json")
+
+
+def load_base_cache(path):
+    """读基准缓存;字段缺失(旧版/损坏)按未命中处理"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and all(
+            k in data for k in ("view_names", "views", "refs", "profile")):
+        return data
+    return None
+
+
+def save_base_cache(path, base):
+    """写基准缓存;临时文件 + 原子替换防并发写坏,失败不影响出图主流程"""
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(base, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def resolve_base_refs(template_doc, base_views):
