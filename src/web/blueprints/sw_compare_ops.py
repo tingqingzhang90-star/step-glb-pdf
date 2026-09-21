@@ -8,6 +8,7 @@
 import os
 import time
 
+from core.paths import LIB_ROOT
 from core.rebuild_assembly import (
     parse_model_code, resolve_visibility, load_config,
     compute_cylinder_scale, MOTOR_CODES, _KEY_RE,
@@ -19,22 +20,23 @@ SW_OPEN_SILENT = 1
 SW_SUPPRESSED = 0    # swComponentSuppressed
 SW_RESOLVED = 2      # swComponentResolved
 
-# 装配体根目录(图库项目下按系列名分子目录)
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-ASSEMBLY_LIB = os.path.join(os.path.dirname(_PROJECT_ROOT), "pdf修改", "图库项目")
-if not os.path.isdir(ASSEMBLY_LIB):
-    ASSEMBLY_LIB = os.path.join(_PROJECT_ROOT, "图库项目")  # 回退
+# 装配体根目录:统一取 core.paths 的图库路径,不再自行上溯拼绝对路径
+# (旧实现按 dirname(_PROJECT_ROOT)/pdf修改/图库项目 拼,迁到 src 包结构后层级错位,
+#  两个候选目录都不存在,OpenDoc6 返回 errors=2)
+ASSEMBLY_LIB = LIB_ROOT
 
 
 def _find_assembly(series_name):
-    """按约定查找系列装配体: <ASSEMBLY_LIB>/<series>/<series>装配体.SLDASM"""
+    """按约定查找系列装配体: <LIB_ROOT>/<series>/<series>装配体.SLDASM"""
     cand = os.path.join(ASSEMBLY_LIB, series_name, f"{series_name}装配体.SLDASM")
     if os.path.exists(cand):
         return cand
     d = os.path.join(ASSEMBLY_LIB, series_name)
     if os.path.isdir(d):
         for f in sorted(os.listdir(d)):
-            if f.upper().endswith(".SLDASM") and "ce" not in f and "_parallel" not in f:
+            if (f.upper().endswith(".SLDASM")
+                    and not f.startswith("~$")
+                    and "ce" not in f and "_parallel" not in f):
                 return os.path.join(d, f)
     return cand
 
@@ -68,6 +70,8 @@ def _open_assembly(sw, asm_path):
 
     失败返回 (None, 错误信息),成功返回 (model, None)。
     """
+    if not os.path.exists(asm_path):
+        return None, f"装配体文件不存在: {asm_path}"
     asm_name = os.path.basename(asm_path)
     try:
         sw.CloseDoc(asm_name)
