@@ -22,6 +22,8 @@ export function createDimEngine(deps) {
   const {
     activeTool,
     diameterSubMode,
+    angleSubMode,
+    centerSubMode,
     dimHoveredEdge,
     dimFirstEdge,
     dimPending,
@@ -82,6 +84,126 @@ export function createDimEngine(deps) {
     previewSuppressAt = mousePos || null
   }
 
+  // ===== 中心夹角:选 顶点 → 点1 → 点2,再移动鼠标定半径、点击落位 =====
+
+  /** 命中对象 → 点引用:圆取圆心;直线取离鼠标更近的端点 */
+  function pickPointRef(edgeRef, mousePos) {
+    let pointKind = 'center'
+    const line = toLineSeg(edgeRef.seg)
+    if (line && mousePos) {
+      const a = getSheetPoint(edgeRef.view, line.x1, line.y1)
+      const b = getSheetPoint(edgeRef.view, line.x2, line.y2)
+      const da = Math.hypot(mousePos.x - a.x, mousePos.y - a.y)
+      const db = Math.hypot(mousePos.x - b.x, mousePos.y - b.y)
+      pointKind = db < da ? 'end' : 'start'
+    }
+    return {
+      viewId: edgeRef.viewId, idx: edgeRef.idx, type: edgeRef.type, pointKind
+    }
+  }
+
+  function isSameDimPoint(refA, refB) {
+    return !!refA && !!refB
+      && refA.viewId === refB.viewId && refA.idx === refB.idx
+      && refA.type === refB.type && (refA.pointKind || 'center') === (refB.pointKind || 'center')
+  }
+
+  function onAnglePointSelect(edgeRef, event) {
+    const mousePos = getSvgMousePoint(event)
+    const pointRef = pickPointRef(edgeRef, mousePos)
+    const pending = dimPending.value
+    if (!pending || pending.mode !== 'angle-points') {
+      // 第一个点作顶点(通常是法兰中心)
+      dimPending.value = { mode: 'angle-points', vertexRef: pointRef, points: [] }
+      dimPreview.value = null
+      return
+    }
+    if (pending.points.length === 0) {
+      if (isSameDimPoint(pending.vertexRef, pointRef)) return
+      pending.points = [pointRef]
+      dimPreview.value = null
+      return
+    }
+    // 第二个被测点:选齐,进入"鼠标定半径"的预览态
+    pending.points = [pending.points[0], pointRef]
+    dimPreview.value = core.previewBuilders.anglePoints(
+      pending.vertexRef, pending.points[0], pending.points[1], mousePos)
+  }
+
+  /** 落位中心夹角;选齐前或几何不成立时返回 false */
+  function commitAnglePoints() {
+    const pending = dimPending.value
+    if (!pending || pending.mode !== 'angle-points' || pending.points.length < 2) return false
+    const radius = dimPreview.value?.radius ?? 200
+    const id = core.placeAnglePointsDim(
+      pending.vertexRef, pending.points[0], pending.points[1], radius)
+    if (!id) return false
+    selectDim(id)
+    finishDimPlacement(false)
+    return true
+  }
+
+  // ===== 孔组中心标记:逐个点孔(再点一次取消),回车/点空白落位 =====
+
+  /**
+   * 就近找孔:找圆周经过鼠标附近的最小圆。
+   * 图纸边线极密(单视图 700+ 条命中带互相重叠),而孔的边线往往是 polyline,
+   * 靠 elementFromPoint 命中基本选不准孔;这里直接按几何判断,点在圆周附近即可。
+   */
+  function pickCircleNear(mousePos) {
+    if (!mousePos) return null
+    let best = null
+    for (const view of placedViews.value) {
+      const scale = view.scale || 1
+      const tolerance = Math.max(6, 12 / scale)   // ≈屏幕 12px
+      const lists = [
+        { segs: view.edges, type: 'edges' },
+        { segs: view.hiddenEdges, type: 'hiddenEdges' }
+      ]
+      for (const list of lists) {
+        const segs = list.segs || []
+        for (let i = 0; i < segs.length; i++) {
+          const circ = toCircle(segs[i])
+          if (!circ) continue
+          const r = circ.r * scale
+          if (r < 3) continue                     // 噪声小圆跳过
+          const c = getSheetPoint(view, circ.cx, circ.cy)
+          const d = Math.abs(Math.hypot(mousePos.x - c.x, mousePos.y - c.y) - r)
+          if (d > tolerance) continue
+          if (!best || d < best.d) best = { view, idx: i, type: list.type, seg: segs[i], d }
+        }
+      }
+    }
+    return best ? makeEdgeRef(best.view, best.idx, best.type, best.seg) : null
+  }
+
+  /** 加入/移出一个孔;满 3 个孔起出预览(分度圆 + 各孔径向十字) */
+  function onCenterMarkGroupPick(edgeRef) {
+    const ref = { viewId: edgeRef.viewId, idx: edgeRef.idx, type: edgeRef.type }
+    let pending = dimPending.value
+    if (!pending || pending.mode !== 'bolt-circle') {
+      pending = { mode: 'bolt-circle', circles: [] }
+      dimPending.value = pending
+    }
+    const key = `${ref.viewId}#${ref.idx}#${ref.type}`
+    const at = pending.circles.findIndex(c => `${c.viewId}#${c.idx}#${c.type}` === key)
+    if (at >= 0) pending.circles.splice(at, 1)
+    else pending.circles.push(ref)
+    // 孔数不足时 build 返回 null,预览自然清空
+    dimPreview.value = core.buildCenterMarkGroupGeometry(pending.circles.map(resolveDimRef))
+  }
+
+  /** 落位孔组中心标记;选孔不足或几何不成立时返回 false */
+  function commitCenterMarkGroup() {
+    const pending = dimPending.value
+    if (!pending || pending.mode !== 'bolt-circle') return false
+    const id = core.placeCenterMarkGroupDim(pending.circles)
+    if (!id) return false
+    selectDim(id)
+    finishDimPlacement(false)
+    return true
+  }
+
   /** 待固定态落位：按当前预览偏移写入标注 */
   function commitPendingLinear() {
     const pending = dimPending.value
@@ -104,9 +226,21 @@ export function createDimEngine(deps) {
     const edgeRef = makeEdgeRef(view, idx, type, seg)
     if (!edgeRef) return
 
+    // 中心夹角已选齐三点:这次点击只用来按鼠标位置定半径并落位
+    if (dimPending.value?.mode === 'angle-points' && dimPending.value.points.length >= 2) {
+      commitAnglePoints()
+      return
+    }
+
     if (activeTool.value === 'center-mark') {
-      // 孔位中心标记：点击即放置，十字线长度自动取该孔直径
+      if (centerSubMode.value === 'group') {
+        // 命中对象认不出圆时,按鼠标位置就近找孔(密集边线里命不中孔)
+        const circleRef = toCircle(seg) ? edgeRef : pickCircleNear(getSvgMousePoint(event))
+        if (circleRef) onCenterMarkGroupPick(circleRef)
+        return
+      }
       if (toCircle(seg)) {
+        // 孔位中心标记：点击即放置，十字线长度自动取该孔直径
         const id = core.placeCenterMarkDim(edgeRef)
         if (id) {
           selectDim(id)
@@ -180,6 +314,11 @@ export function createDimEngine(deps) {
     }
 
     if (activeTool.value === 'angle') {
+      if (angleSubMode.value === 'center') {
+        // 中心夹角：顶点 → 被测点1 → 被测点2 → 点一次定半径落位
+        onAnglePointSelect(edgeRef, event)
+        return
+      }
       // 角度：点击边线1 → 点击边线2（不平行）
       if (!dimFirstEdge.value) {
         dimFirstEdge.value = edgeRef
@@ -308,6 +447,8 @@ export function createDimEngine(deps) {
     }
 
     if (activeTool.value === 'center-mark') {
+      // 孔组预览由选孔驱动(不用跟鼠标),鼠标移动不重建
+      if (centerSubMode.value === 'group') return
       // 孔位中心标记预览：十字线随该孔直径变化
       if (dimHoveredEdge.value && toCircle(dimHoveredEdge.value.seg)) {
         dimPreview.value = P.centerMark(dimHoveredEdge.value)
@@ -328,6 +469,17 @@ export function createDimEngine(deps) {
     }
 
     if (activeTool.value === 'angle') {
+      if (angleSubMode.value === 'center') {
+        // 选齐三点后预览跟鼠标走(半径=鼠标到顶点的距离),选齐前不出预览
+        const pending = dimPending.value
+        if (pending?.mode === 'angle-points' && pending.points.length >= 2) {
+          dimPreview.value = P.anglePoints(
+            pending.vertexRef, pending.points[0], pending.points[1], mousePos)
+        } else {
+          dimPreview.value = null
+        }
+        return
+      }
       if (dimFirstEdge.value) {
         const first = dimFirstEdge.value
         if (dimHoveredEdge.value) {
@@ -350,6 +502,16 @@ export function createDimEngine(deps) {
    * 现状:`@mousedown.stop` 阻止冒泡,不会触发 SVG 根的"落位"逻辑,所以这里打开拖拽
    * 不会与标注流程冲突;center-mark 无可调参数,自然不会被 updateDimDrag 影响。 */
   function onDimMouseDown(event, dim) {
+    // 中心标记工具下点孔组的虚线分度圆:把它当成"一个孔",在分度圆圆心打十字
+    if (activeTool.value === 'center-mark' && dim.type === 'center-mark'
+        && (dim.group || dim.groupCenter)) {
+      const id = core.placeCenterMarkAtGroupCenter(dim.refs)
+      if (id) {
+        selectDim(id)
+        suppressPreviewAfterPlace(getSvgMousePoint(event))
+      }
+      return
+    }
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
@@ -403,6 +565,8 @@ export function createDimEngine(deps) {
       if (selectedDimId.value) deleteSelectedDim()
       return
     }
+    // 孔组中心标记:回车落位(点空白同样可落位)
+    if (event.key === 'Enter' && commitCenterMarkGroup()) return
     if (event.key === 'Escape' && (dimFirstEdge.value || dimPending.value)) {
       clearSelection()
     }
@@ -430,6 +594,7 @@ export function createDimEngine(deps) {
     onMotorEnvelopePick,
     updateDimPreviewAt,
     commitPendingLinear,
+    commitAnglePoints,
     onDimMouseDown,
     onDimTextMouseDown,
     onDimExtensionHandleDown,
@@ -437,6 +602,9 @@ export function createDimEngine(deps) {
     onGlobalDimMouseUp,
     deleteSelectedDim,
     onKeyDown,
+    commitCenterMarkGroup,
+    onCenterMarkGroupPick,
+    pickCircleNear,
     clearSelection,
     // 供模板/删除视图时清理标注
     clearDimState: clearSelection

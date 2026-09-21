@@ -6,6 +6,8 @@ import { toCircle, toLineSeg } from '@/dimensions/geometry.js'
 export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope }) {
   const activeTool = ref(null)       // null | 'linear' | 'diameter' | 'angle' | 'center-mark' | 'motor-envelope'
   const diameterSubMode = ref('line')  // 'line' (贯穿圆心直线) | 'leader' (引线折线)
+  const angleSubMode = ref('edges')    // 'edges' (两条边夹角) | 'center' (顶点+两点的中心夹角)
+  const centerSubMode = ref('single')  // 'single' (单孔十字) | 'group' (孔组:分度圆 + 各孔径向十字)
   const dimHoveredEdge = ref(null)   // { seg, transform, viewId, idx, type }
   const dimFirstEdge = ref(null)     // 第一选中边线
   const dimPending = ref(null)       // { mode, first, second } 已选齐对象，等点击固定
@@ -41,11 +43,14 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
 
   const {
     toggleTool, onDimEdgeSelect, onMotorEnvelopePick, updateDimPreviewAt, commitPendingLinear,
+    commitAnglePoints, commitCenterMarkGroup, onCenterMarkGroupPick, pickCircleNear,
     onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
     activeTool,
     diameterSubMode,
+    angleSubMode,
+    centerSubMode,
     dimHoveredEdge,
     dimFirstEdge,
     dimPending,
@@ -112,6 +117,14 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     const list = []
     if (dimFirstEdge.value) list.push(dimFirstEdge.value)
     if (dimPending.value?.second) list.push(dimPending.value.second)
+    // 中心夹角的选择态:顶点与已选被测点所属对象都要高亮
+    if (dimPending.value?.mode === 'angle-points') {
+      const refs = [dimPending.value.vertexRef, ...(dimPending.value.points || [])]
+      for (const ref of refs) {
+        const edge = ref ? coords.resolveDimRef(ref) : null
+        if (edge) list.push(edge)
+      }
+    }
     return list.map(edge => {
       const circle = toCircle(edge.seg)
       const r = circle ? circle.r * coords.getViewDisplayScale(edge.view) : null
@@ -139,6 +152,20 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     // 点击空白处：已选齐对象的预览就地落位
     if (activeTool.value === 'linear' && dimPending.value) {
       commitPendingLinear()
+      return
+    }
+    // 中心夹角:三点选齐后点空白按当前半径落位(未选齐则继续走清空分支)
+    if (activeTool.value === 'angle' && commitAnglePoints()) return
+    // 孔组中心标记:没落到命中元素上时,先按鼠标位置就近找孔;
+    // 附近没有孔才当落位处理(孔数不够则清空重来)
+    if (activeTool.value === 'center-mark' && centerSubMode.value === 'group') {
+      const near = pickCircleNear(coords.eventToSheetPoint(event))
+      if (near) {
+        onCenterMarkGroupPick(near)
+        return
+      }
+      // 附近没有孔:保留已选的孔,避免点偏一下就把选好的清掉(要清按 Esc)
+      if (commitCenterMarkGroup()) return
       return
     }
     // 只选了一根边线：单边标注按当前偏移直接放置
@@ -251,7 +278,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   }
 
   return {
-    activeTool, diameterSubMode, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
+    activeTool, diameterSubMode, angleSubMode, centerSubMode,
+    dimHoveredEdge, dimFirstEdge, dimPending, dimPreview,
     dimensionColor, dimensionColorPresets, dimensions, selectedDimId, dimDragging,
     renderedDimensions, dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
     setDimensions,

@@ -141,6 +141,15 @@ EXT_OVERSHOOT = dim_ext_overshoot_mm()   # 尺寸界线越过尺寸线的长度(
 TEXT_GAP = dim_text_gap_mm()             # 文字与尺寸线的间距(mm)
 LABEL_GAP = dim_label_gap_mm()           # 伴随文字与数值的间距(mm),=字号*label_gap_factor(配置)
 
+# 中心夹角标注专用量(单位与前端 core.js 同名常量一致,均为图纸 px)
+ANGLE_DEFAULT_RADIUS = 200               # 未指定时的默认弧半径
+ANGLE_EXT_OVERSHOOT = 30                 # 尺寸界线越过弧的长度
+ANGLE_TEXT_GAP = 18                      # 文字相对弧的内侧间距
+
+# 孔组中心标记:十字臂长 = 孔半径 × 该系数(与前端 core.js BOLT_MARK_SCALE 一致)
+BOLT_MARK_SCALE = 1.6
+BOLT_MIN_CIRCLES = 3
+
 
 def _ext_line(p, e):
     """延伸线从被测点 p 画到尺寸线点 e,并越过尺寸线一小段"""
@@ -210,9 +219,10 @@ def build_dim_primitives(ann, segs, views):
         else:
             prims = _diameter(ann, segs[0], views[0])
     elif dtype == "angle":
-        prims = _angle(ann, segs, views)
+        prims = (_angle_points(ann, segs, views)
+                 if ann.get("angleMode") == "points" else _angle(ann, segs, views))
     elif dtype == "center-mark":
-        prims = _center_mark(segs, views)
+        prims = _center_mark(ann, segs, views)
     else:
         return None
     if prims is None:
@@ -603,7 +613,95 @@ def _angle(ann, segs, views):
     }
 
 
-def _center_mark(segs, views):
+def _dim_point(seg, view, point_kind):
+    """点引用解析(与 core.js resolveDimPoint 一致):圆取圆心,直线按 pointKind 取端点"""
+    if not seg or not view:
+        return None
+    circ = to_circle(seg)
+    if circ:
+        return _sheet_point(view, circ["cx"], circ["cy"])
+    line = to_line_seg(seg)
+    if not line:
+        return None
+    a = _sheet_point(view, line["x1"], line["y1"])
+    b = _sheet_point(view, line["x2"], line["y2"])
+    return b if point_kind == "end" else a
+
+
+def _angle_ext_line(vertex, unit, point_dist, radius, overshoot):
+    """角度尺寸界线:被测点 → 弧并越过 overshoot;弧更靠近顶点时从弧起画"""
+    near = min(point_dist, radius)
+    far = max(point_dist, radius) + overshoot
+    return ((vertex[0] + unit[0] * near, vertex[1] + unit[1] * near),
+            (vertex[0] + unit[0] * far, vertex[1] + unit[1] * far))
+
+
+def _angle_points(ann, segs, views):
+    """中心夹角标注:顶点(法兰中心) + 两个被测点(孔心/端点)
+
+    与 core.js buildAnglePointsGeometry 同公式,顺序:取小于 180° 的一侧画弧,
+    尺寸界线沿径向延伸到弧并越过 ANGLE_EXT_OVERSHOOT,文字放弧内侧。
+    """
+    if len(segs) < 3 or len(views) < 3:
+        return None
+    refs = ann.get("refs") or []
+
+    def kind(i):
+        return refs[i].get("pointKind") if i < len(refs) else None
+
+    vertex = _dim_point(segs[0], views[0], kind(0))
+    p1 = _dim_point(segs[1], views[1], kind(1))
+    p2 = _dim_point(segs[2], views[2], kind(2))
+    if not vertex or not p1 or not p2:
+        return None
+    d1 = (p1[0] - vertex[0], p1[1] - vertex[1])
+    d2 = (p2[0] - vertex[0], p2[1] - vertex[1])
+    l1 = math.hypot(d1[0], d1[1])
+    l2 = math.hypot(d2[0], d2[1])
+    if l1 < 1e-6 or l2 < 1e-6:
+        return None
+    u1 = (d1[0] / l1, d1[1] / l1)
+    u2 = (d2[0] / l2, d2[1] / l2)
+    start = math.atan2(u1[1], u1[0])
+    end = math.atan2(u2[1], u2[0])
+    while end < start:
+        end += math.pi * 2
+    if end - start > math.pi:
+        start, end = end, start + math.pi * 2
+    sweep = end - start
+    radius = max(float(ann.get("radius") or ANGLE_DEFAULT_RADIUS), 12.0)
+    overshoot = ann.get("extOvershoot")
+    if not isinstance(overshoot, (int, float)):
+        overshoot = ANGLE_EXT_OVERSHOOT
+    a1 = start + sweep * 0.05
+    a2 = end - sweep * 0.05
+    ap1 = (vertex[0] + math.cos(a1) * radius, vertex[1] + math.sin(a1) * radius)
+    ap2 = (vertex[0] + math.cos(a2) * radius, vertex[1] + math.sin(a2) * radius)
+    tan1 = (-math.sin(a1), math.cos(a1))
+    tan2 = (-math.sin(a2), math.cos(a2))
+    mid = start + sweep / 2
+    text_dist = max(radius - ANGLE_TEXT_GAP, 12.0)
+    text = format_deg(sweep * 180 / math.pi)
+    return {
+        "lines": [_angle_ext_line(vertex, u1, l1, radius, overshoot),
+                  _angle_ext_line(vertex, u2, l2, radius, overshoot)],
+        "dim_lines": [],
+        "arcs": [build_arc_points(vertex[0], vertex[1], radius, start, end)],
+        "arrows": [build_arrow_points(ap1, tan1, True),
+                   build_arrow_points(ap2, (-tan2[0], -tan2[1]), True)],
+        "texts": [{"pos": (vertex[0] + math.cos(mid) * text_dist,
+                           vertex[1] + math.sin(mid) * text_dist),
+                   "text": text, "angle": 0.0, "anchor": "middle"}],
+        "center_marks": [], "text": text,
+    }
+
+
+def _center_mark(ann, segs, views):
+    """单孔中心标记(水平/竖直十字);孔组与孔组圆心走 _center_mark_group"""
+    if ann.get("groupCenter"):
+        return _center_mark_group(segs, views, only_center=True)
+    if ann.get("group"):
+        return _center_mark_group(segs, views)
     marks = []
     for seg, view in zip(segs, views):
         circ = to_circle(seg)
@@ -615,3 +713,37 @@ def _center_mark(segs, views):
         return None
     return {"lines": [], "dim_lines": [], "arrows": [], "texts": [],
             "center_marks": marks, "text": ""}
+
+
+def _center_mark_group(segs, views, only_center=False):
+    """孔组中心标记:分度圆(虚线圆) + 各孔沿径向/切向的十字
+
+    分度圆圆心取各孔心均值、半径取平均距离,与前端 buildCenterMarkGroupGeometry
+    同公式;每个孔的十字一条线沿"中心→孔心"方向、另一条是其垂线,
+    故 center_marks 的 angle 就是该孔的方位角。
+    only_center=True 时只画分度圆圆心处一个水平/竖直十字(把分度圆当"一个孔")。
+    """
+    if len(segs) < BOLT_MIN_CIRCLES:
+        return None
+    points = []
+    for seg, view in zip(segs, views):
+        p = _dim_point(seg, view, "center")
+        if p is None or not to_circle(seg):
+            return None
+        points.append(p)
+    cx = sum(p[0] for p in points) / len(points)
+    cy = sum(p[1] for p in points) / len(points)
+    radius = sum(math.hypot(p[0] - cx, p[1] - cy) for p in points) / len(points)
+    if only_center:
+        return {"lines": [], "dim_lines": [], "arrows": [], "arcs": [],
+                "center_marks": [{"pos": (cx, cy), "r": radius, "angle": None}],
+                "texts": [], "text": ""}
+    marks = []
+    for seg, view, p in zip(segs, views, points):
+        circ = to_circle(seg)
+        half = circ["r"] * (view.get("scale") or 1.0) * BOLT_MARK_SCALE
+        marks.append({"pos": p, "r": half,
+                      "angle": math.atan2(p[1] - cy, p[0] - cx)})
+    return {"lines": [], "dim_lines": [], "arrows": [], "arcs": [],
+            "dashed_circles": [{"x": cx, "y": cy, "r": radius}] if radius > 1.0 else [],
+            "center_marks": marks, "texts": [], "text": ""}

@@ -469,6 +469,78 @@ export function createDimensionCore(deps, ctx) {
     return id
   }
 
+  // ===== 孔组中心标记:分度圆虚线 + 各孔的径向/切向十字 =====
+  // 一圈孔的心大致共圆:分度圆圆心取各孔心均值(均布时均值即圆心),半径取
+  // 各孔心到圆心的平均距离。十字方向不是水平/竖直,而是"中心→孔心"的径向
+  // 加上它的垂线,与图纸上的习惯画法一致。臂长 = 孔半径 × BOLT_MARK_SCALE
+  // (明显探出圆周),与后端 _center_mark_group 同公式。
+
+  const BOLT_MARK_SCALE = 1.6
+  const BOLT_MIN_CIRCLES = 3
+
+  function buildCenterMarkGroupGeometry(edgeRefs, onlyCenter = false) {
+    const refs = (edgeRefs || []).filter(Boolean)
+    if (refs.length < BOLT_MIN_CIRCLES) return null
+    const points = []
+    for (const ref of refs) {
+      const center = getCircleCenterSheet(ref)
+      const circ = toCircle(ref.seg)
+      if (!center || !circ) return null
+      points.push({ x: center.x, y: center.y, circ, view: ref.view })
+    }
+    const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length
+    const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length
+    const radius = points.reduce((sum, p) => sum + Math.hypot(p.x - cx, p.y - cy), 0) / points.length
+    // onlyCenter:只画分度圆圆心处一个水平/竖直十字(把它当"一个孔"做单孔中心标记)
+    const centerMarks = onlyCenter
+      ? [{ x: cx, y: cy, r: radius, angle: 0 }]
+      : points.map(p => ({
+        x: p.x,
+        y: p.y,
+        r: p.circ.r * getViewDisplayScale(p.view) * BOLT_MARK_SCALE,
+        angle: Math.atan2(p.y - cy, p.x - cx)
+      }))
+    return {
+      type: 'center-mark',
+      group: !onlyCenter,
+      groupCenter: onlyCenter,
+      refs: refs.map(edgeRefData),
+      centerMarks,
+      pitchCircle: onlyCenter ? null : { x: cx, y: cy, r: radius },
+      text: ''
+    }
+  }
+
+  /** 落位孔组中心标记;入参是持久化的点引用,内部还原成 edgeRef */
+  function placeCenterMarkGroupDim(refs) {
+    const geometry = buildCenterMarkGroupGeometry((refs || []).map(resolveDimRef))
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'center-mark',
+      group: true,
+      refs: geometry.refs,
+      color: ctx.dimensionColor.value
+    })
+    return id
+  }
+
+  /** 在孔组的分度圆心上打中心十字(引用同一批孔,换型号后位置自动跟随) */
+  function placeCenterMarkAtGroupCenter(refs) {
+    const geometry = buildCenterMarkGroupGeometry((refs || []).map(resolveDimRef), true)
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'center-mark',
+      groupCenter: true,
+      refs: geometry.refs,
+      color: ctx.dimensionColor.value
+    })
+    return id
+  }
+
   // ===== 放置 =====
 
   function placeLinearDimSingle(edgeRef, offset = 50) {
@@ -804,6 +876,123 @@ export function createDimensionCore(deps, ctx) {
     return id
   }
 
+  // ===== 中心夹角标注:顶点(法兰中心) + 两个被测点(孔心/直线端点) =====
+  // 与"两条边夹角"不同:两条边是用点连线虚拟出来的,顶点不是边线交点;
+  // 图上只在被测点外侧画尺寸界线(被测点沿径向延伸到弧再越过一小段),
+  // 弧半径常常远大于"被测点到顶点"的距离,故上限放到 ANGLE_MAX_RADIUS。
+
+  const ANGLE_MAX_RADIUS = 4000      // 弧半径上限(接鼠标预览时用)
+  const ANGLE_EXT_OVERSHOOT = 30     // 尺寸界线越过弧的长度(px)
+  const ANGLE_TEXT_GAP = 18          // 文字相对弧的内侧间距(px)
+
+  /** 点引用 → 图纸坐标:圆取圆心,直线按 pointKind 取端点(缺省起点) */
+  function resolveDimPoint(ref) {
+    const edge = ref ? resolveDimRef(ref) : null
+    if (!edge) return null
+    const circ = toCircle(edge.seg)
+    if (circ) return getSheetPoint(edge.view, circ.cx, circ.cy)
+    const line = toLineSeg(edge.seg)
+    if (!line) return null
+    const a = getSheetPoint(edge.view, line.x1, line.y1)
+    const b = getSheetPoint(edge.view, line.x2, line.y2)
+    return ref.pointKind === 'end' ? b : a
+  }
+
+  /** edgeRefData 只留 {viewId, idx, type},点引用还要带上 pointKind */
+  function anglePointRefData(ref) {
+    return { ...edgeRefData(ref), pointKind: ref.pointKind || 'center' }
+  }
+
+  /** 尺寸界线:被测点 → 弧并越过 overshoot;弧比被测点更靠顶点时改从弧起画 */
+  function angleExtLine(vertex, unit, pointDist, radius, overshoot) {
+    const near = Math.min(pointDist, radius)
+    const far = Math.max(pointDist, radius) + overshoot
+    return {
+      start: { x: vertex.x + unit.x * near, y: vertex.y + unit.y * near },
+      end: { x: vertex.x + unit.x * far, y: vertex.y + unit.y * far }
+    }
+  }
+
+  function buildAnglePointsGeometry(vertexRef, ref1, ref2, radius = 200, opts = {}) {
+    const vertex = resolveDimPoint(vertexRef)
+    const p1 = resolveDimPoint(ref1)
+    const p2 = resolveDimPoint(ref2)
+    if (!vertex || !p1 || !p2) return null
+    const d1 = { x: p1.x - vertex.x, y: p1.y - vertex.y }
+    const d2 = { x: p2.x - vertex.x, y: p2.y - vertex.y }
+    const l1 = Math.hypot(d1.x, d1.y)
+    const l2 = Math.hypot(d2.x, d2.y)
+    if (l1 < 1e-6 || l2 < 1e-6) return null
+    const u1 = { x: d1.x / l1, y: d1.y / l1 }
+    const u2 = { x: d2.x / l2, y: d2.y / l2 }
+    // 取小于 180° 的一侧:两射线夹角超过 180° 时交换起止
+    let startAngle = Math.atan2(u1.y, u1.x)
+    let endAngle = Math.atan2(u2.y, u2.x)
+    while (endAngle < startAngle) endAngle += Math.PI * 2
+    if (endAngle - startAngle > Math.PI) {
+      const temp = startAngle
+      startAngle = endAngle
+      endAngle = temp + Math.PI * 2
+    }
+    const sweep = endAngle - startAngle
+    const r = Math.max(radius, 12)
+    const overshoot = opts.overshoot ?? ANGLE_EXT_OVERSHOOT
+    const arrowAng1 = startAngle + sweep * 0.05
+    const arrowAng2 = endAngle - sweep * 0.05
+    const arrowP1 = { x: vertex.x + Math.cos(arrowAng1) * r, y: vertex.y + Math.sin(arrowAng1) * r }
+    const arrowP2 = { x: vertex.x + Math.cos(arrowAng2) * r, y: vertex.y + Math.sin(arrowAng2) * r }
+    const tan1 = { x: -Math.sin(arrowAng1), y: Math.cos(arrowAng1) }
+    const tan2 = { x: -Math.sin(arrowAng2), y: Math.cos(arrowAng2) }
+    const midAngle = startAngle + sweep / 2
+    const textDist = Math.max(r - ANGLE_TEXT_GAP, 12)
+    return {
+      type: 'angle',
+      angleMode: 'points',
+      refs: [anglePointRefData(vertexRef), anglePointRefData(ref1), anglePointRefData(ref2)],
+      inter: vertex,
+      radius: r,
+      extOvershoot: overshoot,
+      startAngle,
+      endAngle,
+      arcPath: buildArcPath(vertex.x, vertex.y, r, startAngle, endAngle),
+      extLines: [
+        angleExtLine(vertex, u1, l1, r, overshoot),
+        angleExtLine(vertex, u2, l2, r, overshoot)
+      ],
+      arrow1: buildArrowPoints(arrowP1, tan1, true),
+      arrow2: buildArrowPoints(arrowP2, { x: -tan2.x, y: -tan2.y }, true),
+      // 文字放弧内侧(靠顶点一侧),与图纸上的样式一致
+      textPos: { x: vertex.x + Math.cos(midAngle) * textDist, y: vertex.y + Math.sin(midAngle) * textDist },
+      text: formatDeg(sweep * 180 / Math.PI)
+    }
+  }
+
+  /** 预览:半径跟鼠标到顶点的距离(中心夹角半径可能很大,不再卡 200) */
+  function buildAnglePointsPreview(vertexRef, ref1, ref2, mousePos) {
+    const base = buildAnglePointsGeometry(vertexRef, ref1, ref2, 200)
+    if (!base || !mousePos) return base
+    const radius = Math.max(15, Math.min(ANGLE_MAX_RADIUS,
+      Math.hypot(mousePos.x - base.inter.x, mousePos.y - base.inter.y)))
+    return buildAnglePointsGeometry(vertexRef, ref1, ref2, radius)
+  }
+
+  function placeAnglePointsDim(vertexRef, ref1, ref2, radius = 200) {
+    const geometry = buildAnglePointsGeometry(vertexRef, ref1, ref2, radius)
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'angle',
+      angleMode: 'points',
+      refs: geometry.refs,
+      radius: geometry.radius,
+      extOvershoot: geometry.extOvershoot,
+      color: ctx.dimensionColor.value,
+      text: geometry.text
+    })
+    return id
+  }
+
   // ===== 渲染 =====
 
   function renderDimension(dim) {
@@ -838,7 +1027,9 @@ export function createDimensionCore(deps, ctx) {
         geometry = buildLinearSingleGeometry(first, dim.offset, dim.arrowMode || 'auto', extS, extE)
       }
     } else if (dim.type === 'center-mark') {
-      geometry = buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
+      geometry = (dim.group || dim.groupCenter)
+        ? buildCenterMarkGroupGeometry((dim.refs || []).map(resolveDimRef), !!dim.groupCenter)
+        : buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
     } else if (dim.type === 'diameter') {
       if (dim.diameterMode === 'leader' && dim.textLeft) {
         geometry = buildDiameterLeaderGeometry(resolveDimRef(dim.refs[0]), dim.textLeft, dim.leaderAngle)
@@ -847,7 +1038,11 @@ export function createDimensionCore(deps, ctx) {
           dim.textSlide || 0)
       }
     } else if (dim.type === 'angle') {
-      geometry = buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
+      // points 模式的 refs 是"点引用"(顶点在前),不走 resolveDimRef 取边线
+      geometry = dim.angleMode === 'points'
+        ? buildAnglePointsGeometry(dim.refs[0], dim.refs[1], dim.refs[2], dim.radius,
+          { overshoot: dim.extOvershoot })
+        : buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
     }
 
     if (dim.customText != null && dim.customText !== '') {
@@ -939,6 +1134,14 @@ export function createDimensionCore(deps, ctx) {
         dim.leaderLength = Math.max(15, dist - r)
       }
     } else if (dim.type === 'angle') {
+      if (dim.angleMode === 'points') {
+        // 中心夹角:顶点是点引用,拖动改弧半径(与预览同一上限,可拖到很远)
+        const vertex = resolveDimPoint(dim.refs[0])
+        if (!vertex) return
+        dim.radius = Math.max(15, Math.min(ANGLE_MAX_RADIUS,
+          Math.hypot(mousePos.x - vertex.x, mousePos.y - vertex.y)))
+        return
+      }
       const first = resolveDimRef(dim.refs[0])
       const second = resolveDimRef(dim.refs[1])
       if (!first || !second) return
@@ -1022,7 +1225,8 @@ export function createDimensionCore(deps, ctx) {
     linearCircleEdge: buildLinearCircleEdgePreview,
     centerMark: buildCenterMarkGeometry,
     diameter: buildDiameterPreview,
-    angle: buildAnglePreview
+    angle: buildAnglePreview,
+    anglePoints: buildAnglePointsPreview
   }
 
   return {
@@ -1038,9 +1242,12 @@ export function createDimensionCore(deps, ctx) {
     buildLinearCenterGeometry,
     buildLinearCircleEdgeGeometry,
     buildCenterMarkGeometry,
+    buildCenterMarkGroupGeometry,
     buildDiameterGeometry,
     buildDiameterLeaderGeometry,
     buildAngleGeometry,
+    buildAnglePointsGeometry,
+    resolveDimPoint,
     buildMotorEnvelopeGeometry,
     // 放置
     placeLinearDimSingle,
@@ -1049,9 +1256,12 @@ export function createDimensionCore(deps, ctx) {
     placeLinearCircleEdgeDim,
     placeMotorEnvelopeDim,
     placeCenterMarkDim,
+    placeCenterMarkGroupDim,
+    placeCenterMarkAtGroupCenter,
     placeDiameterDim,
     placeDiameterLeaderDim,
     placeAngleDim,
+    placeAnglePointsDim,
     // 渲染与拖拽
     renderDimension,
     updateDimDrag,

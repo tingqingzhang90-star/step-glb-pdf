@@ -63,7 +63,28 @@
             </template>
           </el-dropdown>
           <el-button size="small" :type="activeTool === 'angle' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('angle')">角度</el-button>
+          <el-dropdown v-if="activeTool === 'angle'" trigger="click" @command="(cmd) => angleSubMode = cmd">
+            <el-button size="small">{{ angleSubMode === 'center' ? '中心夹角' : '边夹角' }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="edges">边夹角(选两条边)</el-dropdown-item>
+                <el-dropdown-item command="center">中心夹角(顶点 + 两点)</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
           <el-button size="small" :type="activeTool === 'center-mark' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('center-mark')">中心</el-button>
+          <el-dropdown v-if="activeTool === 'center-mark'" trigger="click" @command="(cmd) => centerSubMode = cmd">
+            <el-button size="small">{{ centerSubMode === 'group' ? '孔组' : '单孔' }}<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="single">单孔十字</el-dropdown-item>
+                <el-dropdown-item command="group">孔组(分度圆 + 各孔)</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <span v-if="activeTool === 'center-mark' && centerSubMode === 'group' && dimPending && dimPending.mode === 'bolt-circle'" class="dim-hint">
+            已选 {{ (dimPending.circles || []).length }} 个孔 · 回车或点空白落位(再点已选孔可取消)
+          </span>
           <el-button size="small" :type="activeTool === 'motor-envelope' ? 'primary' : ''" :disabled="!viewsLoaded" @click="toggleTool('motor-envelope')">电机包络</el-button>
         </el-button-group>
         <el-color-picker v-model="dimensionColor" size="small" :predefine="dimensionColorPresets" aria-label="标注颜色" />
@@ -397,9 +418,12 @@
                     <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
                   </template>
                   <template v-else-if="dim.type === 'center-mark'">
-                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
-                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <!-- 孔组不铺 10px 命中带:它铺满整圈孔位,会把后续点孔全挡住 -->
+                    <template v-if="!dim.group">
+                      <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
+                        <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                        <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                      </template>
                     </template>
                   </template>
                 </template>
@@ -434,9 +458,12 @@
                     <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
                   </template>
                   <template v-else-if="dim.type === 'center-mark'">
-                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
-                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <!-- 孔组不铺 10px 命中带:它铺满整圈孔位,会把后续点孔全挡住 -->
+                    <template v-if="!dim.group">
+                      <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
+                        <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                        <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                      </template>
                     </template>
                   </template>
                 </template>
@@ -471,7 +498,8 @@
             <!-- 标注预览 -->
             <g v-if="dimPreview" :class="['dim-preview', { 'dim-preview-pending': !!dimPending }]" :style="{ '--dimension-color': dimensionColor }" pointer-events="none">
               <template v-if="dimPreview.type === 'linear' || dimPreview.type === 'center-mark'">
-                <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="dimPreview.centerMarkAngle != null ? `translate(${cm.x}, ${cm.y}) rotate(${dimPreview.centerMarkAngle * 180 / Math.PI})` : `translate(${cm.x}, ${cm.y})`">
+                <circle v-if="dimPreview.pitchCircle" :cx="dimPreview.pitchCircle.x" :cy="dimPreview.pitchCircle.y" :r="dimPreview.pitchCircle.r" class="dim-bolt-circle" />
+                <g v-for="(cm, ci) in dimPreview.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="`translate(${cm.x}, ${cm.y}) rotate(${(cm.angle != null ? cm.angle : (dimPreview.centerMarkAngle || 0)) * 180 / Math.PI})`">
                   <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" />
                   <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" />
                 </g>
@@ -501,6 +529,7 @@
                 </template>
               </template>
               <template v-if="dimPreview.type === 'angle'">
+                <line v-for="(el, ei) in dimPreview.extLines || []" :key="'pel' + ei" :x1="el.start.x" :y1="el.start.y" :x2="el.end.x" :y2="el.end.y" class="dim-ext-line" />
                 <path :d="dimPreview.arcPath" class="dim-line" fill="none" />
                 <polygon v-if="dimPreview.arrow1" :points="dimPreview.arrow1" class="dim-arrow" />
                 <polygon v-if="dimPreview.arrow2" :points="dimPreview.arrow2" class="dim-arrow" />
@@ -549,6 +578,8 @@
                 </template>
                 <!-- 角度标注 -->
                 <template v-if="dim.type === 'angle'">
+                  <line v-for="(el, ei) in dim.extLines || []" :key="'el' + ei" :x1="el.start.x" :y1="el.start.y" :x2="el.end.x" :y2="el.end.y" class="dim-ext-line" />
+                  <line v-for="(el, ei) in dim.extLines || []" :key="'elh' + ei" :x1="el.start.x" :y1="el.start.y" :x2="el.end.x" :y2="el.end.y" class="dim-hit-stroke" />
                   <path :d="dim.arcPath" class="dim-line" fill="none" />
                   <path :d="dim.arcPath" class="dim-hit-stroke" fill="none" />
                   <polygon v-if="dim.arrow1" :points="dim.arrow1" class="dim-arrow" />
@@ -557,11 +588,17 @@
                 </template>
                 <!-- 孔位中心标记 -->
                 <template v-if="dim.type === 'center-mark'">
-                  <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="`translate(${cm.x}, ${cm.y})`">
+                  <circle v-if="dim.pitchCircle" :cx="dim.pitchCircle.x" :cy="dim.pitchCircle.y" :r="dim.pitchCircle.r" class="dim-bolt-circle" />
+                  <circle v-if="dim.pitchCircle" :cx="dim.pitchCircle.x" :cy="dim.pitchCircle.y" :r="dim.pitchCircle.r" class="dim-hit-stroke" />
+                  <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="`translate(${cm.x}, ${cm.y}) rotate(${(cm.angle != null ? cm.angle : (dim.centerMarkAngle || 0)) * 180 / Math.PI})`">
                     <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" />
                     <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" />
-                    <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" class="dim-hit-stroke" />
-                    <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" class="dim-hit-stroke" />
+                    <!-- 孔组不铺 10px 十字命中带:十字比孔半径长,会盖住整圈孔的命中区,
+                         导致后续点孔选不中(选中整条孔组改点分度圆虚线即可) -->
+                    <template v-if="!dim.group">
+                      <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" class="dim-hit-stroke" />
+                      <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" class="dim-hit-stroke" />
+                    </template>
                   </g>
                 </template>
               </g>
@@ -923,7 +960,7 @@ watch([config, modelParams], ([cfg, mp]) => {
 const getMotorEnvelope = (view) => motorEnvelope.value[view.name]
 
 const {
-  activeTool, diameterSubMode, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview, dimDragging,
+  activeTool, diameterSubMode, angleSubMode, centerSubMode, dimHoveredEdge, dimFirstEdge, dimPending, dimPreview, dimDragging,
   dimensionColor, dimensionColorPresets, dimensions, selectedDimId, renderedDimensions,
   dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
   dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
@@ -946,7 +983,7 @@ const showEmptyState = computed(() =>
 )
 
 // 需要命中圆的标注工具(其余工具下圆不参与命中)
-const circleHitTools = ['diameter', 'linear', 'center-mark']
+const circleHitTools = ['diameter', 'linear', 'angle', 'center-mark']
 
 // ===== 调色板拖拽放置 =====
 const {
@@ -1913,6 +1950,22 @@ function onModelChange() {
   vector-effect: non-scaling-stroke;
 }
 
+/* 孔组分度圆:虚线圆,穿过被标记的各个孔心 */
+.dim-bolt-circle {
+  fill: none;
+  stroke: var(--dimension-color, #303133);
+  stroke-width: var(--center-mark-stroke, 0.8);
+  stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* 标注工具条的即时提示(如孔组落位方式) */
+.dim-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #909399;
+}
+
 .dim-text {
   font-size: var(--dim-text-size, 9px);
   fill: var(--dimension-color, #303133);
@@ -1965,6 +2018,7 @@ function onModelChange() {
    :not(.dim-hit-stroke) 排除加宽的透明副本,否则会被染成可见粗线。 */
 .dimension-hovered .dim-line,
 .dimension-hovered .dim-ext-line,
+.dimension-hovered .dim-bolt-circle,
 .dimension-hovered .dim-center-mark line:not(.dim-hit-stroke) {
   stroke: #409eff;
   stroke-width: 2;

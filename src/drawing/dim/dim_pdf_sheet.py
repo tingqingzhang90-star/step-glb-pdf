@@ -305,6 +305,11 @@ def _draw_primitives(c, prims, color, mapper):
         for p in arc[1:]:
             path.lineTo(*mapper.pt(*p))
         c.drawPath(path, stroke=1, fill=0)
+    for circ in prims.get("dashed_circles", []):
+        # 孔组分度圆:虚线圆。划长按图纸比例给,画完立刻复位,避免影响后续实线
+        c.setDash(4.0 * k, 3.0 * k)
+        c.circle(*mapper.pt(circ["x"], circ["y"]), circ["r"] * k, stroke=1, fill=0)
+        c.setDash()
     c.setLineWidth(_W_MARK * k)
     for mark in prims.get("center_marks", []):
         x, y = mark["pos"]
