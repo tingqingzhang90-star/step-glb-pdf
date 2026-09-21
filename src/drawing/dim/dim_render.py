@@ -475,8 +475,11 @@ def _diameter(ann, seg, view):
     perp1 = (-d[1], d[0])
     perp2 = (d[1], -d[0])
     perp = perp1 if perp1[1] <= perp2[1] else perp2
-    text_pos = (leader_end[0] - d[0] * 20 + perp[0] * 4,
-                leader_end[1] - d[1] * 20 + perp[1] * 4)
+    # textSlide: 用户沿直径线拖动文字标签的位移(正 = 朝箭头/外侧),
+    # 与前端 buildDiameterGeometry 同公式,否则编辑器里拖过的文字与导出图不一致
+    slide = ann.get("textSlide") or 0.0
+    text_pos = (leader_end[0] - d[0] * (20 - slide) + perp[0] * 4,
+                leader_end[1] - d[1] * (20 - slide) + perp[1] * 4)
     radius = (circ.get("meta") or {}).get("radius")
     mm_val = radius * 2 if radius else circ["r"] * 2 / (view["k"] or 1.0)
     text_angle = angle + math.pi if abs(angle) > math.pi / 2 else angle

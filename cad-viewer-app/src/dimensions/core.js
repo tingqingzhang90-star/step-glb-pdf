@@ -551,7 +551,7 @@ export function createDimensionCore(deps, ctx) {
 
   // ===== 直径标注 =====
 
-  function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4, leaderLength = 30) {
+  function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4, leaderLength = 30, textSlide = 0) {
     if (!edgeRef) return null
     const { seg, view } = edgeRef
     const circ = toCircle(seg)
@@ -574,9 +574,12 @@ export function createDimensionCore(deps, ctx) {
     const perp = perpUp1.y <= perpUp2.y ? perpUp1 : perpUp2
     const textAlongBack = 20   // 沿 -dir 退回距离,让文字落回 leader 末端内侧
     const textPerpGap = 4      // 垂直于 leader 的上方微调
+    // textSlide:用户沿直径线拖动文字的位移(正 = 朝箭头/外侧方向)。
+    // 与后端 _diameter 使用同一公式 text_pos = leader_end - d*(20 - slide) + perp*4,
+    // 否则编辑器里拖过的文字与导出 PDF 的位置会对不上。
     const textPos = {
-      x: leaderEnd.x - dir.x * textAlongBack + perp.x * textPerpGap,
-      y: leaderEnd.y - dir.y * textAlongBack + perp.y * textPerpGap
+      x: leaderEnd.x - dir.x * (textAlongBack - textSlide) + perp.x * textPerpGap,
+      y: leaderEnd.y - dir.y * (textAlongBack - textSlide) + perp.y * textPerpGap
     }
     const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
     // 让文字始终处于可读角度(不倒立)
@@ -840,7 +843,8 @@ export function createDimensionCore(deps, ctx) {
       if (dim.diameterMode === 'leader' && dim.textLeft) {
         geometry = buildDiameterLeaderGeometry(resolveDimRef(dim.refs[0]), dim.textLeft, dim.leaderAngle)
       } else {
-        geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength)
+        geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength,
+          dim.textSlide || 0)
       }
     } else if (dim.type === 'angle') {
       geometry = buildAngleGeometry(resolveDimRef(dim.refs[0]), resolveDimRef(dim.refs[1]), dim.radius)
@@ -944,11 +948,34 @@ export function createDimensionCore(deps, ctx) {
     }
   }
 
-  /** 拖动文字标签:鼠标位置投影到尺寸线方向,更新 textSlide(相对中点,允许稍出界)
-   *  使用 dimLineStart/dimLineEnd(含延长线的全长)而非 dimStart/dimEnd(仅箭头间),
-   *  确保文字可沿整个尺寸线(含延长线)拖动。*/
-  function updateDimTextDrag(dim, mousePos) {
-    if (!dim || dim.type !== 'linear' || !mousePos) return
+  /** 拖动文字标签:沿尺寸线滑动文字(只改 textSlide,不动尺寸线本身)
+   *  - 线性:鼠标位置投影到尺寸线方向,相对中点取有符号滑动量(允许稍出界)。
+   *    基准用 dimLineStart/dimLineEnd(含延长线的全长),保证文字能沿整条线拖动;
+   *  - 直径(贯穿圆心直线模式):按鼠标位移增量沿直径线滑动——文字 anchor=start,
+   *    若直接对齐鼠标点会瞬移,故用增量;可拖范围覆盖整条直径线两端略外。*/
+  function updateDimTextDrag(dim, mousePos, drag) {
+    if (!dim || !mousePos) return
+
+    if (dim.type === 'diameter' && dim.diameterMode !== 'leader') {
+      const ref = resolveDimRef(dim.refs?.[0])
+      const circ = ref ? toCircle(ref.seg) : null
+      if (!circ || !ref.view) return
+      const angle = dim.leaderAngle ?? -Math.PI / 4
+      const dir = { x: Math.cos(angle), y: Math.sin(angle) }
+      const r = circ.r * getViewDisplayScale(ref.view)
+      const leaderLength = dim.leaderLength ?? 30
+      const L = 2 * r + leaderLength   // 直径线全长(对侧圆周 → 箭头外端)
+      const start = drag?.startMouse
+      const delta = start
+        ? (mousePos.x - start.x) * dir.x + (mousePos.y - start.y) * dir.y
+        : 0
+      const slide0 = drag?.startSlide ?? (dim.textSlide || 0)
+      // 文字沿 dir 相对 leaderEnd 的坐标 = slide - 20,限制在直径线两端外 10px 内
+      dim.textSlide = Math.max(10 - L, Math.min(30, slide0 + delta))
+      return
+    }
+
+    if (dim.type !== 'linear') return
     const geometry = renderDimension({ ...dim, textSlide: 0 })
     if (!geometry) return
     // 优先使用含延长线的全长端点,确保拖动范围覆盖整条尺寸线

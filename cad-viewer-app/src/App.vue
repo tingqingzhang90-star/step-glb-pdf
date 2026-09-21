@@ -544,7 +544,7 @@
                     <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
                     <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
                     <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
-                    <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${dim.textAngle * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
+                    <text :x="dim.textPos.x" :y="dim.textPos.y" :transform="`rotate(${dim.textAngle * 180 / Math.PI}, ${dim.textPos.x}, ${dim.textPos.y})`" class="dim-text" style="cursor: move" text-anchor="start" dominant-baseline="auto" @mousedown.stop="onDimTextMouseDown($event, dim)">{{ dim.text }}</text>
                   </template>
                 </template>
                 <!-- 角度标注 -->

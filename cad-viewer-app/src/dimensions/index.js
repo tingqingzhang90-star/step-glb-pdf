@@ -41,11 +41,17 @@ export function createDimEngine(deps) {
     core
   } = deps
 
+  // 直径/中心标记是"点击即落位",落位后预览要压住,直到鼠标移开落位点;
+  // 否则 mousemove 会立刻在原位重建一份预览,与刚落位的标注叠成"两个标注"
+  const PREVIEW_REARM_DIST = 8
+  let previewSuppressAt = null
+
   const clearSelection = () => {
     dimFirstEdge.value = null
     dimPending.value = null
     dimHoveredEdge.value = null
     dimPreview.value = null
+    previewSuppressAt = null
   }
 
   /** 工具切换 */
@@ -66,7 +72,14 @@ export function createDimEngine(deps) {
     dimPending.value = null
     dimHoveredEdge.value = null
     dimPreview.value = null
+    previewSuppressAt = null
     if (resetTool) activeTool.value = null
+  }
+
+  /** 落位瞬间清预览并记下鼠标位置,等鼠标移开 8px 再允许预览重新出现 */
+  function suppressPreviewAfterPlace(mousePos) {
+    dimPreview.value = null
+    previewSuppressAt = mousePos || null
   }
 
   /** 待固定态落位：按当前预览偏移写入标注 */
@@ -95,7 +108,10 @@ export function createDimEngine(deps) {
       // 孔位中心标记：点击即放置，十字线长度自动取该孔直径
       if (toCircle(seg)) {
         const id = core.placeCenterMarkDim(edgeRef)
-        if (id) selectDim(id)
+        if (id) {
+          selectDim(id)
+          suppressPreviewAfterPlace(getSvgMousePoint(event))
+        }
       }
       return
     }
@@ -115,7 +131,10 @@ export function createDimEngine(deps) {
         } else {
           id = core.placeDiameterDim(edgeRef, dimPreview.value?.leaderAngle)
         }
-        if (id) selectDim(id)
+        if (id) {
+          selectDim(id)
+          suppressPreviewAfterPlace(getSvgMousePoint(event))
+        }
       }
       return
     }
@@ -208,6 +227,16 @@ export function createDimEngine(deps) {
     if (!activeTool.value) return
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
+
+    // 刚落位的标注:鼠标未挪开之前不再画预览,避免预览与标注自身重叠
+    if (previewSuppressAt) {
+      const moved = Math.hypot(mousePos.x - previewSuppressAt.x, mousePos.y - previewSuppressAt.y)
+      if (moved < PREVIEW_REARM_DIST) {
+        dimPreview.value = null
+        return
+      }
+      previewSuppressAt = null
+    }
 
     const P = core.previewBuilders
 
@@ -327,12 +356,20 @@ export function createDimEngine(deps) {
     dimDragging.value = { id: dim.id, type: dim.type, startMouse: mousePos, startOffset: dim.offset }
   }
 
-  /** 文字标签 mousedown:开始拖动文字(只改 textSlide,不动尺寸线) */
+  /** 文字标签 mousedown:开始拖动文字(只改 textSlide,不动尺寸线)
+   *  startMouse/startSlide 供直径标注"抓住文字跟随鼠标"用(按位移增量沿直径线滑动);
+   *  线性标注仍按鼠标绝对投影定位,不看这两个字段。 */
   function onDimTextMouseDown(event, dim) {
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
-    dimDragging.value = { id: dim.id, type: dim.type, part: 'text' }
+    dimDragging.value = {
+      id: dim.id,
+      type: dim.type,
+      part: 'text',
+      startMouse: mousePos,
+      startSlide: dim.textSlide || 0
+    }
   }
 
   /** 延长线手柄 mousedown:开始拖拽调整 lineExtension(尺寸线两端外延长度) */
@@ -379,7 +416,7 @@ export function createDimEngine(deps) {
     const mousePos = getSvgMousePoint(event)
     if (!dim || !mousePos) return
     if (drag.part === 'text') {
-      core.updateDimTextDrag(dim, mousePos)
+      core.updateDimTextDrag(dim, mousePos, drag)
     } else if (drag.part === 'extension') {
       core.updateDimExtensionDrag(dim, mousePos, drag.endSide)
     } else {
