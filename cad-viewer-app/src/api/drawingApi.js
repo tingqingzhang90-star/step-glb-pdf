@@ -15,8 +15,9 @@ export async function fetchModelList() {
   return models
 }
 
-export async function fetchViewPalette(modelId) {
-  const res = await fetch(`/api/drawing-view-palette/${modelId}`)
+export async function fetchViewPalette(modelId, algo) {
+  const qs = algo ? `?algo=${encodeURIComponent(algo)}` : ''
+  const res = await fetch(`/api/drawing-view-palette/${modelId}${qs}`)
   return res.json()
 }
 

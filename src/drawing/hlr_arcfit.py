@@ -79,6 +79,45 @@ def _fit_circle_kasa(pts):
     return (cx, cy, r, math.sqrt(err2 / n))
 
 
+def _median(values):
+    s = sorted(values)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2.0
+
+
+def _fit_circle_robust(pts, trim_thresh=0.3, max_iter=2):
+    """鲁棒圆拟合:Kasa 初值 + 按残差剔除外点后重拟合。
+
+    PolyAlgo 把圆离散成弦,链首尾常混入 1~2 个偏离真实圆 ~2mm 的杂点
+    (圆在倒角/键槽等特征处被打断),普通最小二乘(Kasa)会被这些外点把半径
+    拉偏 ~1.6mm(实测 Ø310 被拟成 308.4),而内点残差只有网格容差级 ~0.05mm。
+    用中位数 + MAD 分离内外点后重拟合,恢复真实半径。
+    剔除只影响半径/圆心;返回的 rms 按全链点计算(对最终圆),保证
+    "是否够圆"的判定不因剔除而放宽。返回 (cx, cy, r, rms, inlier_pts)。
+    """
+    res = _fit_circle_kasa(pts)
+    if res is None:
+        return None
+    cx, cy, r, _ = res
+    kept = list(pts)
+    if len(kept) >= 6:
+        for _ in range(max_iter):
+            resid = [abs(math.hypot(x - cx, y - cy) - r) for x, y in kept]
+            med = _median(resid)
+            mad = _median([abs(d - med) for d in resid])
+            thresh = max(med + 4.0 * mad, trim_thresh)
+            nxt = [p for p, d in zip(kept, resid) if d <= thresh]
+            if len(nxt) < 3 or len(nxt) == len(kept):
+                break
+            new = _fit_circle_kasa(nxt)
+            if new is None:
+                break
+            cx, cy, r, _ = new
+            kept = nxt
+    err2 = sum((math.hypot(x - cx, y - cy) - r) ** 2 for x, y in pts)
+    return (cx, cy, r, math.sqrt(err2 / len(pts)), kept)
+
+
 def _angle_span(pts, cx, cy):
     """按有序点累计角度跨度（弧度），整圆≈2π。"""
     angs = [math.atan2(y - cy, x - cx) for x, y in pts]
@@ -139,17 +178,19 @@ def _chain_lines(lines, tol):
     return chains
 
 
-def _chain_sagitta(chain, cx, cy, r):
-    """链上各弦中点到拟合圆的最大偏差(mm)。
+def _points_sagitta(pts, cx, cy, r):
+    """连续点对(弦)中点到拟合圆的最大偏差(mm)。
 
     三角化弦的中点相对拟合圆最多偏离三角化容差(deflection);而多边形
     (六角/方形轮廓)的中点在同样半径下偏离 0.134r 量级,据此可把"多边形
     被误判成圆"挡掉 —— 前提是三角化足够细(deflection 远小于 0.134r)。
+    直接吃点列,配合鲁棒拟合只用内点计算,避免链首尾杂点抬高矢高判据
+    导致真圆被误拒。
     """
     worst = 0.0
-    for ln in chain:
-        mx = (ln["x1"] + ln["x2"]) / 2.0
-        my = (ln["y1"] + ln["y2"]) / 2.0
+    for a, b in zip(pts, pts[1:]):
+        mx = (a[0] + b[0]) / 2.0
+        my = (a[1] + b[1]) / 2.0
         d = abs(math.hypot(mx - cx, my - cy) - r)
         if d > worst:
             worst = d
@@ -231,8 +272,7 @@ def _make_circle(cx, cy, r, rms):
     }
 
 
-def _make_arc(cx, cy, r, chain, span, rms):
-    pts = _chain_points(chain)
+def _make_arc(cx, cy, r, pts, span, rms):
     return {
         "type": "polyline",
         "points": pts,
@@ -246,6 +286,70 @@ def _make_arc(cx, cy, r, chain, span, rms):
             "fit_rms": round(rms, 3),
         },
     }
+
+
+def _merge_cocircular(segments, center_tol=1.5, merge_rms_tol=0.15,
+                      max_radius=1e4):
+    """同圆碎片共享合并拟合的半径(不替换几何,渲染不缺线)。
+
+    离散 HLR 把圆柱面(如沉孔壁)的剪影离散成 r 波动 ±0.1mm 的弦段,同一圆在
+    链接时被拆成多段,短弧单独拟合圆是病态的(实测 Ø24 沉孔飘到 22.0~24.6)。
+    这里按圆心聚类,组内合点拟合出更准的圆心/半径,再回写到组内每个碎片的
+    meta —— 碎片的点列与数量原样保留,只修正标注用的半径。
+    合并判定用普通 Kasa 残差:真同圆残差小(网格波动 ~0.1mm),同心不同半径
+    (如 r=12 与 r=7.75)残差大,保持独立。
+    """
+    groups = []  # [cx, cy, points, segs]
+    rest = []
+    for seg in segments:
+        m = seg.get("meta") or {}
+        if not m.get("radius") or seg.get("type") == "circle":
+            rest.append(seg)
+            continue
+        if m.get("curve") == "circle" and m.get("center_mm") and seg.get("points"):
+            cx, cy = m["center_mm"]
+            placed = False
+            for g in groups:
+                if math.hypot(g[0] - cx, g[1] - cy) <= center_tol:
+                    g[2].extend(seg["points"])
+                    g[3].append(seg)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([cx, cy, list(seg["points"]), [seg]])
+            continue
+        rest.append(seg)
+
+    if not groups:
+        return segments
+
+    out = list(rest)
+    for gx, gy, pts, segs in groups:
+        if len(segs) < 2:
+            out.extend(segs)
+            continue
+        kasa = _fit_circle_kasa(pts)
+        if kasa is None or kasa[3] > merge_rms_tol:
+            out.extend(segs)
+            continue
+        res = _fit_circle_robust(pts)
+        if res is None:
+            out.extend(segs)
+            continue
+        cx, cy, r, rms, _inl = res
+        if r < 0.5 or r > max_radius:
+            out.extend(segs)
+            continue
+        for seg in segs:
+            m = seg["meta"]
+            m["radius"] = round(r, 4)
+            m["center_mm"] = [round(cx, 4), round(cy, 4)]
+            m["center"] = [round(cx, 4), round(cy, 4)]
+            if "length" in m:
+                m["length"] = round(r * m.get("arc_span", 0), 2)
+            m["fit_rms"] = round(rms, 3)
+        out.extend(segs)
+    return out
 
 
 def fit_circular_features(segments, point_tol=0.5, chord_tol=1.0,
@@ -280,15 +384,15 @@ def fit_circular_features(segments, point_tol=0.5, chord_tol=1.0,
             out.append(_merge_chain(ch, straight_tol) if len(ch) > 1 else ch[0])
             continue
         pts = _chain_points(ch)
-        res = _fit_circle_kasa(pts)
+        res = _fit_circle_robust(pts)
         if res is None:
             out.append(_merge_chain(ch, straight_tol))
             continue
-        cx, cy, r, rms = res
+        cx, cy, r, rms, inl = res
         if r < 0.5 or r > max_radius or rms > chord_tol:
             out.append(_merge_chain(ch, straight_tol))
             continue
-        if sagitta_tol is not None and _chain_sagitta(ch, cx, cy, r) > sagitta_tol:
+        if sagitta_tol is not None and _points_sagitta(pts, cx, cy, r) > sagitta_tol:
             out.append(_merge_chain(ch, straight_tol))
             continue
         span = _angle_span(pts, cx, cy)
@@ -296,5 +400,7 @@ def fit_circular_features(segments, point_tol=0.5, chord_tol=1.0,
         if span >= 2 * math.pi - 0.35 and closed:
             out.append(_make_circle(cx, cy, r, rms))
         else:
-            out.append(_make_arc(cx, cy, r, ch, span, rms))
+            out.append(_make_arc(cx, cy, r, pts, span, rms))
+    if sagitta_tol is not None:
+        out = _merge_cocircular(out, max_radius=max_radius)
     return out

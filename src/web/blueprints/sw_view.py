@@ -7,7 +7,7 @@ OCC 投影走 web.task_pool 子进程。
 import os
 from datetime import datetime
 
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from web import common
 from web import task_pool
@@ -89,8 +89,14 @@ def api_drawing_view_palette(model_code):
     if not shape_path:
         return jsonify({"ok": False,
                         "error": f"未找到模型文件(assembly.step 或 assembly.brep): {model_code}"}), 404
+    # 前端可显式指定出图算法(?algo=poly|algo),缺省回退 .env 的 DRAWING_ALGO
+    algo = request.args.get("algo") or None
+    if algo is not None and algo not in ("poly", "algo"):
+        return jsonify({"ok": False, "error": f"无效算法: {algo}"}), 400
     try:
-        result = pool.run("view-palette", "palette:%s" % model_code, {"shape_path": shape_path})
+        # key 带 algo:同一型号不同算法的结果不同,不能互相去重
+        result = pool.run("view-palette", "palette:%s:%s" % (model_code, algo or "default"),
+                          {"shape_path": shape_path, "algo": algo})
         try:
             from drawing import anchor_resolver
             from drawing.dim import dim_envelope

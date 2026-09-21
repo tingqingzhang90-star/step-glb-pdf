@@ -12,6 +12,16 @@
           <el-icon><Upload /></el-icon>
           导入模型
         </el-button>
+        <el-select
+          v-model="algo"
+          size="small"
+          class="algo-select"
+          title="出图算法:poly 离散投影更快,algo 精确投影更准"
+          @change="onAlgoChange"
+        >
+          <el-option label="Poly（快速）" value="poly" />
+          <el-option label="Algo（精确）" value="algo" />
+        </el-select>
         <el-divider direction="vertical" />
         <el-button size="small" :disabled="!placedViews.length" @click="exportDrawingDocument">导出源文件</el-button>
         <el-button size="small" type="primary" :loading="exportingPdf" :disabled="!placedViews.length" @click="exportPdf">导出 PDF</el-button>
@@ -940,7 +950,7 @@ const { alignmentGuides, startMoveView, moveViewTo, endMoveView, clearGuides } =
 // ===== 型号选择与视图调色板数据 =====
 // 需在标注引擎之前装配:getMotorEnvelope 依赖其 motorEnvelope
 const {
-  models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
+  models, selectedModel, algo, loadingViews, viewsLoaded, loadingText, error,
   lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope, standardViews, isometricViews,
   config, modelParams,
   loadModelList, resetPalette, loadViewPalette
@@ -1507,6 +1517,13 @@ function onModelChange() {
   resetPalette()
   clearViews()
 }
+
+/** 切换出图算法:边线数据变化,清空已放置内容后按新算法重新生成视图 */
+function onAlgoChange() {
+  clearPlacedViews()
+  resetPalette()
+  if (selectedModel.value) loadViewPalette()
+}
 </script>
 
 <style scoped>
@@ -1562,6 +1579,10 @@ function onModelChange() {
 
 .model-select {
   width: 220px;
+}
+
+.algo-select {
+  width: 132px;
 }
 
 .status-text { color: #409eff; font-size: 12px; }

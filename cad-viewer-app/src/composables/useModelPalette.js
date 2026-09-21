@@ -6,6 +6,8 @@ import { fetchModelList, fetchViewPalette } from '@/api/drawingApi.js'
 export function useModelPalette() {
   const models = ref([])
   const selectedModel = ref('')
+  // 出图算法:poly(离散 HLR,快) / algo(精确 HLR,慢)
+  const algo = ref('poly')
   const loadingViews = ref(false)
   const viewsLoaded = ref(false)
   const loadingText = ref('')
@@ -57,7 +59,7 @@ export function useModelPalette() {
     loadingText.value = '正在生成标准视图...'
     error.value = ''
     try {
-      const data = await fetchViewPalette(selectedModel.value)
+      const data = await fetchViewPalette(selectedModel.value, algo.value)
       if (!data.ok) {
         error.value = data.error || '生成视图失败'
         return
@@ -80,7 +82,7 @@ export function useModelPalette() {
   }
 
   return {
-    models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
+    models, selectedModel, algo, loadingViews, viewsLoaded, loadingText, error,
     lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope,
     config, modelParams,
     standardViews, isometricViews,

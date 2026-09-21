@@ -93,9 +93,10 @@ def _run_view_palette(p):
     # 调色板要一次投影全部 9+3 个视图,串行太慢。内部并行 worker 数
     # 按视图数自动(min(9, 视图数, CPU)):视图多 worker 就多,与
     # generate_all_standard_views 的自动逻辑一致
+    # algo 透传("poly"/"algo"),None 时回退 .env 的 DRAWING_ALGO
     return drawing_engine.generate_all_standard_views(
         p["shape_path"], view_names=p.get("view_names"),
-        parallel=True)
+        parallel=True, algo=p.get("algo"))
 
 
 def _run_view_single(p):

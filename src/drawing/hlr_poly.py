@@ -26,7 +26,7 @@ import time
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2, gp_Ax3, gp_Trsf
+from OCC.Core.gp import gp_Pnt, gp_Dir, gp_Ax2
 from OCC.Core.HLRBRep import HLRBRep_PolyAlgo, HLRBRep_PolyHLRToShape
 from OCC.Core.HLRAlgo import HLRAlgo_Projector
 from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
@@ -35,6 +35,8 @@ from OCC.Core.BRepBndLib import brepbndlib
 
 from core import drawing_engine as DE
 from drawing.hlr_arcfit import fit_circular_features
+from drawing.hlr_brep_circles import (build_view_circles, drop_duplicate_fitted,
+                                      strip_bogus_circle_meta)
 
 
 # 离散弦最短保留长度(mm)：PolyAlgo 输出的圆/弧是高密度三角化弦，粗网格下
@@ -132,6 +134,21 @@ def _fit_one(segments, deflection, max_radius):
         straight_tol=max(0.2, deflection))
 
 
+def _circle_pass(shape, ax2, raw_segs, fitted, model_path, view_name):
+    """用 B-Rep 圆边重建圆/弧语义:补出原生圆,剔除拟合出的伪圆。
+
+    fitted 里与 B-Rep 圆边对得上的实体会被原生圆/弧取代(避免同一圆出现两次),
+    对不上又没有 B-Rep 圆边支撑的"伪圆"则剥掉圆语义降级为普通折线。
+    """
+    entities, circles = build_view_circles(shape, ax2, raw_segs,
+                                           model_path, (model_path, view_name))
+    if not circles:
+        return fitted
+    kept = drop_duplicate_fitted(fitted, circles)
+    kept = strip_bogus_circle_meta(kept, circles)
+    return kept + entities
+
+
 def project_view_subset(model_path, view_names, deflection=0.5,
                         show_hidden=False, do_fit=True):
     """worker 任务:投影一组视图,返回 {view: {visible, hidden, project_time}}。
@@ -151,6 +168,11 @@ def project_view_subset(model_path, view_names, deflection=0.5,
         fv = _fit_one(vis, deflection, max_r) if do_fit else vis
         fh = (_fit_one(hid, deflection, max_r)
               if (do_fit and show_hidden) else hid)
+        if do_fit:
+            ax2 = _build_ax2(cfg["dir"], cfg["up"])
+            fv = _circle_pass(shape, ax2, vis, fv, model_path, v)
+            if show_hidden:
+                fh = _circle_pass(shape, ax2, hid, fh, model_path, v)
         out[v] = {
             "visible": fv,
             "hidden": fh,
