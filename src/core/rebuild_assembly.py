@@ -1032,6 +1032,25 @@ def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_path):
     return new_shape, elapsed
 
 
+def _export_assembly_brep(shape, out_path):
+    """落盘装配体 BREP(内部链路首选格式, 与 read_shape_cached 的缓存同一约定)。
+
+    失败只记日志、不中断构建: 出图侧发现没有 .brep 时会退回解析 STEP。
+    """
+    from OCC.Core.BRepTools import breptools
+    log("\n=== Step 3.5: 装配体 BREP 缓存(供出图/锚点免重复解析 STEP) ===")
+    t0 = time.time()
+    try:
+        breptools.Write(shape, out_path)
+        size_mb = os.path.getsize(out_path) / 1024 / 1024
+    except Exception as e:  # noqa: BLE001 - 缓存写失败不影响构建主流程
+        log(f"  ! BREP 写入失败(出图将退回解析 STEP): {e}")
+        return 0.0
+    dt = time.time() - t0
+    log(f"  ✓ BREP 缓存: {out_path} ({size_mb:.2f} MB, {dt:.2f}s)")
+    return dt
+
+
 def step5_export_glb(compound, out_path):
     """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB,out_path 为完整输出路径)"""
     log("\n=== Step 5: 装配体 GLB 导出 ===")
@@ -1266,6 +1285,14 @@ def build_assembly(model_code, motor=None, series=None):
     asm_step, t_step, xcaf_doc = step3_export_assembly_step_xcaf(
         shapes, parts_data, asm_path, asm_name=model_code)
 
+    # Step 3.5: 装配体 BREP 缓存
+    # 出图投影/锚点解析/查看器这些内部消费方读的都是 .brep; 若只留 STEP,
+    # 它们第一次都要重新解析 30MB STEP(实测 5.3s)+ 自行落盘(1.5s) —— 新型号
+    # "首次出图"因此白等约 6.8s。构建到这里 shape 就在内存里, 顺手写一份即可。
+    # 必须写在 GLB 导出之前: 那时 compound 还没被 STL 流程三角化, BREP 不带
+    # 网格数据, 出图侧才能按自己的精度(0.5mm)三角化, 不受 GLB 精度影响。
+    t_brep = _export_assembly_brep(compound, os.path.join(model_dir, "assembly.brep"))
+
     # Step 4: 缸体验证
     t_stretch = 0.0
     cyl_out = None
@@ -1279,7 +1306,7 @@ def build_assembly(model_code, motor=None, series=None):
     # Step 5: GLB
     glb_path, t_glb = step5_export_glb(compound, glb_path)
 
-    total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
+    total = t_read + t_stretch_main + t_merge + t_step + t_brep + t_stretch + t_glb
     result = {
         "model_code": model_code,
         "motor": motor,
@@ -1297,6 +1324,7 @@ def build_assembly(model_code, motor=None, series=None):
             "stretch": round(t_stretch_main, 3),
             "merge": round(t_merge, 3),
             "step": round(t_step, 2),
+            "brep": round(t_brep, 2),
             "cylinder": round(t_stretch, 3),
             "glb": round(t_glb, 2),
         },
@@ -1343,6 +1371,7 @@ def main():
     log(f"  缸体拉伸(主流程)         : {t['stretch']*1000:.0f}ms")
     log(f"  Step 2 应用变换+合并      : {t['merge']*1000:.0f}ms")
     log(f"  Step 3 导出装配体 STEP   : {t['step']:.2f}s")
+    log(f"  Step 3.5 装配体 BREP 缓存 : {t['brep']:.2f}s")
     log(f"  Step 4 缸体拉伸验证       : {t['cylinder']*1000:.0f}ms")
     log(f"  Step 5 GLB 导出          : {t['glb']:.2f}s")
     log(f"  -----------------------------")
