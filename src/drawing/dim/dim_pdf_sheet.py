@@ -69,12 +69,38 @@ class SheetMapper:
 
 
 def _draw_view_edges(c, placement, mapper):
+    """可见/隐藏边各按一条 Path 批量描边。
+
+    ReportLab 的 canvas.line() 每次都要做一遍状态+路径操作, 一个视图几百上千
+    条直线段时开销可观(实测 3 视图 ~0.4s); 直线段合并成单条 Path 后每视图
+    只需一次 drawPath, 圆/折线数量少, 仍逐条画。
+    """
     k = mapper.k
-    for seg in placement["segs"]:
-        _draw_seg(c, seg, placement, mapper, _C_EDGE, _W_VISIBLE * k, None)
-    for seg in placement.get("hidden", []):
-        _draw_seg(c, seg, placement, mapper, _C_HIDDEN, _W_HIDDEN * k,
-                  (2.5, 1.5))
+    s = placement["scale"]
+    ox, oy = placement["x"], placement["y"]
+
+    def pt(x, y):
+        return mapper.pt(x * s + ox, y * s + oy)
+
+    for segs, color, width, dash in (
+            (placement["segs"], _C_EDGE, _W_VISIBLE * k, None),
+            (placement.get("hidden", []), _C_HIDDEN, _W_HIDDEN * k, (2.5, 1.5))):
+        lines = [seg for seg in segs if seg.get("type") == "line"]
+        if lines:
+            c.setStrokeColorRGB(*color)
+            c.setLineWidth(width)
+            if dash:
+                c.setDash(*dash)
+            path = c.beginPath()
+            for seg in lines:
+                path.moveTo(*pt(seg["x1"], seg["y1"]))
+                path.lineTo(*pt(seg["x2"], seg["y2"]))
+            c.drawPath(path, stroke=1, fill=0)
+            if dash:
+                c.setDash()
+        for seg in segs:
+            if seg.get("type") != "line":
+                _draw_seg(c, seg, placement, mapper, color, width, dash)
 
 
 def _draw_seg(c, seg, placement, mapper, color, width, dash):

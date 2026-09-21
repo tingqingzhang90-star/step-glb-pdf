@@ -96,20 +96,43 @@ def displace_parts(parts_data, axis_idx, cyl_axis_coord_mm, delta_mm):
 
 # ==================== OCC 读取层 ====================
 
+_PART_SHAPE_MEMO = {}
+
+
 def _read_part_shape(step_file):
-    """读零件 shape(优先 .brep 缓存,回退 .step)"""
+    """读零件 shape(优先 .brep 缓存,回退 .step)
+
+    带进程内记忆: 一轮出图里同一零件(电机前后端盖/机身等)常被反复取用,
+    原先每次都重新反序列化 BREP(实测 6 次共 0.67s)。
+    """
     from OCC.Core.BRep import BRep_Builder
     from OCC.Core.BRepTools import breptools
     from OCC.Core.TopoDS import TopoDS_Shape
 
     step_path = rb.resolve_part_file(step_file)
     brep = os.path.splitext(step_path)[0] + ".brep"
+    read_path = brep if os.path.exists(brep) else step_path
+    try:
+        st = os.stat(read_path)
+        key = (os.path.abspath(read_path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None:
+        hit = _PART_SHAPE_MEMO.get(key)
+        if hit is not None:
+            return hit
+
+    shape = None
     if os.path.exists(brep):
-        shape = TopoDS_Shape()
-        breptools.Read(shape, brep, BRep_Builder())
-        if not shape.IsNull():
-            return shape
-    return rb.read_step(step_path)
+        s = TopoDS_Shape()
+        breptools.Read(s, brep, BRep_Builder())
+        if not s.IsNull():
+            shape = s
+    if shape is None:
+        shape = rb.read_step(step_path)
+    if key is not None:
+        _PART_SHAPE_MEMO[key] = shape
+    return shape
 
 
 def _shape_world_bbox(shape, matrix):

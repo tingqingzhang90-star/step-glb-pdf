@@ -52,11 +52,26 @@ def read_step_to_shape(step_path):
     return reader.OneShape()
 
 
+# 进程内 shape 记忆: 同一进程里出图/多视图/锚点解析共用一份反序列化结果。
+# assembly.brep(5900 面)读一次约 0.35s, 一轮出图原先要读 3-4 次。
+# key 带文件 mtime+size, 模型重建后自动失效。
+# 约定: 调用方可以给 shape 补三角化(网格数据), 但不得改写几何。
+_SHAPE_MEMO = {}
+
+
+def _memo_key(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+
+
 def read_shape_cached(step_path):
-    """读取 shape(带 BRep 缓存,比 STEP 快 14 倍)
+    """读取 shape(带 BRep 磁盘缓存 + 进程内记忆)
 
     首次读取 STEP 并缓存为 .brep 二进制文件,后续直接读取 .brep。
-    BRep 读取 ~0.4s vs STEP 读取 ~5.5s。
+    BRep 读取 ~0.4s vs STEP 读取 ~5.5s; 同进程内重复调用直接命中记忆。
 
     Args:
         step_path: STEP 文件路径
@@ -64,11 +79,23 @@ def read_shape_cached(step_path):
     Returns:
         TopoDS_Shape
     """
+    brep_path = step_path.rsplit('.', 1)[0] + '.brep'
+    key = _memo_key(brep_path if os.path.exists(brep_path) else step_path)
+    if key is not None:
+        hit = _SHAPE_MEMO.get(key)
+        if hit is not None:
+            return hit
+    shape = _read_shape_uncached(step_path, brep_path)
+    if key is not None and not shape.IsNull():
+        _SHAPE_MEMO[key] = shape
+    return shape
+
+
+def _read_shape_uncached(step_path, brep_path):
     from OCC.Core.BRepTools import breptools
     from OCC.Core.BRep import BRep_Builder
     from OCC.Core.TopoDS import TopoDS_Shape
 
-    brep_path = step_path.rsplit('.', 1)[0] + '.brep'
     step_exists = os.path.exists(step_path)
 
     # 如果 STEP 不存在但 BRep 缓存存在,直接读 BRep(BREP-only 模式)
@@ -1503,7 +1530,6 @@ def generate_all_standard_views(step_path, include_hidden=False,
             view_names=view_names, parallel=parallel,
             max_workers=max_workers,
             deflection=opts["deflection"], do_fit=opts["do_fit"])
-
     t0 = time.time()
 
     # 读取 shape(使用 BRep 缓存)

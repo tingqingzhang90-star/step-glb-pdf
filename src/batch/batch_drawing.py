@@ -180,8 +180,10 @@ def _write_model_source(model_code, template_doc, placements, palette, out_dir):
         if template_doc.get(key):
             doc[key] = template_doc[key]
     path = os.path.join(out_dir, model_code, "drawing_source.json")
+    # 先整体序列化再一次性写: json.dump 会按小块反复 write()（几十万次系统调用），
+    # 大文档下明显更慢; 紧凑分隔符同时缩小文件
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False)
+        f.write(json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
     return path
 
 
