@@ -9,6 +9,7 @@ import os
 
 from flask import Blueprint, jsonify, request, send_file
 
+from drawing import frontend_template
 from web import common
 from web.blueprints import template_helpers as th
 
@@ -139,6 +140,58 @@ def api_generate_from_template():
     return jsonify({
         "ok": True, "identity": tmpl_identity, "template_id": template_id,
         "results": th.to_client_results(results)})
+
+
+@bp.route("/api/template-drawing/prepare-source", methods=["POST"])
+def api_prepare_source_from_template():
+    """把选定模板重绑到目标型号,产出可直接编辑的 drawing_source.json
+
+    看板「继续标注」的入口。模板里固化的是**模板型号**的边线引用,跨型号直接载入
+    会几何错位,所以这里走与批量出图完全相同的重绑链路(dim_rebind 几何指纹匹配),
+    把标注落到目标型号的边线上并落盘源文件;编辑器载入后即可在原标注基础上继续加注。
+
+    返回 unmatched 供编辑器提示"哪些标注在本型号找不到对应几何,已跳过"。
+    """
+    body = request.get_json(silent=True) or {}
+    template_id = (body.get("template_id") or "").strip()
+    model = (body.get("model") or "").strip()
+    if not template_id or not model:
+        return jsonify({"ok": False, "error": "缺少 template_id 或 model"}), 400
+
+    template_doc, err = th.load_template_doc(template_id)
+    if err:
+        return err
+    tmpl_identity = template_doc.get("template_identity") or \
+        th.template_identity(template_doc.get("model_id", ""))
+    err = th.reject_cross_series([model], tmpl_identity)
+    if err:
+        return err
+
+    # 目标型号必须已有几何:否则重绑无从谈起(与看板「生成模型」前置一致)
+    try:
+        shape_path = frontend_template.find_model_shape(common.OUT_DIR, model)
+    except FileNotFoundError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    results, err = th.generate_frontend_batch(template_id, template_doc, [model])
+    if err:
+        return err
+    r = (results or [{}])[0]
+    if not r.get("ok"):
+        return jsonify({"ok": False, "error": r.get("error") or "重绑生成失败"}), 500
+
+    # 源文件目录名取实际落盘目录(型号可能带/不带 YRJ 前缀),前端据此调
+    # /api/drawing-sources/<dir> 取回原文
+    source_dir = os.path.basename(os.path.dirname(shape_path))
+    return jsonify({
+        "ok": True,
+        "model": model,
+        "source_dir": source_dir,
+        "source": f"{source_dir}/drawing_source.json",
+        "template_id": template_id,
+        "view_count": len(template_doc.get("views", [])),
+        "unmatched": r.get("unmatched", []),
+    })
 
 
 @bp.route("/api/template-drawing/download/<path:relpath>")

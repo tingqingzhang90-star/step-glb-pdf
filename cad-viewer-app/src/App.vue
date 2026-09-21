@@ -443,8 +443,11 @@
               </g>
             </g>
 
-            <!-- 标注高亮层（hover/选中边线） -->
-            <g v-if="activeTool && dimHoveredEdge" class="dim-highlight" pointer-events="none">
+            <!-- 标注高亮层（hover/选中边线）。
+                 dimHoveredEdge 有两态：边线 hover（含 seg）与电机包络的视图级
+                 hover（只需 view，没有对应边线），故必须判 seg 存在，否则读
+                 dimHoveredEdge.seg.type 会抛错导致整页白屏。 -->
+            <g v-if="activeTool && dimHoveredEdge && dimHoveredEdge.seg" class="dim-highlight" pointer-events="none">
               <g :transform="dimHoveredEdge.transform">
                 <line v-if="dimHoveredEdge.seg.type === 'line'" :x1="dimHoveredEdge.seg.x1" :y1="dimHoveredEdge.seg.y1" :x2="dimHoveredEdge.seg.x2" :y2="dimHoveredEdge.seg.y2" class="dim-highlight-hover" />
                 <circle v-else-if="dimHoveredEdge.seg.type === 'circle'" :cx="dimHoveredEdge.seg.cx" :cy="dimHoveredEdge.seg.cy" :r="dimHoveredEdge.seg.r" class="dim-highlight-hover" />
@@ -1308,8 +1311,23 @@ onMounted(async () => {
   await loadSourceList()
   centerSheet()
   const initModel = urlParams.get('model')
+  // 系列看板「继续标注」入口: ?model=<型号>&source=<源文件目录>[&unmatched=N]
+  // 源文件已带视图几何 + 既有标注(服务端按几何指纹重绑过),直接灌回画布继续编辑。
+  // 但调色板仍必须加载:viewsLoaded 决定标注工具/幅面/缩放是否可用,且电机包络、
+  // 模型尺寸等数据来自调色板(源文件里没有)。两者互不覆盖(调色板不动已放置视图),
+  // 故并行加载把等待压到一次投影的时间。
+  const initSource = urlParams.get('source')
+  const initUnmatched = Number(urlParams.get('unmatched') || 0)
   if (initModel && models.value.includes(initModel)) {
     selectedModel.value = initModel
+  }
+  if (initSource) {
+    await Promise.all([onSourcePicked(initSource), loadViewPalette()])
+    if (initUnmatched > 0) {
+      ElMessage.warning(
+        `模板中有 ${initUnmatched} 条标注在当前型号上没有对应几何,已跳过`)
+    }
+  } else if (initModel && models.value.includes(initModel)) {
     await loadViewPalette()
   } else if (viewMode.value && viewSrc.value) {
     await loadViewSource(viewSrc.value)

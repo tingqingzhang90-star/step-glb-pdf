@@ -45,6 +45,7 @@ export function createDimensionCore(deps, ctx) {
     edgeRefData,
     getSvgMousePoint,
     resolveDimRef,
+    findViewById,
     getMotorEnvelope
   } = deps
 
@@ -809,12 +810,15 @@ export function createDimensionCore(deps, ctx) {
     const extE = dim.extensionEndPx ?? undefined
     let geometry = null
     if (dim.type === 'linear' && dim.mode === 'motor-envelope') {
-      const ref = resolveDimRef(dim.refs?.[0])
-      if (!ref) return null
-      const envelope = getMotorEnvelope ? getMotorEnvelope(ref.view) : null
+      // 电机包络只绑定视图,与具体边线无关(放置时 refs.idx = -1)。
+      // 走 resolveDimRef 会因边线不存在直接返回 null,导致标注不显示/拖不动,
+      // 故按 viewId 取视图。
+      const view = findViewById ? findViewById(dim.refs?.[0]?.viewId) : null
+      if (!view) return null
+      const envelope = getMotorEnvelope ? getMotorEnvelope(view) : null
       if (!envelope) return null
       geometry = buildMotorEnvelopeGeometry(
-        ref.view, envelope, getSheetPoint, dim.offset, dim.customText || '', dim.arrowMode || 'auto', extS, extE)
+        view, envelope, getSheetPoint, dim.offset, dim.customText || '', dim.arrowMode || 'auto', extS, extE)
       if (geometry) {
         geometry.text = dim.customText || geometry.text
       }
@@ -886,15 +890,19 @@ export function createDimensionCore(deps, ctx) {
   function updateDimDrag(dim, mousePos) {
     if (!dim || !mousePos) return
 
+    // 电机包络单独处理:只依赖视图,resolveDimRef 会因边线不存在失败
+    if (dim.type === 'linear' && dim.mode === 'motor-envelope') {
+      const view = findViewById ? findViewById(dim.refs?.[0]?.viewId) : null
+      const envelope = view && getMotorEnvelope ? getMotorEnvelope(view) : null
+      if (!envelope) return
+      dim.offset = getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, mousePos)
+      return
+    }
+
     if (dim.type === 'linear') {
       const first = resolveDimRef(dim.refs[0])
       if (!first) return
-      if (dim.mode === 'motor-envelope') {
-        const envelope = getMotorEnvelope ? getMotorEnvelope(first.view) : null
-        if (!envelope) return
-        dim.offset = getMotorEnvelopeOffsetFromMouse(
-          first.view, envelope, getSheetPoint, mousePos)
-      } else if (dim.mode === 'center') {
+      if (dim.mode === 'center') {
         const second = resolveDimRef(dim.refs[1])
         if (!second) return
         dim.offset = getCenterOffsetFromMouse(first, second, mousePos)

@@ -45,6 +45,8 @@
   .row-btn.gen.run{background:var(--warn)}
   .row-btn.annot{background:var(--accent2);color:#06281b}
   .row-btn.annot:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
+  .row-btn.cont{background:var(--warn);color:#3a2400}
+  .row-btn.cont:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
   .tpl-cell{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
   .tpl-pick{max-width:230px;padding:4px 6px;font-size:12px;border-radius:6px;
             background:var(--panel2);color:var(--txt);border:1px solid var(--border)}
@@ -73,7 +75,11 @@
     每个模板身份(如 <code>250-E-H2K1</code>)只自动生成基准模型(L100 + 首电机),
     标注需人工在<code>模板标注编辑器</code>完成。"去标注"会打开编辑器并自动载入该基准模型。
     同一身份下已保存多份模板时,可在「模板」列下拉指定该身份出图统一采用的那一份;
-    未指定则按标注最多的自动挑选。
+    未指定则按标注最多的自动挑选。<br>
+    "继续标注"在上述基础上"接着标":它把该身份<strong>当前采用的模板</strong>按几何指纹
+    重绑到本行基准型号(与批量出图同一条链路),在编辑器里载入重绑结果,可直接在原有标注上
+    继续追加;模板中若有标注在本型号找不到对应几何,编辑器会提示跳过条数。保存后写为本
+    型号自己的模板,不影响上面的人工指定。
   </p>
 </div>
 
@@ -143,6 +149,11 @@ function renderGroups(rows) {
     for (const r of list) {
       const tr = document.createElement('tr');
       tr.dataset.base = r.base_model;
+      tr.dataset.tpl = r.template.template_id || '';
+      const canCont = r.model_built && r.template.saved;
+      const contTip = canCont
+        ? `在当前采用的模板 ${esc(r.template.template_id)}(${r.template.annotation_count} 注)基础上继续加标注`
+        : '需先生成模型、且该身份已有标注模板';
       tr.innerHTML = `
         <td>${r.type}</td>
         <td class="mono">${r.mount}${r.load}</td>
@@ -152,6 +163,8 @@ function renderGroups(rows) {
         <td>
           <button class="row-btn gen" data-act="gen" ${r.model_built ? 'disabled' : ''}>生成模型</button>
           <button class="row-btn annot" data-act="annot" ${r.model_built ? '' : 'disabled'}>去标注</button>
+          <button class="row-btn cont" data-act="cont" ${canCont ? '' : 'disabled'}
+            title="${contTip}">继续标注</button>
         </td>`;
       tbody.appendChild(tr);
     }
@@ -249,6 +262,38 @@ async function pinTemplate(sel) {
   }
 }
 
+/** 「继续标注」:把本行当前采用的模板按几何指纹重绑到基准型号,产出源文件后带参打开编辑器
+
+    模板里固化的是模板型号的边线引用,跨型号直接载入会几何错位;先走服务端重绑
+    (与批量出图同一条链路),编辑器载入重绑结果即可在原有标注上继续追加。
+*/
+async function continueAnnotate(base, tr) {
+  const tpl = tr.dataset.tpl;
+  const btn = tr.querySelector('[data-act="cont"]');
+  if (!tpl || !btn) return;
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '准备中…';
+  try {
+    const res = await fetch('/api/template-drawing/prepare-source', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({template_id: tpl, model: base})
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '准备失败');
+    const qs = new URLSearchParams({model: data.model || base,
+                                   source: data.source_dir || base});
+    const miss = (data.unmatched || []).length;
+    if (miss) qs.set('unmatched', String(miss));
+    window.open(`/editor?${qs.toString()}`, '_blank');
+  } catch (e) {
+    alert(`继续标注失败:${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 function bindRows() {
   $('#groups').addEventListener('click', e => {
     const btn = e.target.closest('.row-btn');
@@ -257,6 +302,7 @@ function bindRows() {
     const base = tr.dataset.base;
     if (btn.dataset.act === 'gen') genModel(base, tr);
     if (btn.dataset.act === 'annot') window.open(`/editor?model=${encodeURIComponent(base)}`, '_blank');
+    if (btn.dataset.act === 'cont') continueAnnotate(base, tr);
   });
   $('#groups').addEventListener('change', e => {
     const sel = e.target.closest('select[data-act="pin"]');

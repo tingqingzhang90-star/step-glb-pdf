@@ -30,6 +30,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     edgeRefData: coords.edgeRefData,
     getSvgMousePoint: coords.eventToSheetPoint,
     resolveDimRef: coords.resolveDimRef,
+    // 电机包络的 refs 只记 viewId(idx=-1),按 id 取视图,不能走 resolveDimRef
+    findViewById: (id) => placedViews.value.find(v => v.id === id),
     getMotorEnvelope
   }, {
     dimensions,
@@ -189,7 +191,9 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
       const env = v && getMotorEnvelope ? getMotorEnvelope(v) : null
       if (v && env) {
         if (dimHoveredEdge.value?.viewId !== v.id) {
-          dimHoveredEdge.value = { view: v, viewId: v.id, motorEnvelope: true }
+          // 视图级 hover:只记录落在哪个视图上,没有对应边线。seg 显式置 null,
+          // 渲染层据此跳过边线高亮(否则读 seg.type 会抛错白屏)。
+          dimHoveredEdge.value = { view: v, viewId: v.id, seg: null, motorEnvelope: true }
         }
         updateDimPreviewAt(event)
       } else {
