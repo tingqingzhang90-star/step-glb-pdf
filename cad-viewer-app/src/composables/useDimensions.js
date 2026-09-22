@@ -38,7 +38,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   }, {
     dimensions,
     dimensionColor,
-    idCounter: dimIdCounter
+    idCounter: dimIdCounter,
+    record: recordHistory
   })
 
   const {
@@ -67,8 +68,40 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     getMotorEnvelope,
     selectDim,
     selectView: (id) => { selectedViewId.value = id },
-    core: dimCore
+    core: dimCore,
+    record: recordHistory,
+    undo
   })
+
+  // ===== 撤销栈:快照已放置标注 + 选中态,Ctrl+Z 整体回退 =====
+  const HISTORY_LIMIT = 50
+  const undoStack = ref([])
+
+  function cloneDimensions() {
+    // 标注对象均为纯 JSON 数据(refs/centerMarks 等嵌套数组),深拷贝隔离
+    return JSON.parse(JSON.stringify(dimensions.value))
+  }
+
+  /** 记录当前状态到栈顶(在一次用户操作修改 dimensions 之前调用) */
+  function recordHistory() {
+    undoStack.value.push({ dims: cloneDimensions(), sel: selectedDimId.value })
+    if (undoStack.value.length > HISTORY_LIMIT) undoStack.value.shift()
+  }
+
+  function undo() {
+    const snap = undoStack.value.pop()
+    if (!snap) return
+    dimensions.value = snap.dims.map(d => ({ ...d }))
+    selectedDimId.value = snap.sel
+    // 撤销后清掉进行中的临时选择,避免悬空态
+    dimFirstEdge.value = null
+    dimPending.value = null
+    dimPreview.value = null
+    dimDragging.value = null
+    dimHoveredId.value = null
+  }
+
+  const canUndo = computed(() => undoStack.value.length > 0)
 
   const renderedDimensions = computed(() => dimensions.value
     .map(dim => dimCore.renderDimension(dim))
@@ -82,7 +115,9 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   /** 属性面板编辑标注字段(customText/bind_motor),直接改对象触发重渲染 */
   function setDimField(id, field, value) {
     const dim = dimensions.value.find(d => d.id === id)
-    if (dim) dim[field] = value
+    if (!dim || dim[field] === value) return
+    recordHistory()
+    dim[field] = value
   }
 
   /** 标注右键菜单 */
@@ -108,7 +143,10 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     const m = dimContextMenu.value
     if (!m) return
     const dim = dimensions.value.find(d => d.id === m.dimId)
-    if (dim) dim.arrowMode = mode
+    if (dim) {
+      recordHistory()
+      dim.arrowMode = mode
+    }
     closeDimContextMenu()
   }
 
@@ -268,6 +306,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimFirstEdge.value = null
     dimPending.value = null
     dimPreview.value = null
+    undoStack.value = []
   }
 
   /** 从源文件批量载入标注 */
@@ -275,6 +314,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimensions.value = (dims || []).map(d => ({ ...d }))
     selectedDimId.value = null
     dimHoveredId.value = null
+    undoStack.value = []
   }
 
   return {
@@ -288,6 +328,6 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     onDimExtensionHandleDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, selectDim, onDimClick,
     onSvgMouseDown, onSvgMouseMove, onSvgMouseLeave,
-    clearTransientSelection, removeByView, resetAll
+    clearTransientSelection, removeByView, resetAll, undo, canUndo
   }
 }

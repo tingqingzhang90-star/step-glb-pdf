@@ -86,6 +86,7 @@ export function createDimensionCore(deps, ctx) {
   const nextId = () => `dim_${++ctx.idCounter.value}`
 
   const pushDim = (data) => {
+    ctx.record && ctx.record()
     ctx.dimensions.value.push(data)
     return data.id
   }

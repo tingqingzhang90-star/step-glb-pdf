@@ -40,13 +40,17 @@ export function createDimEngine(deps) {
     getMotorEnvelope,
     selectDim,
     selectView,
-    core
+    core,
+    record,
+    undo
   } = deps
 
   // 直径/中心标记是"点击即落位",落位后预览要压住,直到鼠标移开落位点;
   // 否则 mousemove 会立刻在原位重建一份预览,与刚落位的标注叠成"两个标注"
   const PREVIEW_REARM_DIST = 8
   let previewSuppressAt = null
+  // 一次拖拽(移动标注/文字/延长线手柄)只记录一次快照,整体作为一个撤销步
+  let dragSnapshotTaken = false
 
   const clearSelection = () => {
     dimFirstEdge.value = null
@@ -515,6 +519,7 @@ export function createDimEngine(deps) {
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
+    dragSnapshotTaken = false
     dimDragging.value = { id: dim.id, type: dim.type, startMouse: mousePos, startOffset: dim.offset }
   }
 
@@ -525,6 +530,7 @@ export function createDimEngine(deps) {
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
+    dragSnapshotTaken = false
     dimDragging.value = {
       id: dim.id,
       type: dim.type,
@@ -539,12 +545,14 @@ export function createDimEngine(deps) {
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
+    dragSnapshotTaken = false
     dimDragging.value = { id: dim.id, type: dim.type, part: 'extension', endSide }
   }
 
   /** 全局 mouseup：结束标注拖拽 */
   function onGlobalDimMouseUp() {
     dimDragging.value = null
+    dragSnapshotTaken = false
   }
 
   /** 选中标注 */
@@ -555,13 +563,31 @@ export function createDimEngine(deps) {
   /** 删除选中标注 */
   function deleteSelectedDim() {
     if (!selectedDimId.value) return
+    record && record()
     dimensions.value = dimensions.value.filter(d => d.id !== selectedDimId.value)
     selectedDimId.value = null
   }
 
-  /** 键盘事件：Delete 删除选中标注，Esc 放弃尚未落位的标注 */
+  /** 键盘事件：Ctrl+Z 撤销 / Delete 删除选中标注 / Esc 放弃尚未落位的标注 */
   function onKeyDown(event) {
+    // 编辑属性输入框时,交给原生文本撤销,不触发标注撤销/删除
+    const ae = document.activeElement
+    const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
+      if (typing) return
+      event.preventDefault()
+      // 孔组标记进行中:回退最近选中的一个孔(每按一次撤掉最后选的那个)
+      const pending = dimPending.value
+      if (pending && pending.mode === 'bolt-circle' && pending.circles.length) {
+        pending.circles.pop()
+        dimPreview.value = core.buildCenterMarkGroupGeometry(pending.circles.map(resolveDimRef))
+        return
+      }
+      undo && undo()
+      return
+    }
     if (event.key === 'Delete' || event.key === 'Del') {
+      if (typing) return
       if (selectedDimId.value) deleteSelectedDim()
       return
     }
@@ -579,6 +605,11 @@ export function createDimEngine(deps) {
     const dim = dimensions.value.find(item => item.id === drag?.id)
     const mousePos = getSvgMousePoint(event)
     if (!dim || !mousePos) return
+    // 一次拖拽只在首次移动时记录(拖拽前状态),之后连续移动不再重复记录
+    if (!dragSnapshotTaken) {
+      record && record()
+      dragSnapshotTaken = true
+    }
     if (drag.part === 'text') {
       core.updateDimTextDrag(dim, mousePos, drag)
     } else if (drag.part === 'extension') {

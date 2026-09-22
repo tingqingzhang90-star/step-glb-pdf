@@ -58,6 +58,8 @@
           <el-button size="small" :icon="ZoomOut" :disabled="!viewsLoaded" @click="zoomCanvas(0.8)">缩小</el-button>
           <el-button size="small" :disabled="!viewsLoaded" @click="resetCanvas">适应</el-button>
         </el-button-group>
+        <el-divider direction="vertical" />
+        <el-button size="small" :icon="RefreshLeft" :disabled="!canUndo" @click="undo">撤销</el-button>
         <div class="mobile-hide">
         <el-divider direction="vertical" />
         <el-button-group>
@@ -174,6 +176,8 @@
           <el-button size="small" :icon="ZoomOut" :disabled="!viewerReady" @click="zoomCanvas(0.8)">缩小</el-button>
           <el-button size="small" :disabled="!viewerReady" @click="resetCanvas">适应</el-button>
         </el-button-group>
+        <el-divider direction="vertical" />
+        <el-button size="small" :icon="RefreshLeft" :disabled="!canUndo" @click="undo">撤销</el-button>
         <span v-if="viewLoading" class="status-text">加载中...</span>
         <span v-else-if="selectedModel" class="status-text">{{ selectedModel }}</span>
         <span v-if="viewError" class="status-err">{{ viewError }}</span>
@@ -725,7 +729,7 @@
           <div class="stat-row"><span>模型尺寸</span><span class="num">{{ modelBbox.width }}×{{ modelBbox.height }}×{{ modelBbox.depth }}mm</span></div>
         </section>
 
-        <section class="property-section">
+        <section v-if="false" class="property-section">
           <div class="section-title">标题栏 / BOM</div>
           <TitleBlockBomPanel
             :title-block-bom="titleBlockBom"
@@ -826,7 +830,7 @@
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh, WarningFilled } from '@element-plus/icons-vue'
+import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh, WarningFilled, RefreshLeft } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
 import { useTouchCanvas } from '@/composables/useTouchCanvas'
@@ -975,8 +979,9 @@ const {
   dimHighlightEdges, dimHoveredId, selectedDim, setDimField,
   dimContextMenu, openDimContextMenu, closeDimContextMenu, setDimArrowMode,
   toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove, onGlobalDimMouseUp,
-  onKeyDown, selectDim, onDimClick, onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
-  onSvgMouseLeave, clearTransientSelection, removeByView, resetAll, setDimensions
+  onKeyDown, selectDim, onDimClick,   onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
+  onSvgMouseLeave, clearTransientSelection, removeByView, resetAll, setDimensions,
+  undo, canUndo
 } = useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope })
 
 function closeAllContextMenus() {
@@ -1971,13 +1976,22 @@ function onAlgoChange() {
   vector-effect: non-scaling-stroke;
 }
 
-/* 孔组分度圆:虚线圆,穿过被标记的各个孔心 */
+/* 孔组分度圆:虚线圆,穿过被标记的各个孔心。
+   命中区只取虚线本身(stroke),否则 fill 区域会把整个圆盘内部
+   变成 .dimension-group 的命中区,圈内的孔和边线全都点不中 */
 .dim-bolt-circle {
   fill: none;
   stroke: var(--dimension-color, #303133);
   stroke-width: var(--center-mark-stroke, 0.8);
   stroke-dasharray: 6 4;
   vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+
+/* 分度圆的 12px 命中副本是 circle,pointer-events:all 会以整个圆盘
+   为命中区(普通模式下挡住圈内视图/边线选择),同样只保留圆环边缘 */
+.dimensions-layer circle.dim-hit-stroke {
+  pointer-events: stroke;
 }
 
 /* 标注工具条的即时提示(如孔组落位方式) */

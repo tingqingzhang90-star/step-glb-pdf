@@ -5,8 +5,8 @@
 // 后端 PDF 直接以此尺寸渲染,不再做映射转换。
 import { ref, computed } from 'vue'
 
-const SHEET_ZOOM_MIN = 0.35
-const SHEET_ZOOM_MAX = 4
+const SHEET_ZOOM_MIN = 0.1
+const SHEET_ZOOM_MAX = 100
 const SHEET_ZOOM_STEP = 1.12
 
 // 标准图纸毫米尺寸(横向,长边为 width)
