@@ -21,7 +21,8 @@ PX2MM = CFG["_px_to_mm_at_96dpi"]
 
 # json 缺字段时的兜底值,避免旧配置文件直接崩
 _FALLBACK = {"ext_overshoot_mm": 2.5, "text_gap_mm": 4.0,
-             "arrow_len_px": 14.0, "arrow_half_px": 1.6, "arrow_ext_px": 16.0}
+             "arrow_len_px": 14.0, "arrow_half_px": 1.6, "arrow_ext_px": 16.0,
+             "angle_text_gap_px": 4.0, "angle_arc_ext_px": 20.0}
 
 
 def _dim(section, key, fallback_key):
@@ -68,3 +69,13 @@ def dim_arrow_half_px():
 def dim_arrow_extension_px():
     """箭头向内(尖端相对)时尺寸线穿过箭头的延长量(px,与前端 arrow.js 共用同一份 json)"""
     return _dim("arrow", "extension_px", "arrow_ext_px")
+
+
+def dim_angle_text_gap_px():
+    """角度标注文字与弧线的间距(图纸 px, 与前端 core.js ANGLE_TEXT_GAP 共用同一份 json)"""
+    return _dim("angle", "text_gap_px", "angle_text_gap_px")
+
+
+def dim_angle_arc_ext_px():
+    """角度标注弧两端越过箭头尾部的延伸长度(图纸 px, 与前端 core.js ANGLE_ARC_EXT_PX 共用)"""
+    return _dim("angle", "arc_ext_px", "angle_arc_ext_px")

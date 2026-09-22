@@ -20,7 +20,8 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           extend_linear_line, arc_patch_range,
                           build_circle_patch_arc,
                           format_mm, format_deg)
-from drawing.dim.dim_style import dim_ext_overshoot_mm, dim_text_gap_mm, dim_label_gap_mm
+from drawing.dim.dim_style import (dim_ext_overshoot_mm, dim_text_gap_mm, dim_label_gap_mm,
+                                   dim_angle_text_gap_px, dim_angle_arc_ext_px)
 
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
@@ -145,7 +146,9 @@ LABEL_GAP = dim_label_gap_mm()           # 伴随文字与数值的间距(mm),=�
 # 中心夹角标注专用量(单位与前端 core.js 同名常量一致,均为图纸 px)
 ANGLE_DEFAULT_RADIUS = 200               # 未指定时的默认弧半径
 ANGLE_EXT_OVERSHOOT = 30                 # 尺寸界线越过弧的长度
-ANGLE_TEXT_GAP = 18                      # 文字相对弧的内侧间距
+# 文字间距与弧延伸长度改由 cad_viewer_style.json 的 dim.angle 配置:
+#   text_gap_px 文字相对弧的内侧间距    arc_ext_px 弧越过箭头尾部的延伸长度
+# 取值为图纸 px,与前端 core.js 同名常量共用同一份 json。
 
 # 孔组中心标记:十字臂长 = 孔半径 × 该系数(与前端 core.js BOLT_MARK_SCALE 一致)
 BOLT_MARK_SCALE = 1.6
@@ -650,7 +653,8 @@ def _angle_points(ann, segs, views):
     """中心夹角标注:顶点(法兰中心) + 两个被测点(孔心/端点)
 
     与 core.js buildAnglePointsGeometry 同公式,顺序:取小于 180° 的一侧画弧,
-    尺寸界线沿径向延伸到弧并越过 ANGLE_EXT_OVERSHOOT,文字放弧内侧。
+    尺寸界线沿径向延伸到弧并越过 overshoot(随半径按比例钳制),
+    箭头放弧两端,弧两端再延伸一小段越过箭头尾部,文字贴近弧(小半径放外侧)。
     """
     if len(segs) < 3 or len(views) < 3:
         return None
@@ -683,20 +687,31 @@ def _angle_points(ann, segs, views):
     overshoot = ann.get("extOvershoot")
     if not isinstance(overshoot, (int, float)):
         overshoot = ANGLE_EXT_OVERSHOOT
-    a1 = start + sweep * 0.05
-    a2 = end - sweep * 0.05
-    ap1 = (vertex[0] + math.cos(a1) * radius, vertex[1] + math.sin(a1) * radius)
-    ap2 = (vertex[0] + math.cos(a2) * radius, vertex[1] + math.sin(a2) * radius)
-    tan1 = (-math.sin(a1), math.cos(a1))
-    tan2 = (-math.sin(a2), math.cos(a2))
+    # 尺寸界线越过弧的长度随弧半径按比例收缩: 固定 30px 在小半径下会比弧本身
+    # 还长(延伸线甩出老远); 既有标注存的大 overshoot 在此同样被钳制
+    overshoot = max(4.0, min(float(overshoot), radius * 0.15))
+    # 箭头放在弧两端(与尺寸界线交点), 弧两端各接一段直线延长线:
+    # 延长线沿切线(即箭头轴线)走直线, 从箭头尾部底中心穿出; 长度由
+    # dim.angle.arc_ext_px 配置(默认 20px)。不能继续沿圆弧延伸: 圆弧与
+    # 箭头轴线在尾部附近因曲率不共线, 放大看会像从尾部底一角冒出来。
+    tail_len = dim_angle_arc_ext_px()
+    ap1 = (vertex[0] + math.cos(start) * radius, vertex[1] + math.sin(start) * radius)
+    ap2 = (vertex[0] + math.cos(end) * radius, vertex[1] + math.sin(end) * radius)
+    tan1 = (-math.sin(start), math.cos(start))
+    tan2 = (-math.sin(end), math.cos(end))
+    tail1 = (ap1[0] - tan1[0] * tail_len, ap1[1] - tan1[1] * tail_len)
+    tail2 = (ap2[0] + tan2[0] * tail_len, ap2[1] + tan2[1] * tail_len)
     mid = start + sweep / 2
-    text_dist = max(radius - ANGLE_TEXT_GAP, 12.0)
+    # 文字贴近弧: 半径足够时放弧内侧, 太小时放弧外侧(间距由 dim.angle.text_gap_px 配置)
+    text_gap = dim_angle_text_gap_px()
+    text_dist = radius - text_gap if radius - text_gap >= 14 else radius + 10
     text = format_deg(sweep * 180 / math.pi)
     return {
         "lines": [_angle_ext_line(vertex, u1, l1, radius, overshoot),
                   _angle_ext_line(vertex, u2, l2, radius, overshoot)],
         "dim_lines": [],
-        "arcs": [build_arc_points(vertex[0], vertex[1], radius, start, end)],
+        "arcs": [[tail1] + build_arc_points(vertex[0], vertex[1], radius, start, end)
+                 + [tail2]],
         "arrows": [build_arrow_points(ap1, tan1, True),
                    build_arrow_points(ap2, (-tan2[0], -tan2[1]), True)],
         "texts": [{"pos": (vertex[0] + math.cos(mid) * text_dist,

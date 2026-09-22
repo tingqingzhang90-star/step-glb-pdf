@@ -269,6 +269,28 @@ export function buildArcPath(cx, cy, r, startAngle, endAngle) {
   return `M${pts[0]} L${pts.slice(1).join(' L')}`
 }
 
+/**
+ * 角度标注弧 path：两端各接一段直线延长线（tail1/tail2 为延长向量）。
+ *
+ * 延长段必须沿切线走直线，而不能继续沿圆弧延伸：箭头轴线就是弧端点的切线，
+ * 只有直线延长才与之严格共线，才能从箭头尾部底中心穿出；继续沿圆弧会因
+ * 曲率在尾部附近偏离箭头轴线（放大后看就是从尾部底一角冒出来）。
+ */
+export function buildAngleArcPath(cx, cy, r, startAngle, endAngle, tail1, tail2) {
+  const steps = 20
+  const x0 = cx + Math.cos(startAngle) * r
+  const y0 = cy + Math.sin(startAngle) * r
+  const xn = cx + Math.cos(endAngle) * r
+  const yn = cy + Math.sin(endAngle) * r
+  const pts = [`${x0 + tail1.x},${y0 + tail1.y}`, `${x0},${y0}`]
+  for (let i = 1; i <= steps; i++) {
+    const t = startAngle + (endAngle - startAngle) * (i / steps)
+    pts.push(`${cx + Math.cos(t) * r},${cy + Math.sin(t) * r}`)
+  }
+  pts.push(`${xn + tail2.x},${yn + tail2.y}`)
+  return `M${pts[0]} L${pts.slice(1).join(' L')}`
+}
+
 /** polyline 点数组 → SVG points 字符串 */
 export function polylinePoints(points) {
   return points.map(p => `${p[0]},${p[1]}`).join(' ')

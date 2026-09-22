@@ -16,7 +16,7 @@ import pytest
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
 
-from drawing.dim import dim_render  # noqa: E402
+from drawing.dim import dim_render, dim_style  # noqa: E402
 
 
 def _circle(cx, cy, r=5.0):
@@ -51,12 +51,47 @@ def test_quarter_angle_arc_and_text():
     prims = dim_render._angle_points(_ann(300.0), _quarter_segs(), [view] * 3)
     assert prims["text"] == "90°"
     arc = prims["arcs"][0]
-    assert arc[0] == pytest.approx((300.0, 0.0), abs=1.0)
-    assert arc[-1] == pytest.approx((0.0, 300.0), abs=1.0)
-    # 文字落在弧内侧的角平分线上
+    # 弧两端各接一段直线延长线(长度 = 配置 arc_ext_px):
+    # 起点(300,0)沿切线 +y 向外 → (300,-tail);终点(0,300)沿切线 -x 向外 → (-tail,300)
+    tail = dim_style.dim_angle_arc_ext_px()
+    assert arc[0] == pytest.approx((300.0, -tail), abs=1e-6)
+    assert arc[1] == pytest.approx((300.0, 0.0), abs=1e-6)
+    assert arc[-2] == pytest.approx((0.0, 300.0), abs=1e-6)
+    assert arc[-1] == pytest.approx((-tail, 300.0), abs=1e-6)
+    # 文字落在弧内侧的角平分线上(间距由 dim.angle.text_gap_px 配置)
     tx, ty = prims["texts"][0]["pos"]
-    assert math.hypot(tx, ty) == pytest.approx(300.0 - dim_render.ANGLE_TEXT_GAP, abs=0.01)
+    assert math.hypot(tx, ty) == pytest.approx(
+        300.0 - dim_style.dim_angle_text_gap_px(), abs=0.01)
     assert tx == pytest.approx(ty, abs=0.01)
+
+
+def test_angle_config_values_are_applied():
+    """dim.angle 配置确实生效:text_gap_px 决定文字半径, arc_ext_px 决定延长线长度"""
+    view = _view()
+    prims = dim_render._angle_points(_ann(300.0), _quarter_segs(), [view] * 3)
+    arc = prims["arcs"][0]
+    tail = dim_style.dim_angle_arc_ext_px()
+    assert arc[0] == pytest.approx((300.0, -tail), abs=1e-6)
+    assert arc[-1] == pytest.approx((-tail, 300.0), abs=1e-6)
+    tx, ty = prims["texts"][0]["pos"]
+    assert math.hypot(tx, ty) == pytest.approx(
+        300.0 - dim_style.dim_angle_text_gap_px(), abs=0.01)
+
+
+def test_arc_tail_is_collinear_with_arrow_axis():
+    """延长线与箭头轴线共线:箭头尾部底中心(两底角中点)落在延长线上,
+    保证延长线从尾部底中心穿出(而非从底的一角冒出)"""
+    view = _view()
+    prims = dim_render._angle_points(_ann(300.0), _quarter_segs(), [view] * 3)
+    arc = prims["arcs"][0]
+    pairs = ((arc[1], arc[0], prims["arrows"][0]),      # 起点侧:尖端→外延端点
+             (arc[-2], arc[-1], prims["arrows"][1]))    # 终点侧
+    for tip, tail_pt, arrow in pairs:
+        base = ((arrow[1][0] + arrow[2][0]) / 2.0,
+                (arrow[1][1] + arrow[2][1]) / 2.0)      # 尾部底中心
+        ax, ay = base[0] - tip[0], base[1] - tip[1]
+        bx, by = tail_pt[0] - tip[0], tail_pt[1] - tip[1]
+        assert abs(ax * by - ay * bx) < 1e-6, (tip, base, tail_pt)
 
 
 def test_extension_lines_reach_past_arc():
@@ -73,8 +108,9 @@ def test_extension_lines_start_from_arc_when_radius_is_inner():
     view = _view()
     prims = dim_render._angle_points(_ann(50.0), _quarter_segs(), [view] * 3)
     line1 = prims["lines"][0]
+    # overshoot 随半径钳制: max(4, min(30, 50*0.15)) = 7.5
     assert line1[0] == pytest.approx((50.0, 0.0))
-    assert line1[1] == pytest.approx((130.0, 0.0))
+    assert line1[1] == pytest.approx((107.5, 0.0))
 
 
 def test_line_point_kind_picks_endpoint():

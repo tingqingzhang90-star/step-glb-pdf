@@ -26,6 +26,7 @@ import {
   lineIntersection,
   farthestEndpointFrom,
   buildArcPath,
+  buildAngleArcPath,
   extendExtEnd,
   linearTextAngle,
   linearTextPos,
@@ -909,7 +910,10 @@ export function createDimensionCore(deps, ctx) {
 
   const ANGLE_MAX_RADIUS = 4000      // 弧半径上限(接鼠标预览时用)
   const ANGLE_EXT_OVERSHOOT = 30     // 尺寸界线越过弧的长度(px)
-  const ANGLE_TEXT_GAP = 18          // 文字相对弧的内侧间距(px)
+  // 文字间距与弧延伸长度由 cad_viewer_style.json 的 dim.angle 配置(与后端共用):
+  //   text_gap_px 文字相对弧的内侧间距    arc_ext_px 弧越过箭头尾部的延伸长度
+  const ANGLE_TEXT_GAP = config.dim.angle?.text_gap_px ?? 4
+  const ANGLE_ARC_EXT_PX = config.dim.angle?.arc_ext_px ?? 20
 
   /** 点引用 → 图纸坐标:圆取圆心,直线按 pointKind 取端点(缺省起点) */
   function resolveDimPoint(ref) {
@@ -962,15 +966,21 @@ export function createDimensionCore(deps, ctx) {
     }
     const sweep = endAngle - startAngle
     const r = Math.max(radius, 12)
-    const overshoot = opts.overshoot ?? ANGLE_EXT_OVERSHOOT
-    const arrowAng1 = startAngle + sweep * 0.05
-    const arrowAng2 = endAngle - sweep * 0.05
+    // 尺寸界线越过弧的长度随弧半径按比例收缩: 固定 30px 在小半径下会比弧本身
+    // 还长(延伸线甩出老远); 既有标注存的大 overshoot 在此同样被钳制
+    const overshoot = Math.max(4, Math.min(opts.overshoot ?? ANGLE_EXT_OVERSHOOT, r * 0.15))
+    // 箭头放在弧两端(与尺寸界线交点), 弧两端各接一段直线延长线:
+    // 延长线沿切线(即箭头轴线)走直线, 从箭头尾部底中心穿出;
+    // 长度由 dim.angle.arc_ext_px 配置(默认 20px)
+    const arrowAng1 = startAngle
+    const arrowAng2 = endAngle
     const arrowP1 = { x: vertex.x + Math.cos(arrowAng1) * r, y: vertex.y + Math.sin(arrowAng1) * r }
     const arrowP2 = { x: vertex.x + Math.cos(arrowAng2) * r, y: vertex.y + Math.sin(arrowAng2) * r }
     const tan1 = { x: -Math.sin(arrowAng1), y: Math.cos(arrowAng1) }
     const tan2 = { x: -Math.sin(arrowAng2), y: Math.cos(arrowAng2) }
     const midAngle = startAngle + sweep / 2
-    const textDist = Math.max(r - ANGLE_TEXT_GAP, 12)
+    // 文字贴近弧: 半径足够时放弧内侧, 太小时放弧外侧(不再贴到顶点)
+    const textDist = (r - ANGLE_TEXT_GAP >= 14) ? r - ANGLE_TEXT_GAP : r + 10
     return {
       type: 'angle',
       angleMode: 'points',
@@ -980,7 +990,9 @@ export function createDimensionCore(deps, ctx) {
       extOvershoot: overshoot,
       startAngle,
       endAngle,
-      arcPath: buildArcPath(vertex.x, vertex.y, r, startAngle, endAngle),
+      arcPath: buildAngleArcPath(vertex.x, vertex.y, r, startAngle, endAngle,
+        { x: -tan1.x * ANGLE_ARC_EXT_PX, y: -tan1.y * ANGLE_ARC_EXT_PX },
+        { x: tan2.x * ANGLE_ARC_EXT_PX, y: tan2.y * ANGLE_ARC_EXT_PX }),
       extLines: [
         angleExtLine(vertex, u1, l1, r, overshoot),
         angleExtLine(vertex, u2, l2, r, overshoot)
