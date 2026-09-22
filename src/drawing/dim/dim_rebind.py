@@ -211,7 +211,13 @@ def _motor_face_lines(target_profile, view_name):
 
 
 def _mm_to_canvas_fn(view_segs, k):
-    """从视图任一带 mm 元数据的 line 边线反推 mm→画布 px 仿射变换"""
+    """从视图任一带 mm 元数据的 line 边线反推 mm→画布 px 仿射变换
+
+    仅作兜底:优先用 `_canvas_fn_from_bbox`。反推值受该边线 mm 元数据
+    取整影响,与前端使用的 bbox 参数有 ~0.02px 级偏差;而调色板边线里存在
+    大量 0.1px 级退化碎片,这点偏差就足以让"最近边"吸到另一条碎片,导致
+    尺寸线基线漂移。
+    """
     if not k:
         return None
     for seg in view_segs:
@@ -223,6 +229,22 @@ def _mm_to_canvas_fn(view_segs, k):
             off_y = seg["y1"] - m[1] * k
             return lambda p: (p[0] * k + off_x, p[1] * k + off_y)
     return None
+
+
+def _canvas_fn_from_bbox(bbox):
+    """与前端 faceToSheet 完全一致的 mm→画布 px 变换(直接用调色板 bbox 参数)
+
+    前端: 图纸坐标 = getSheetPoint(view, mm*bbox.scale + bbox.offset_*)。
+    必须与前端同源,否则包络端面会偏零点几像素,吸到另一条碎片。
+    """
+    if not bbox:
+        return None
+    k = bbox.get("scale")
+    if not k:
+        return None
+    ox = bbox.get("offset_x") or 0.0
+    oy = bbox.get("offset_y") or 0.0
+    return lambda p: (p[0] * k + ox, p[1] * k + oy)
 
 
 def _synthetic_seg(p1_mm, p2_mm, to_canvas):
@@ -243,31 +265,38 @@ def _synthetic_seg(p1_mm, p2_mm, to_canvas):
     }
 
 
-def _snap_seg_to_view(seg, view_segs, orientation, offset):
+def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
     """把合成的端面线吸附到视图中最接近的真实边线端点
 
     电机包络端点来自 bbox 8 角点投影,端面线 y/x 跨度=轮廓全范围,
     远超电机在视图中的真实边线,导致尺寸线悬空。
     这里在视图边线中找同方向、位置最接近的边线,把端面线端点替换为
     该真实边线的端点(与前端 snapEndpointToViewEdge 行为一致)。
+
+    前端在**图纸坐标**里度量:候选边 sheet x = x1*scale + view.x,
+    阈值 30 图纸 px。本函数工作在画布 px,故阈值/线宽判据都要除以
+    view_scale 换算,否则视图缩放 ≠ 1 时吸到的是另一条边(尺寸线漂移)。
     """
     if not view_segs:
         return seg
-    SNAP = 30.0
+    s = max(float(view_scale or 1.0), 1e-6)
+    SNAP = 30.0 / s          # 30 图纸 px → 画布 px
+    FLAT = 2.0 / s           # 前端"近似竖直/水平"判据同样在图纸坐标
     best = None
     best_dist = float('inf')
     if orientation == "horizontal":
         # 端面线竖直,找同 x 附近的竖直边线
-        sx = (seg["x1"] + seg["x2"]) / 2.0
-        for s in view_segs:
-            if s.get("type") != "line":
+        # 距离/落点都用候选边线的首个端点(与前端 Math.abs(x1 - pt.x) 一致):
+        # 调色板里有大量 0.1px 级退化碎片,用中点度量会吸到另一条碎片
+        for e in view_segs:
+            if e.get("type") != "line":
                 continue
-            if abs(s["x1"] - s["x2"]) > 2.0:
+            if abs(e["x1"] - e["x2"]) > FLAT:
                 continue
-            dist = abs((s["x1"] + s["x2"]) / 2.0 - sx)
+            dist = abs(e["x1"] - seg["x1"])
             if dist < best_dist and dist < SNAP:
                 best_dist = dist
-                best = s
+                best = e
         if best is None:
             return seg
         # 取真实边线的上端或下端(按 offset 方向)
@@ -276,21 +305,20 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset):
         else:
             y = min(best["y1"], best["y2"])
         seg_snap = dict(seg)
-        seg_snap["x1"] = seg_snap["x2"] = (best["x1"] + best["x2"]) / 2.0
+        seg_snap["x1"] = seg_snap["x2"] = best["x1"]
         seg_snap["y1"] = seg_snap["y2"] = y
         return seg_snap
     else:
         # 端面线水平,找同 y 附近的水平边线
-        sy = (seg["y1"] + seg["y2"]) / 2.0
-        for s in view_segs:
-            if s.get("type") != "line":
+        for e in view_segs:
+            if e.get("type") != "line":
                 continue
-            if abs(s["y1"] - s["y2"]) > 2.0:
+            if abs(e["y1"] - e["y2"]) > FLAT:
                 continue
-            dist = abs((s["y1"] + s["y2"]) / 2.0 - sy)
+            dist = abs(e["y1"] - seg["y1"])
             if dist < best_dist and dist < SNAP:
                 best_dist = dist
-                best = s
+                best = e
         if best is None:
             return seg
         if offset >= 0:
@@ -298,9 +326,60 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset):
         else:
             x = min(best["x1"], best["x2"])
         seg_snap = dict(seg)
-        seg_snap["y1"] = seg_snap["y2"] = (best["y1"] + best["y2"]) / 2.0
         seg_snap["x1"] = seg_snap["x2"] = x
+        seg_snap["y1"] = seg_snap["y2"] = best["y1"]
         return seg_snap
+
+
+def _seg_endpoints(seg):
+    """边线首/末端点(line 用 x1y1/x2y2,polyline 用首尾采样点)"""
+    if seg.get("type") == "line":
+        return (seg["x1"], seg["y1"]), (seg["x2"], seg["y2"])
+    if seg.get("type") == "polyline":
+        pts = seg.get("points") or []
+        if len(pts) >= 2:
+            return pts[0], pts[-1]
+    return None, None
+
+
+def _reversed_seg(seg):
+    """端点首尾互换的浅拷贝(line 连 meta.mm_coords 一起换)"""
+    out = dict(seg)
+    if seg.get("type") == "line":
+        out["x1"], out["y1"], out["x2"], out["y2"] = \
+            seg["x2"], seg["y2"], seg["x1"], seg["y1"]
+        meta = dict(out.get("meta") or {})
+        mm = meta.get("mm_coords")
+        if mm and len(mm) >= 4:
+            meta["mm_coords"] = [mm[2], mm[3], mm[0], mm[1]]
+        out["meta"] = meta
+    elif seg.get("type") == "polyline":
+        out["points"] = list(reversed(seg.get("points") or []))
+    return out
+
+
+def _align_seg_direction(base_seg, target_seg):
+    """把匹配到的目标边线端点顺序对齐基准边线方向
+
+    线性标注的 offset/textSlide 语义沿"被测边自身"定义:
+    single 的 offset 沿边法向(dim_geometry.line_basis 的 perp 由端点
+    顺序决定), parallel/circle-edge 的 offset 沿边方向滑动。
+    HLR 输出边线的端点顺序是任意的,同一条边在目标型号图纸里可能首尾
+    颠倒:直接用会让 perp/unit 翻转,尺寸线从零件一侧跳到另一侧
+    (编辑器里在零件上方,导出图跑到零件内部)。
+    这里以基准边线方向为准,必要时翻转目标边线端点。两边是同一标准视图,
+    画布坐标取向一致,方向向量可直接比较。
+    """
+    if target_seg.get("type") not in ("line", "polyline"):
+        return target_seg
+    b1, b2 = _seg_endpoints(base_seg)
+    t1, t2 = _seg_endpoints(target_seg)
+    if not b1 or not t1:
+        return target_seg
+    if (b2[0] - b1[0]) * (t2[0] - t1[0]) + \
+       (b2[1] - b1[1]) * (t2[1] - t1[1]) < 0:
+        return _reversed_seg(target_seg)
+    return target_seg
 
 
 def rebind_annotation(ann, base_refs, ctx, target_profile,
@@ -336,7 +415,10 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
                               "两端面重合,无法标注包络尺寸",
                     "segs": [], "views": []}
         fmin, fmax, _size = faces
-        to_canvas = _mm_to_canvas_fn(placement["segs"], placement["k"])
+        # 与前端 faceToSheet 同源: 优先用调色板 bbox 参数(mm→画布 px),
+        # 缺失时才退回从边线 mm 元数据反推
+        to_canvas = (_canvas_fn_from_bbox(placement.get("bbox"))
+                     or _mm_to_canvas_fn(placement["segs"], placement["k"]))
         if to_canvas is None:
             return {"status": "unmatched", "reason": "视图缺少 mm 元数据,无法换算",
                     "segs": [], "views": []}
@@ -346,13 +428,19 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
             return {"status": "unmatched", "reason": "电机包络线合成失败",
                     "segs": [], "views": []}
         # 电机包络端面线 y/x 范围来自 bbox 8 角点投影,会远超电机实际边线,
-        # 需吸附到 placement["segs"] 的真实边线端点,让延伸线起点落在视图电机实际边缘。
-        segs_view = placement.get("segs") or []
+        # 需吸附到视图真实边线端点,让延伸线起点落在视图电机实际边缘。
+        # 候选集与前端 snapEndpointToViewEdge 一致:可见边 + 隐藏边。
+        segs_view = (placement.get("segs") or []) + (placement.get("hidden") or [])
         if ann.get("mode") != "single" and segs_view:
             # 端面线方向:vertical 端面线对应 horizontal 包络,horizontal 端面线对应 vertical 包络
             dim_orientation = "horizontal" if seg_min.get("meta", {}).get("orientation") == "vertical" else "vertical"
-            seg_min = _snap_seg_to_view(seg_min, segs_view, dim_orientation, ann.get("offset", 50))
-            seg_max = _snap_seg_to_view(seg_max, segs_view, dim_orientation, ann.get("offset", 50))
+            # offset 前后端取值规则统一(前端存 null 时后端不能用 None 比较符号)
+            snap_offset = ann.get("offset") or 50
+            view_scale = float(placement.get("scale") or 1.0)
+            seg_min = _snap_seg_to_view(seg_min, segs_view, dim_orientation,
+                                        snap_offset, view_scale)
+            seg_max = _snap_seg_to_view(seg_max, segs_view, dim_orientation,
+                                        snap_offset, view_scale)
         if ann.get("mode") == "single":
             return {"status": "motor", "reason": "",
                     "segs": [seg_max], "views": [placement]}
@@ -380,6 +468,6 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
             return {"status": "unmatched",
                     "reason": f"边线未匹配(视图 {placement['source_view']} idx={ref.get('idx')})",
                     "segs": [], "views": []}
-        segs.append(target_seg)
+        segs.append(_align_seg_direction(entry["seg"], target_seg))
         views.append(placement)
     return {"status": "matched", "reason": "", "segs": segs, "views": views}

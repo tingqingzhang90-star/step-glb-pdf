@@ -238,6 +238,9 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
             "segs": pv.get("edges", []),
             "hidden": pv.get("hidden_edges", []),
             "k": k_target,
+            # 调色板 bbox: 电机的 mm→画布 px 变换参数。重绑吸附必须与前端
+            # faceToSheet 用同一套参数,否则端面会偏零点几像素而吸错碎片
+            "bbox": pv.get("bbox", {}),
         }
 
     rebound = []
