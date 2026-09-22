@@ -155,6 +155,90 @@ def build_arc_points(cx, cy, r, start_angle, end_angle, steps=20):
     return pts
 
 
+def _norm_angle_delta(d):
+    while d > math.pi:
+        d -= math.pi * 2
+    while d < -math.pi:
+        d += math.pi * 2
+    return d
+
+
+def arc_missing_at(seg, circ, angle):
+    """部分弧在 angle 处是否缺少可见弧线(与前端 geometry.js arcMissingAt 同语义):
+    整圆/拟合圆返回 False;polyline + meta.curve='circle' 的部分弧按
+    采样点角覆盖判断,容差 = 最大相邻采样角步长的一半 + 少量余量"""
+    if not seg or not circ:
+        return False
+    st = seg.get("type")
+    if st == "circle":
+        return False
+    if st != "polyline":
+        return False
+    pts = seg.get("points") or []
+    meta = seg.get("meta") or {}
+    if meta.get("curve") != "circle":
+        return False
+    span = meta.get("arc_span")
+    if isinstance(span, (int, float)) and span >= math.pi * 2 - 0.15:
+        return False
+    if len(pts) < 2:
+        return False
+    angles = [math.atan2(p[1] - circ["cy"], p[0] - circ["cx"]) for p in pts]
+    max_step = 0.0
+    for i in range(1, len(angles)):
+        max_step = max(max_step, abs(_norm_angle_delta(angles[i] - angles[i - 1])))
+    tol = max_step / 2 + 0.02
+    return all(abs(_norm_angle_delta(angle - a)) > tol for a in angles)
+
+
+ARC_PATCH_OVERSHOOT = 0.14  # 补齐弧越过箭头接触角的出头量(弧度,约 8°),与前端一致
+
+
+def arc_patch_range(seg, circ, angle):
+    """计算部分弧在 angle 处的补齐弧范围(与前端 geometry.js arcPatchRange 同语义)。
+    无需补(整圆/已覆盖/无弧元数据)返回 None;
+    否则返回 dict(start=起始角, span=弧长含出头, dir=±1),
+    起点为离箭头最近的已有弧端点,保证与现有弧线无缝衔接。"""
+    if not seg or not circ:
+        return None
+    st = seg.get("type")
+    if st == "circle":
+        return None
+    if st != "polyline":
+        return None
+    pts = seg.get("points") or []
+    meta = seg.get("meta") or {}
+    if meta.get("curve") != "circle":
+        return None
+    span = meta.get("arc_span")
+    if isinstance(span, (int, float)) and span >= math.pi * 2 - 0.15:
+        return None
+    if len(pts) < 2:
+        return None
+    angles = [math.atan2(p[1] - circ["cy"], p[0] - circ["cx"]) for p in pts]
+    max_step = 0.0
+    for i in range(1, len(angles)):
+        max_step = max(max_step, abs(_norm_angle_delta(angles[i] - angles[i - 1])))
+    tol = max_step / 2 + 0.02
+    for a in angles:
+        if abs(_norm_angle_delta(angle - a)) <= tol:
+            return None
+    a0, a1 = angles[0], angles[-1]
+    d0 = abs(_norm_angle_delta(angle - a0))
+    d1 = abs(_norm_angle_delta(angle - a1))
+    start = a0 if d0 <= d1 else a1
+    direction = 1 if _norm_angle_delta(angle - start) >= 0 else -1
+    patch_span = abs(_norm_angle_delta(angle - start)) + ARC_PATCH_OVERSHOOT
+    return {"start": start, "span": patch_span, "dir": direction}
+
+
+def build_circle_patch_arc(cx, cy, r, rng):
+    """圆缺失处的补齐弧点列(与前端 core.js buildArcPatch 同语义)"""
+    if not rng:
+        return []
+    return build_arc_points(cx, cy, r, rng["start"], rng["start"] + rng["dir"] * rng["span"])
+
+
 def estimate_text_width(text):
     return len(str(text or "")) * 7 + 8
 

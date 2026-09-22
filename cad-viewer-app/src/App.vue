@@ -575,6 +575,8 @@
                 </template>
                 <!-- 直径标注 -->
                 <template v-if="dim.type === 'diameter'">
+                  <!-- 引用圆为部分弧且箭头落在缺失处时,补一小段圆弧 -->
+                  <path v-if="dim.arcPatch" :d="dim.arcPatch" class="dim-line" fill="none" />
                   <template v-if="dim.diameterMode === 'leader'">
                     <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-line" />
                     <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-hit-stroke" />

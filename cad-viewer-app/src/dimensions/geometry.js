@@ -144,6 +144,54 @@ export function toCircle(seg) {
   return null
 }
 
+/** 把角度差归一化到 [-π, π] */
+function normAngleDelta(d) {
+  while (d > Math.PI) d -= Math.PI * 2
+  while (d < -Math.PI) d += Math.PI * 2
+  return d
+}
+
+// 补齐弧越过箭头接触角的出头量(弧度,约 8°)
+export const ARC_PATCH_OVERSHOOT = 0.14
+
+/**
+ * 计算圆边线在给定角度处的补齐弧范围(仅对后端标记的部分弧生效)。
+ *   - 整圆(circle)/已有弧覆盖该角度/无弧元数据的拟合圆 → null(不补)
+ *   - 部分弧且该角度缺失:补弧从"离箭头最近的已有弧端点"无缝接出,
+ *     沿缺失段拉到箭头接触角,再向前出头 ARC_PATCH_OVERSHOOT
+ * 返回 { start, span, dir }:start=起始角,span=弧长(弧度,含出头),
+ * dir=拉伸方向(±1),终角 = start + dir*span;无需补时返回 null。
+ */
+export function arcPatchRange(seg, circ, angle) {
+  if (!seg || !circ) return null
+  if (seg.type === 'circle') return null
+  if (seg.type !== 'polyline' || !Array.isArray(seg.points)) return null
+  const meta = seg.meta
+  if (!meta || meta.curve !== 'circle') return null
+  if (typeof meta.arc_span === 'number' && meta.arc_span >= Math.PI * 2 - 0.15) return null
+  const pts = seg.points
+  if (pts.length < 2) return null
+  const angles = pts.map(p => Math.atan2(p[1] - circ.cy, p[0] - circ.cx))
+  let maxStep = 0
+  for (let i = 1; i < angles.length; i++) {
+    const d = Math.abs(normAngleDelta(angles[i] - angles[i - 1]))
+    if (d > maxStep) maxStep = d
+  }
+  const tol = maxStep / 2 + 0.02
+  for (const a of angles) {
+    if (Math.abs(normAngleDelta(angle - a)) <= tol) return null
+  }
+  // 从较近的弧端点出发,朝箭头方向拉弧
+  const a0 = angles[0]
+  const a1 = angles[angles.length - 1]
+  const d0 = Math.abs(normAngleDelta(angle - a0))
+  const d1 = Math.abs(normAngleDelta(angle - a1))
+  const start = d0 <= d1 ? a0 : a1
+  const dir = normAngleDelta(angle - start) >= 0 ? 1 : -1
+  const span = Math.abs(normAngleDelta(angle - start)) + ARC_PATCH_OVERSHOOT
+  return { start, span, dir }
+}
+
 /** 判断两条线段是否平行（角度差 < 5°），line/polyline 视为直线 */
 export function isParallel(seg1, seg2) {
   const l1 = toLineSeg(seg1)

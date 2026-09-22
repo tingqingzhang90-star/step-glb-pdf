@@ -17,7 +17,8 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           project_point_to_line, line_intersection,
                           farthest_endpoint_from, build_arc_points,
                           build_linear_arrows, build_arrow_points,
-                          extend_linear_line,
+                          extend_linear_line, arc_patch_range,
+                          build_circle_patch_arc,
                           format_mm, format_deg)
 from drawing.dim.dim_style import dim_ext_overshoot_mm, dim_text_gap_mm, dim_label_gap_mm
 
@@ -494,8 +495,12 @@ def _diameter(ann, seg, view):
     mm_val = radius * 2 if radius else circ["r"] * 2 / (view["k"] or 1.0)
     text_angle = angle + math.pi if abs(angle) > math.pi / 2 else angle
     text = f"ø{format_mm(mm_val)}"
+    # 引用圆为部分弧且箭头接触角处缺失时,从弧断点无缝补一段圆弧(与前端一致)
+    patch = arc_patch_range(seg, circ, angle)
+    arcs = [build_circle_patch_arc(cx, cy, r, patch)] if patch else []
     return {
         "lines": [], "dim_lines": [(leader_start, leader_end)],
+        "arcs": arcs,
         "arrows": [build_arrow_points(edge_pt, d, False)],
         "texts": [{"pos": text_pos, "text": text,
                    "angle": text_angle, "anchor": "start"}],
@@ -554,6 +559,10 @@ def _diameter_leader(ann, seg, view):
     if t < 1:
         t = 1
     edge_pt = (bend_pt[0] + d[0] * t, bend_pt[1] + d[1] * t)
+    # 箭头接触角处部分弧缺失时从弧断点补一段圆弧(与前端一致)
+    contact = math.atan2(edge_pt[1] - cy, edge_pt[0] - cx)
+    patch = arc_patch_range(seg, circ, contact)
+    arcs = [build_circle_patch_arc(cx, cy, r, patch)] if patch else []
 
     return {
         "lines": [],
@@ -561,6 +570,7 @@ def _diameter_leader(ann, seg, view):
             (text_line_start, text_line_end),   # 水平文字线
             (bend_pt, edge_pt),                  # 折线引线
         ],
+        "arcs": arcs,
         "arrows": [build_arrow_points(edge_pt, d, False)],
         "texts": [{"pos": (text_x, text_y), "text": text,
                    "angle": 0, "anchor": "start"}],

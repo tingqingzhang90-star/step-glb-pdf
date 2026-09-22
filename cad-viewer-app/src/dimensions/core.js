@@ -17,6 +17,7 @@ import {
   toLineSeg,
   toCircle,
   isParallel,
+  arcPatchRange,
   closestPointOnLine,
   lineBasis,
   offsetPoint,
@@ -624,14 +625,30 @@ export function createDimensionCore(deps, ctx) {
 
   // ===== 直径标注 =====
 
+  /** 生成补齐弧的 SVG path(标注色绘制,从已有弧断点无缝接出至箭头处)
+   *  cx/cy/r 为图纸坐标(已含视图偏移与缩放);range = { start, span, dir } */
+  function buildArcPatch(cx, cy, r, range) {
+    if (!range) return null
+    const a1 = range.start
+    const a2 = range.start + range.dir * range.span
+    const x1 = cx + r * Math.cos(a1)
+    const y1 = cy + r * Math.sin(a1)
+    const x2 = cx + r * Math.cos(a2)
+    const y2 = cy + r * Math.sin(a2)
+    const largeArc = range.span > Math.PI ? 1 : 0
+    const sweep = range.dir === 1 ? 1 : 0
+    return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r.toFixed(2)} ${r.toFixed(2)} 0 ${largeArc} ${sweep} ${x2.toFixed(2)} ${y2.toFixed(2)}`
+  }
+
   function buildDiameterGeometry(edgeRef, angle = -Math.PI / 4, leaderLength = 30, textSlide = 0) {
     if (!edgeRef) return null
     const { seg, view } = edgeRef
     const circ = toCircle(seg)
     if (!circ || !view) return null
-    const cx = view.x + circ.cx * getViewDisplayScale(view)
-    const cy = view.y + circ.cy * getViewDisplayScale(view)
-    const r = circ.r * getViewDisplayScale(view)
+    const scale = getViewDisplayScale(view)
+    const cx = view.x + circ.cx * scale
+    const cy = view.y + circ.cy * scale
+    const r = circ.r * scale
     const dir = { x: Math.cos(angle), y: Math.sin(angle) }
     // 直径线贯穿整个圆:起点 = 对侧圆周,终点 = 圆心正方向 r+leaderLength 处
     // 这样 leader 长度 = 2r + leaderLength,贯穿整个圆,箭头仍画在正侧圆周
@@ -657,6 +674,9 @@ export function createDimensionCore(deps, ctx) {
     const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
     // 让文字始终处于可读角度(不倒立)
     const textAngle = Math.abs(angle) > Math.PI / 2 ? angle + Math.PI : angle
+    // 引用边线是部分弧且箭头接触角处缺失时,从弧断点无缝补一段圆弧
+    // (只在箭头侧补;拖动时随 leaderAngle 实时跟随)
+    const arcPatch = buildArcPatch(cx, cy, r, arcPatchRange(seg, circ, angle))
     return {
       type: 'diameter',
       refs: [edgeRefData(edgeRef)],
@@ -665,6 +685,7 @@ export function createDimensionCore(deps, ctx) {
       textAngle,
       leaderStart,
       leaderEnd,
+      arcPatch,
       arrow: buildArrowPoints(edgePt, dir, false),
       textPos,
       text: `ø${formatMm(mmVal)}`
@@ -752,12 +773,16 @@ export function createDimensionCore(deps, ctx) {
     let t = (t1 > 0 ? t1 : (t2 > 0 ? t2 : 0))
     if (t < 1) t = 1  // 至少走 1px,避免箭头压到折点
     const edgePt = { x: bendPt.x + dir.x * t, y: bendPt.y + dir.y * t }
+    // 箭头接触角处若部分弧缺失,补一小段圆弧(拖动文字/引线时随接触点跟随)
+    const contactAngle = Math.atan2(edgePt.y - cy, edgePt.x - cx)
+    const arcPatch = buildArcPatch(cx, cy, r, arcPatchRange(seg, circ, contactAngle))
 
     return {
       type: 'diameter',
       diameterMode: 'leader',
       refs: [edgeRefData(edgeRef)],
       leaderAngle,
+      arcPatch,
       // 水平文字线段
       textLineStart,
       textLineEnd,
