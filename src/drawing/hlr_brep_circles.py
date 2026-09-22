@@ -167,35 +167,83 @@ def _make_entity(cx, cy, r, a0, a1, full):
                      "fit_rms": 0.0}}
 
 
-def build_view_circles(shape, ax2, segs, cache_key, view_key):
+# 按 (view_key, deflection) 缓存 build_view_circles 的结果:同一视图的弦段集合
+# 在给定网格精度下是确定的, 重复请求(Web 同视图再生成)直接命中, 不再重跑
+# O(圆数 × 弦段数) 的扫描。视图间不共享, 故不影响正确性。
+_BUILDCACHE = {}
+
+
+def build_view_circles(shape, ax2, segs, cache_key, view_key, deflection=0.5):
     """从 B-Rep 圆边直接生成原生圆/弧实体(不经弦段拟合)。
 
     Args:
         segs: PolyAlgo 可见/隐藏弦段(type=line),用于确定每个圆的可见角度范围。
+        deflection: 网格精度(mm), 影响 segs 筛选, 纳入缓存键避免串味。
 
     Returns:
         (entities, circles):entities 为生成的圆/弧实体;circles 为该视图全部
         B-Rep 投影圆 [(cx,cy,r,u1,u2,full)],供调用方去重与剔除伪圆。
     """
+    ckey = (view_key, round(deflection, 3))
+    hit = _BUILDCACHE.get(ckey)
+    if hit is not None:
+        return hit
     circles = view_circles(shape, ax2, cache_key, view_key)
     chords = [s for s in (segs or []) if s.get("type") == "line"]
     if not chords or not circles:
-        return [], circles
+        res = ([], circles)
+        _BUILDCACHE[ckey] = res
+        return res
+
+    # 弦按中点分桶到均匀网格: 每个圆只扫描中点落在自身 (r+tol) 邻域格子内的弦段,
+    # 把 O(圆数 × 弦段数) 降到 ~O(弦段数)(大量小圆/孔的情形收益最大)。
+    # 正确性: 若某弦两端都落在圆 (r±tol) 内, 其中点(凸组合)也必在 (r+tol) 内,
+    # 故不会漏判; 精确的平方距离判定仍对每个候选弦执行, 不会误判。
+    GRID = 10.0        # 网格边长(mm)
+    GRID_CAP = 80.0    # 圆过大(少量大圆)时退化为全扫描, 避免扫过多格子
+    grid = {}
+    for i, s in enumerate(chords):
+        mx = (s["x1"] + s["x2"]) * 0.5
+        my = (s["y1"] + s["y2"]) * 0.5
+        grid.setdefault((int(math.floor(mx / GRID)),
+                         int(math.floor(my / GRID))), []).append(i)
 
     entities = []
     for (cx, cy, r, u1, u2, full) in circles:
         tol = max(_ON_CIRCLE_TOL, 0.005 * r)
+        # 用平方距离做快速剔除, 避免对每条弦两端都调用耗时的 math.hypot(sqrt);
+        # |d - r| <= tol  ⟺  (r-tol)^2 <= d^2 <= (r+tol)^2, 与原始判定等价
+        lo = (r - tol) * (r - tol)
+        hi = (r + tol) * (r + tol)
+        reach = r + tol
+        # 仅取中点落在圆 (r+tol) 邻域格子内的候选弦; 超大圆直接全扫
+        if reach > GRID_CAP:
+            cand = range(len(chords))
+        else:
+            cand = []
+            h = int(math.ceil(reach / GRID))
+            cgx = int(math.floor(cx / GRID))
+            cgy = int(math.floor(cy / GRID))
+            for gx in range(cgx - h, cgx + h + 1):
+                for gy in range(cgy - h, cgy + h + 1):
+                    col = grid.get((gx, gy))
+                    if col:
+                        cand.extend(col)
         angs = []
         n_chord = 0
-        for s in chords:
-            d1 = abs(math.hypot(s["x1"] - cx, s["y1"] - cy) - r)
-            d2 = abs(math.hypot(s["x2"] - cx, s["y2"] - cy) - r)
+        for i in cand:
+            s = chords[i]
+            dx1 = s["x1"] - cx
+            dy1 = s["y1"] - cy
+            dx2 = s["x2"] - cx
+            dy2 = s["y2"] - cy
             # 只认"真弦":两端都落在圆上的弦段。单端点判定会把孔壁等巧合点
             # 算进来(螺栓分布圆半径=孔心距±孔半径),点亮不存在的圆
-            if d1 <= tol and d2 <= tol:
+            if (lo <= dx1 * dx1 + dy1 * dy1 <= hi) and \
+               (lo <= dx2 * dx2 + dy2 * dy2 <= hi):
                 n_chord += 1
-                angs.append(math.atan2(s["y1"] - cy, s["x1"] - cx))
-                angs.append(math.atan2(s["y2"] - cy, s["x2"] - cx))
+                angs.append(math.atan2(dy1, dx1))
+                angs.append(math.atan2(dy2, dx2))
         if n_chord < _MIN_HITS:
             continue
         for a0, a1 in _angle_ranges(angs):
@@ -204,7 +252,9 @@ def build_view_circles(shape, ax2, segs, cache_key, view_key):
             ent = _make_entity(cx, cy, r, a0, a1, full)
             if ent:
                 entities.append(ent)
-    return entities, circles
+    res = (entities, circles)
+    _BUILDCACHE[ckey] = res
+    return res
 
 
 def _matches(seg, circles, center_tol):

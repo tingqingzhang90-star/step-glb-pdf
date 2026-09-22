@@ -134,14 +134,17 @@ def _fit_one(segments, deflection, max_radius):
         straight_tol=max(0.2, deflection))
 
 
-def _circle_pass(shape, ax2, raw_segs, fitted, model_path, view_name):
+def _circle_pass(shape, ax2, raw_segs, fitted, model_path, view_name,
+                 deflection=0.5):
     """用 B-Rep 圆边重建圆/弧语义:补出原生圆,剔除拟合出的伪圆。
 
     fitted 里与 B-Rep 圆边对得上的实体会被原生圆/弧取代(避免同一圆出现两次),
     对不上又没有 B-Rep 圆边支撑的"伪圆"则剥掉圆语义降级为普通折线。
+    deflection 透传给 build_view_circles 用于缓存键, 保证不同网格精度不串味。
     """
     entities, circles = build_view_circles(shape, ax2, raw_segs,
-                                           model_path, (model_path, view_name))
+                                           model_path, (model_path, view_name),
+                                           deflection)
     if not circles:
         return fitted
     kept = drop_duplicate_fitted(fitted, circles)
@@ -170,9 +173,10 @@ def project_view_subset(model_path, view_names, deflection=0.5,
               if (do_fit and show_hidden) else hid)
         if do_fit:
             ax2 = _build_ax2(cfg["dir"], cfg["up"])
-            fv = _circle_pass(shape, ax2, vis, fv, model_path, v)
+            fv = _circle_pass(shape, ax2, vis, fv, model_path, v, deflection)
             if show_hidden:
-                fh = _circle_pass(shape, ax2, hid, fh, model_path, v)
+                fh = _circle_pass(shape, ax2, hid, fh, model_path, v,
+                                  deflection)
         out[v] = {
             "visible": fv,
             "hidden": fh,
