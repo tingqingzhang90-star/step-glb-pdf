@@ -10,6 +10,7 @@ import math
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset_point,
@@ -18,10 +19,11 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           farthest_endpoint_from, build_arc_points,
                           build_linear_arrows, build_arrow_points,
                           extend_linear_line, arc_patch_range,
-                          build_circle_patch_arc,
+                          build_circle_patch_arc, estimate_text_width,
                           format_mm, format_deg)
 from drawing.dim.dim_style import (dim_ext_overshoot_mm, dim_text_gap_mm, dim_label_gap_mm,
-                                   dim_angle_text_gap_px, dim_angle_arc_ext_px)
+                                   dim_angle_text_gap_px, dim_angle_arc_ext_px,
+                                   dim_text_font_mm)
 
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
@@ -531,16 +533,28 @@ def _diameter_leader(ann, seg, view):
         angle = -math.pi / 4
     d = (math.cos(angle), math.sin(angle))
 
-    # 直径值与文字
+    # 直径值与文字:支持自定义全文(如 "12x ø13.5 贯穿"),
+    # 水平搁置线(下划线)长度按全文估算,与前端 buildDiameterLeaderGeometry 同式
     radius = (circ.get("meta") or {}).get("radius")
     mm_val = radius * 2 if radius else circ["r"] * 2 / (view["k"] or 1.0)
-    text = f"ø{format_mm(mm_val)}"
+    text = ann.get("customText") or f"ø{format_mm(mm_val)}"
 
-    # 水平文字线(文字下方 4px)
-    text_gap = 4
+    # 水平文字线:长度按 PDF 实测文字宽度(pdfmetrics.stringWidth)计算。
+    # 图纸坐标 1:1 当 mm 用,而 PDF 字号 = font_px×PX2MM(pt),实际字高只有
+    # ~1.7 图纸单位;前端估宽(len×7)按 18 单位字号校准,直接当 mm 会让
+    # 下划线比实际文字宽 3~4 倍、间距也大近一倍(文字悬空、线甩出老远)。
+    # 间距/余量/肩部按字号等比(与前端 4/8/10 ÷ 字号18 同比例),两端视觉一致。
+    font_mm = dim_text_font_mm()
+    pt2u = 25.4 / 72.0          # 1pt = 0.3528 图纸单位(坐标 1 单位 = 1mm)
+    em = font_mm * pt2u         # 字号换算到图纸单位
+    try:
+        _ensure_font()
+        text_w = stringWidth(text, _CN_FONT, font_mm) * pt2u
+    except Exception:           # 字体未注册等异常时退回估宽
+        text_w = estimate_text_width(text)
+    text_gap = em * (4.0 / 18.0)
     text_line_start = (text_x, text_y + text_gap)
-    # 估算文字宽度(后端用固定估算,与前端 estimateTextWidth 对齐)
-    text_w = len(text) * 7 + 8 + 10  # 预留肩部
+    text_w += em * (4.0 / 18.0)   # 小余量,搁置线略长于文字(同前端)
     text_line_end = (text_x + text_w, text_y + text_gap)
 
     # 折点 = 水平线右端
@@ -571,10 +585,12 @@ def _diameter_leader(ann, seg, view):
         "lines": [],
         "dim_lines": [
             (text_line_start, text_line_end),   # 水平文字线
-            (bend_pt, edge_pt),                  # 折线引线
+            (bend_pt, (cx + d[0] * r, cy + d[1] * r)),  # 折线引线(贯穿整条直径到对侧圆周)
         ],
         "arcs": arcs,
-        "arrows": [build_arrow_points(edge_pt, d, False)],
+        # 箭头:尖端触圆周、沿引线方向(d=折点→圆心)指向圆内,箭身在引线外侧,
+        # 与前端 buildArrowPoints(edgePt, dir, true) 一致
+        "arrows": [build_arrow_points(edge_pt, d, True)],
         "texts": [{"pos": (text_x, text_y), "text": text,
                    "angle": 0, "anchor": "start"}],
         "center_marks": [], "text": text,

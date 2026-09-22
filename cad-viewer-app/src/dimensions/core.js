@@ -32,7 +32,7 @@ import {
   linearTextPos,
   DIM_TEXT_GAP
 } from './geometry.js'
-import { buildArrowPoints, buildLinearArrows, extendLinearLine } from './arrow.js'
+import { buildArrowPoints, buildLinearArrows, extendLinearLine, estimateTextWidth } from './arrow.js'
 import {
   buildMotorEnvelopeGeometry,
   getMotorEnvelopeOffsetFromMouse
@@ -728,10 +728,49 @@ export function createDimensionCore(deps, ctx) {
   // 文字在水平线上,引线从文字末端折向圆周,箭头指向圆。
   // 常用于孔位标注如 "6x Ø22 贯穿"。
 
-  const LEADER_SHOULDER = 10   // 水平肩部长度(px)
   const LEADER_TEXT_GAP = 4    // 文字与水平线垂直间距(px)
 
-  function buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle = -Math.PI / 4) {
+  // 实测文字宽度(sheet 单位):.dim-text 字号 = dim.text.font_px(SVG 单位),
+  // canvas measureText 与 SVG 同字体同字号,比按字符数估宽(len*7)准确
+  // (自定义全文含中文/数字混排时估宽偏差可达 30%+,下划线长度会失真)
+  let _textMeasureCtx = null
+  function measureTextWidth(text) {
+    const t = String(text || '')
+    try {
+      if (!_textMeasureCtx) {
+        _textMeasureCtx = document.createElement('canvas').getContext('2d')
+      }
+      // SVG 文字渲染字号 = font_px 折成 mm 用户单位(见 useStyleConfig),
+      // 这里必须同字号测量,否则量出的字宽被放大 ~3.8 倍、搁置线比文字长一大截
+      const fontPx = config.dim.text.font_px * (config._px_to_mm_at_96dpi || 1)
+      _textMeasureCtx.font = `${fontPx}px 'Microsoft YaHei', sans-serif`
+      const w = _textMeasureCtx.measureText(t).width
+      if (w > 0) return w
+    } catch (e) { /* 无 DOM 环境退回估宽 */ }
+    return estimateTextWidth(t)
+  }
+
+  // 图纸坐标 ↔ 视图局部坐标(局部坐标随视图拖动/缩放平移,引线直径的
+  // textLeft 存局部坐标才能跟着圆走;与 getSheetPoint 同一换算)
+  function sheetToLocal(view, p) {
+    const ds = getViewDisplayScale(view)
+    return { x: (p.x - view.x) / ds, y: (p.y - view.y) / ds }
+  }
+
+  function localToSheet(view, p) {
+    const ds = getViewDisplayScale(view)
+    return { x: view.x + p.x * ds, y: view.y + p.y * ds }
+  }
+
+  /** 引线直径 textLeft → 图纸坐标(兼容旧数据的绝对坐标存储) */
+  function diameterTextLeftSheet(dim) {
+    if (!dim || !dim.textLeft) return null
+    const ref = resolveDimRef(dim.refs?.[0])
+    if (!ref || !ref.view) return null
+    return dim.textLeftLocal ? localToSheet(ref.view, dim.textLeft) : { ...dim.textLeft }
+  }
+
+  function buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle = -Math.PI / 4, customText = '') {
     if (!edgeRef) return null
     const { seg, view } = edgeRef
     const circ = toCircle(seg)
@@ -745,14 +784,16 @@ export function createDimensionCore(deps, ctx) {
     const textX = textLeft.x
     const textY = textLeft.y
 
-    // 估算文字宽度,确定肩部起点
+    // 估算文字宽度,确定肩部起点。
+    // 文字支持自定义全文(如 "12x ø13.5 贯穿"):前缀计数 + 直径值 + 后缀说明,
+    // 下划线(水平搁置线)长度必须按全文估算,否则线比文字短
     const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
-    const label = `ø${formatMm(mmVal)}`
-    const textW = estimateTextWidth(label) + 8   // 预留余量
+    const text = (customText && customText.trim()) ? customText : `ø${formatMm(mmVal)}`
+    const textW = measureTextWidth(text) + 4   // 小余量,搁置线略长于文字
 
-    // 水平线: 文字下方
+    // 水平线: 文字下方,长度≈文字宽+小余量(与文字长度基本一致)
     const textLineStart = { x: textX, y: textY + LEADER_TEXT_GAP }
-    const textLineEnd = { x: textX + textW + LEADER_SHOULDER, y: textY + LEADER_TEXT_GAP }
+    const textLineEnd = { x: textX + textW, y: textY + LEADER_TEXT_GAP }
 
     // 肩部终点(折点): 从这里沿 leaderAngle 方向向圆引线
     const bendPt = { x: textLineEnd.x, y: textLineEnd.y }
@@ -787,35 +828,50 @@ export function createDimensionCore(deps, ctx) {
       // 水平文字线段
       textLineStart,
       textLineEnd,
-      // 折线引线: 折点 → 圆周
+      // 折线引线: 折点 → 对侧圆周,贯穿整条直径(穿过圆心,到对侧圆周为止)
       leaderBend: bendPt,
-      leaderEnd: edgePt,
-      // 箭头在圆周,方向沿 dir 向外
-      arrow: buildArrowPoints(edgePt, dir, false),
+      leaderEnd: { x: cx + dir.x * r, y: cy + dir.y * r },
+      // 箭头:尖端触圆周、沿引线方向(dir=折点→圆心)指向圆内,箭身在引线外侧
+      // (SW 引线直径画法)。outward=False 会画成尖端朝圆外、箭身扎进孔里
+      arrow: buildArrowPoints(edgePt, dir, true),
       // 文字:水平,左对齐
       textPos: { x: textX, y: textY },
       textAngle: 0,
-      text: label
+      text
     }
   }
 
-  function buildDiameterLeaderPreview(edgeRef, mousePos) {
-    if (!edgeRef || !mousePos) return null
-    // 引线角度:从圆心到鼠标方向的反方向(让引线从文字折向圆)
+  /** 引线瞄准角:从"折点(文字线右端)→圆心"的方向。
+   *  引线段沿该方向作射线必与圆相交(穿过圆心),预览/放置/拖拽都不会落空。
+   *  之前用"鼠标→圆心"近似,折点偏离鼠标几十 px,小孔下射线与圆无交点
+   *  (buildDiameterLeaderGeometry disc<0 返回 null)→ 无预览、点击放不下。 */
+  function diameterLeaderAim(edgeRef, textLeft, customText = '') {
+    if (!edgeRef || !textLeft) return null
     const { seg, view } = edgeRef
     const circ = toCircle(seg)
     if (!circ || !view) return null
     const cx = view.x + circ.cx * getViewDisplayScale(view)
     const cy = view.y + circ.cy * getViewDisplayScale(view)
-    // 文字左端放在鼠标位置左侧一点,引线向右下折向圆
+    const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
+    const text = (customText && customText.trim()) ? customText : `ø${formatMm(mmVal)}`
+    const bendX = textLeft.x + measureTextWidth(text) + 4
+    const bendY = textLeft.y + LEADER_TEXT_GAP
+    return Math.atan2(cy - bendY, cx - bendX)
+  }
+
+  function buildDiameterLeaderPreview(edgeRef, mousePos) {
+    if (!edgeRef || !mousePos) return null
+    // 文字左端放在鼠标位置左侧一点,引线从折点折向圆
     const textLeft = { x: mousePos.x - 60, y: mousePos.y }
-    // 引线角度:指向圆的大致方向
-    const angle = Math.atan2(cy - mousePos.y, cx - mousePos.x)
+    const angle = diameterLeaderAim(edgeRef, textLeft)
+    if (angle == null) return null
     return buildDiameterLeaderGeometry(edgeRef, textLeft, angle)
   }
 
   function placeDiameterLeaderDim(edgeRef, textLeft, leaderAngle) {
-    const geometry = buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle)
+    // 放置时以折点→圆心的瞄准角为准(即使预览缺失也能正确落位)
+    const angle = diameterLeaderAim(edgeRef, textLeft) ?? leaderAngle
+    const geometry = buildDiameterLeaderGeometry(edgeRef, textLeft, angle)
     if (!geometry) return
     const id = nextId()
     pushDim({
@@ -824,7 +880,9 @@ export function createDimensionCore(deps, ctx) {
       diameterMode: 'leader',
       refs: [edgeRefData(edgeRef)],
       leaderAngle: geometry.leaderAngle,
-      textLeft: geometry.textPos,
+      // textLeft 存视图局部坐标:视图拖动/缩放时文字跟着圆走(与 refs 同坐标系)
+      textLeft: sheetToLocal(edgeRef.view, geometry.textPos),
+      textLeftLocal: true,
       color: ctx.dimensionColor.value,
       text: geometry.text
     })
@@ -1070,7 +1128,13 @@ export function createDimensionCore(deps, ctx) {
         : buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
     } else if (dim.type === 'diameter') {
       if (dim.diameterMode === 'leader' && dim.textLeft) {
-        geometry = buildDiameterLeaderGeometry(resolveDimRef(dim.refs[0]), dim.textLeft, dim.leaderAngle)
+        const ref = resolveDimRef(dim.refs[0])
+        // textLeftLocal:局部坐标(新版);缺省视为旧数据的图纸绝对坐标。
+        // 视图缩放后折点→圆心的角度会变,按换算后的折点重算瞄准角
+        const tl = dim.textLeftLocal ? localToSheet(ref.view, dim.textLeft) : dim.textLeft
+        const aim = diameterLeaderAim(ref, tl, dim.customText || '')
+        geometry = buildDiameterLeaderGeometry(ref, tl, aim ?? dim.leaderAngle,
+          dim.customText || '')
       } else {
         geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength,
           dim.textSlide || 0)
@@ -1124,7 +1188,7 @@ export function createDimensionCore(deps, ctx) {
 
   // ===== 拖拽 =====
 
-  function updateDimDrag(dim, mousePos) {
+  function updateDimDrag(dim, mousePos, drag = null) {
     if (!dim || !mousePos) return
 
     // 电机包络单独处理:只依赖视图,resolveDimRef 会因边线不存在失败
@@ -1160,10 +1224,17 @@ export function createDimensionCore(deps, ctx) {
       const circ = toCircle(ref.seg)
       if (!circ) return
       if (dim.diameterMode === 'leader') {
-        // 引线模式:拖拽更新文字位置和引线角度
-        dim.textLeft = { x: mousePos.x - 60, y: mousePos.y }
-        const center = getSheetPoint(ref.view, circ.cx, circ.cy)
-        dim.leaderAngle = Math.atan2(center.y - mousePos.y, center.x - mousePos.x)
+        // 引线模式:拖拽更新文字位置(存局部坐标),引线角随新折点重算(折点→圆心)。
+        // 有抓取快照时按偏移跟手,否则退回"文字左端=鼠标左侧60px"的落位语义
+        const s0 = (drag && drag.startTextLeft)
+          || { x: mousePos.x - 60, y: mousePos.y }
+        const dx = drag && drag.startMouse ? mousePos.x - drag.startMouse.x : 0
+        const dy = drag && drag.startMouse ? mousePos.y - drag.startMouse.y : 0
+        const tlSheet = { x: s0.x + dx, y: s0.y + dy }
+        dim.textLeft = sheetToLocal(ref.view, tlSheet)
+        dim.textLeftLocal = true
+        const aim = diameterLeaderAim(ref, tlSheet, dim.customText || '')
+        if (aim != null) dim.leaderAngle = aim
       } else {
         const center = getSheetPoint(ref.view, circ.cx, circ.cy)
         const r = circ.r * getViewDisplayScale(ref.view)
@@ -1196,6 +1267,23 @@ export function createDimensionCore(deps, ctx) {
    *    若直接对齐鼠标点会瞬移,故用增量;可拖范围覆盖整条直径线两端略外。*/
   function updateDimTextDrag(dim, mousePos, drag) {
     if (!dim || !mousePos) return
+
+    if (dim.type === 'diameter' && dim.diameterMode === 'leader') {
+      const ref = resolveDimRef(dim.refs?.[0])
+      if (!ref || !ref.view) return
+      // 抓取点跟随:按抓取时"鼠标→文字左端"的偏移整体平移,文字完全跟手;
+      // 引线角随新折点(文字线右端)→圆心重算
+      const s0 = (drag && drag.startTextLeft) || diameterTextLeftSheet(dim)
+      if (!s0) return
+      const dx = drag && drag.startMouse ? mousePos.x - drag.startMouse.x : 0
+      const dy = drag && drag.startMouse ? mousePos.y - drag.startMouse.y : 0
+      const tlSheet = { x: s0.x + dx, y: s0.y + dy }
+      dim.textLeft = sheetToLocal(ref.view, tlSheet)
+      dim.textLeftLocal = true
+      const aim = diameterLeaderAim(ref, tlSheet, dim.customText || '')
+      if (aim != null) dim.leaderAngle = aim
+      return
+    }
 
     if (dim.type === 'diameter' && dim.diameterMode !== 'leader') {
       const ref = resolveDimRef(dim.refs?.[0])
@@ -1298,6 +1386,7 @@ export function createDimensionCore(deps, ctx) {
     placeCenterMarkAtGroupCenter,
     placeDiameterDim,
     placeDiameterLeaderDim,
+    buildDiameterLeaderPreview,
     placeAngleDim,
     placeAnglePointsDim,
     // 渲染与拖拽
@@ -1305,6 +1394,7 @@ export function createDimensionCore(deps, ctx) {
     updateDimDrag,
     updateDimTextDrag,
     updateDimExtensionDrag,
+    diameterTextLeftSheet,
     previewBuilders
   }
 }

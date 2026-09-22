@@ -56,6 +56,16 @@ def dim_label_gap_mm():
     return font_px * PX2MM * factor
 
 
+def dim_text_font_mm():
+    """标注文字的 PDF 字号(pt):font_px 按 96dpi 折算(mm)。
+    reportlab setFont 的 size 以 pt 计,画布 scale(mm,mm) 后实际字高
+    = size × 25.4/72 图纸单位。引线直径下划线按该字号实测文字宽度用。"""
+    try:
+        return float(CFG["dim"]["text"]["font_px"]) * PX2MM
+    except (KeyError, TypeError, ValueError):
+        return 18.0 * PX2MM
+
+
 def dim_arrow_len_px():
     """箭头长度(图纸单位,与前端 arrow.js 共用同一份 json)"""
     return _dim("arrow", "len_px", "arrow_len_px")

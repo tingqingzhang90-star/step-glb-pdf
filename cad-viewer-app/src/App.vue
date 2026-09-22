@@ -426,7 +426,14 @@
                     </template>
                   </template>
                   <template v-else-if="dim.type === 'diameter'">
-                    <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <template v-if="dim.diameterMode === 'leader'">
+                      <!-- 引线模式:水平文字线 + 折线引线铺命中带 -->
+                      <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
+                    <template v-else>
+                      <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
                   </template>
                   <template v-else-if="dim.type === 'angle'">
                     <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
@@ -466,7 +473,14 @@
                     </template>
                   </template>
                   <template v-else-if="dim.type === 'diameter'">
-                    <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    <template v-if="dim.diameterMode === 'leader'">
+                      <!-- 引线模式:水平文字线 + 折线引线铺命中带 -->
+                      <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
+                    <template v-else>
+                      <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
                   </template>
                   <template v-else-if="dim.type === 'angle'">
                     <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
@@ -583,7 +597,7 @@
                     <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
                     <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
                     <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
-                    <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" text-anchor="start" dominant-baseline="auto">{{ dim.text }}</text>
+                    <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" style="cursor: move" text-anchor="start" dominant-baseline="auto" @mousedown.stop="onDimTextMouseDown($event, dim)">{{ dim.text }}</text>
                   </template>
                   <template v-else>
                     <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />

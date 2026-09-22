@@ -520,7 +520,15 @@ export function createDimEngine(deps) {
     if (!mousePos) return
     selectDim(dim.id)
     dragSnapshotTaken = false
-    dimDragging.value = { id: dim.id, type: dim.type, startMouse: mousePos, startOffset: dim.offset }
+    dimDragging.value = {
+      id: dim.id,
+      type: dim.type,
+      startMouse: mousePos,
+      startOffset: dim.offset,
+      // 引线直径:记录抓取时文字左端(图纸坐标),拖动按偏移跟手
+      startTextLeft: (dim.type === 'diameter' && dim.diameterMode === 'leader')
+        ? core.diameterTextLeftSheet(dim) : undefined
+    }
   }
 
   /** 文字标签 mousedown:开始拖动文字(只改 textSlide,不动尺寸线)
@@ -536,7 +544,10 @@ export function createDimEngine(deps) {
       type: dim.type,
       part: 'text',
       startMouse: mousePos,
-      startSlide: dim.textSlide || 0
+      startSlide: dim.textSlide || 0,
+      // 引线直径:记录抓取时文字左端(图纸坐标),拖动按偏移跟手
+      startTextLeft: (dim.type === 'diameter' && dim.diameterMode === 'leader')
+        ? core.diameterTextLeftSheet(dim) : undefined
     }
   }
 
@@ -615,7 +626,7 @@ export function createDimEngine(deps) {
     } else if (drag.part === 'extension') {
       core.updateDimExtensionDrag(dim, mousePos, drag.endSide)
     } else {
-      core.updateDimDrag(dim, mousePos)
+      core.updateDimDrag(dim, mousePos, drag)
     }
   }
 
