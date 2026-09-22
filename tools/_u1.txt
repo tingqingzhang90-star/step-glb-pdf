@@ -1,0 +1,124 @@
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+系列=3: 160,190,250
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+系列=3: 160,190,250
+======================================================================
+left,dimetric_right
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+======================================================================
+系列=3: 160,190,250
+======================================================================
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+190      190-E-H2K1-L100-5.5KW电机        配对=201  漏圆=7   多余=274 最大|差|=1.000  front 漏0多2 | back 漏5多74 | left 漏0多10 | right 漏0多8
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+250      250-E-H2K1-L100                配对=206  漏圆=41  多余=333 最大|差|=0.845  front 漏0多15 | back 漏1多23 | left 漏12多24 | right 漏12多28
+======================================================================
+汇总: 配对总数=407  漏圆=48  多余圆=607  全局最大|差|=1.000
+======================================================================
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_系列=3: 160,190,250
+======================================================================
+系列=3: 160,190,250
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+系列=3: 160,190,250
+===============================================
+======================================================================
+系列=3: 160,190,250
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+left,dimetric_right
+系列=3: 160,190,250
+======================================================================
+视图=10: front,back,l======================================================================
+======================================================================
+系列=3: 160,190,250
+======================================================================
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+======================================================================
+系列=3: 160,190,250
+视图=10: front,back,left,right,top,bottom,left_top,isometric,dimetric_left,dimetric_right
+======================================================================
+系列=3: 160,190,250
+======================================================================
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
+160      160-E-H2K1-L100-4.4kw电机        失败: OpenCASCADE Error [Standard_OutOfRange]: NCollection_Array1::ChangeValue (in HLRBRep_PolyAlgo::Update)
