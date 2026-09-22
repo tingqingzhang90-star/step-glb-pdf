@@ -217,8 +217,37 @@ def _deviation(pts, p1, p2):
     return worst
 
 
-def _merge_chain(chain, straight_tol):
-    """把未拟合为圆的链合并成一个实体，保留几何与匹配所需的 mm 元数据。
+CORNER_SPLIT_ANGLE = math.radians(25.0)  # 相邻段方向差超过该值视为拐角,链条在此断开
+
+
+def _split_chain_at_corners(chain):
+    """在拐角处把链拆成若干子链。
+
+    poly 模式把共端点的离散线段连成链,转角相连的多条模型直线边(如矩形
+    轮廓)会被串进同一条链;若合并成一条 polyline,前端 toLineSeg 只取
+    首末点且偏差超阈值判为曲线,中间的直线段将无法选中标注。这里按相邻
+    段方向差检测拐角把链拆开,使每条直线边保持独立实体;光滑曲线的弦链
+    方向渐变(相邻弦夹角小于该阈值),不受影响。
+    """
+    if len(chain) < 2:
+        return [chain]
+    subs = []
+    sub = [chain[0]]
+    for prev, ln in zip(chain, chain[1:]):
+        a1 = math.atan2(prev["y2"] - prev["y1"], prev["x2"] - prev["x1"])
+        a2 = math.atan2(ln["y2"] - ln["y1"], ln["x2"] - ln["x1"])
+        d = abs((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)
+        if d > CORNER_SPLIT_ANGLE:
+            subs.append(sub)
+            sub = [ln]
+        else:
+            sub.append(ln)
+    subs.append(sub)
+    return subs
+
+
+def _merge_single_chain(chain, straight_tol):
+    """把单个(无拐角的)链合并成一个实体，保留几何与匹配所需的 mm 元数据。
 
     近似直线 → type=line（补 orientation/midpoint/mm_coords，供包围盒角色与
     尺寸重绑识别）；弯曲链(样条等) → type=polyline。离散弦本身没有这些
@@ -257,6 +286,16 @@ def _merge_chain(chain, straight_tol):
                  "mm_coords": [round(p1[0], 6), round(p1[1], 6),
                                round(p2[0], 6), round(p2[1], 6)]},
     }
+
+
+def _merge_chain(chain, straight_tol):
+    """先按拐角拆链,再逐子链合并;返回实体列表。
+
+    拆分保证转角相连的直线边各自成为独立 line(可选中标注),
+    光滑曲线弦链保持一条 polyline(渲染/弧拟合语义不变)。
+    """
+    return [_merge_single_chain(sub, straight_tol)
+            for sub in _split_chain_at_corners(chain)]
 
 
 def _make_circle(cx, cy, r, rms):
@@ -381,19 +420,22 @@ def fit_circular_features(segments, point_tol=0.5, chord_tol=1.0,
     out = list(others)
     for ch in chains:
         if len(ch) < min_points:
-            out.append(_merge_chain(ch, straight_tol) if len(ch) > 1 else ch[0])
+            if len(ch) > 1:
+                out.extend(_merge_chain(ch, straight_tol))
+            else:
+                out.append(ch[0])
             continue
         pts = _chain_points(ch)
         res = _fit_circle_robust(pts)
         if res is None:
-            out.append(_merge_chain(ch, straight_tol))
+            out.extend(_merge_chain(ch, straight_tol))
             continue
         cx, cy, r, rms, inl = res
         if r < 0.5 or r > max_radius or rms > chord_tol:
-            out.append(_merge_chain(ch, straight_tol))
+            out.extend(_merge_chain(ch, straight_tol))
             continue
         if sagitta_tol is not None and _points_sagitta(pts, cx, cy, r) > sagitta_tol:
-            out.append(_merge_chain(ch, straight_tol))
+            out.extend(_merge_chain(ch, straight_tol))
             continue
         span = _angle_span(pts, cx, cy)
         closed = math.hypot(pts[0][0] - pts[-1][0], pts[0][1] - pts[-1][1]) <= close_tol

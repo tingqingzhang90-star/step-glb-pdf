@@ -47,10 +47,12 @@ def test_small_circle_with_few_chords_is_recovered():
 
 def test_four_chord_loop_stays_polygon():
     # 4 条弦的闭环几何上就是正方形(矢高 0.293r 远超三角化容差), 不应报成圆;
-    # 这是精度与召回的必要取舍: 只按残差判定会把所有棱柱面都变成圆
+    # 这是精度与召回的必要取舍: 只按残差判定会把所有棱柱面都变成圆。
+    # 拐角拆分后每条边独立成 line(可标注), 整体仍是 4 条直线段, 几何不丢
     out = fit(poly_chain(arc_pts(100, 50, 5, 4)))
     assert not [s for s in out if s["type"] == "circle"], out
-    assert sum(1 for s in out if s["type"] in ("line", "polyline")) == 1
+    lines = [s for s in out if s["type"] == "line"]
+    assert len(lines) == 4, out
 
 
 def test_hexagon_is_not_fitted_as_circle():
@@ -77,13 +79,18 @@ def test_long_edge_chords_merge_into_single_line_with_mm_meta():
 
 
 def test_doubling_back_chain_keeps_full_geometry():
-    # 薄片/重叠边会走出"去而复返"的路径: 垂距很小但弧长远大于弦长,
-    # 若塌成一条首尾直线会整段丢线, 故应保留为 polyline
+    # 薄片/重叠边会走出"去而复返"的路径: 在 180° 折返处被拐角拆分,
+    # 但每段线段各自独立为 line, 不丢线(原始 3 段线段端点全部保留)
     pts = [(0.0, 0.0), (0.0, 30.0), (0.0, 0.0), (5.0, 0.0)]
     out = fit(poly_chain(pts))
-    assert len(out) == 1, out
-    assert out[0]["type"] == "polyline"
-    assert len(out[0]["points"]) == len(pts)
+    assert not [s for s in out if s["type"] == "circle"], out
+    lines = [s for s in out if s["type"] == "line"]
+    assert len(lines) == 3, out
+    seg_set = {(round(s["x1"], 6), round(s["y1"], 6),
+                round(s["x2"], 6), round(s["y2"], 6)) for s in lines}
+    assert (0.0, 0.0, 0.0, 30.0) in seg_set
+    assert (0.0, 30.0, 0.0, 0.0) in seg_set
+    assert (0.0, 0.0, 5.0, 0.0) in seg_set
 
 
 def test_spline_arc_keeps_curve_metadata():
