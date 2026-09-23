@@ -198,6 +198,23 @@ def _env_inline():
     return os.environ.get("OCC_POOL_INLINE", "").strip() in ("1", "true", "yes")
 
 
+def _max_tasks_per_child():
+    """每个 worker 跑满 N 个任务即退出重建,释放常驻内存(文档建议 8)。
+
+    默认 None(不回收),保持与原行为一致 —— 持久 worker 常驻、不自动释放;
+    部署/运维可在 .env 设 BUILD_POOL_MAX_TASKS_PER_CHILD=N(>0) 开启周期性回收。
+    仅 Python 3.11+ 生效(max_tasks_per_child 参数);旧版本忽略。
+    注意:Windows spawn 下回收会重新导入 pythonOCC(~2s),故默认关闭,按需开启。
+    """
+    env = os.environ.get("BUILD_POOL_MAX_TASKS_PER_CHILD", "").strip()
+    if not env.isdigit():
+        return None
+    n = int(env)
+    if n <= 0 or sys.version_info < (3, 11):
+        return None
+    return n
+
+
 def _tail(path, n):
     """读取日志文件尾部 n 行(子进程边跑边写,主进程轮询时取最新片段)"""
     if not path or not os.path.isfile(path):
@@ -246,7 +263,8 @@ class TaskPool:
             with self._pool_lock:
                 if self._executor is None:
                     self._executor = ProcessPoolExecutor(
-                        max_workers=self.max_workers)
+                        max_workers=self.max_workers,
+                        max_tasks_per_child=_max_tasks_per_child())
         return self._executor
 
     # ---------- 提交 ----------

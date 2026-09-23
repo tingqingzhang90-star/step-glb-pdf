@@ -163,6 +163,17 @@
         <span v-if="loadingText" class="status-text">{{ loadingText }}</span>
         <span v-if="lastElapsed" class="status-ok">耗时 {{ lastElapsed }}s</span>
         <span v-if="error" class="status-err">{{ error }}</span>
+        <div v-if="sysInfo" class="sys-info"
+             title="OCC 任务池 / BUILD_POOL_WORKERS 详见后端启动 banner&#10;建议上限 = 可用内存 ÷ 0.45GB(单个跑过任务的 worker 常驻 290-480MB)">
+          <div class="sys-info-chip" v-if="sysInfo.memory && sysInfo.memory.available_gb != null">
+            <span class="chip-label">可用内存</span>
+            <span class="chip-value">{{ sysInfo.memory.available_gb }} GB</span>
+          </div>
+          <div class="sys-info-chip" v-if="sysInfo.suggested_max_workers != null">
+            <span class="chip-label">可开 worker</span>
+            <span class="chip-value chip-value-strong">{{ sysInfo.suggested_max_workers }}</span>
+          </div>
+        </div>
       </div>
     </header>
     </template>
@@ -981,6 +992,26 @@ const {
   loadModelList, resetPalette, loadViewPalette
 } = useModelPalette()
 
+// ===== 顶部栏:进程池(OCC)运行环境(系统内存 / worker 数) =====
+// 浏览器拿不到宿主机系统内存,统一由后端 /api/system-info 提供。
+// 每 5s 轮询一次(内存变化慢,够"实时"且省请求)。
+const sysInfo = ref(null)
+let sysInfoTimer = null
+async function refreshSystemInfo() {
+  try {
+    const res = await fetch('/api/system-info')
+    const data = await res.json()
+    if (data && data.ok) sysInfo.value = data
+  } catch (_) {
+    // 后端未启动 / 代理不通时静默隐藏,不报错
+  }
+}
+onMounted(() => {
+  refreshSystemInfo()
+  sysInfoTimer = setInterval(refreshSystemInfo, 5000)
+})
+onUnmounted(() => { if (sysInfoTimer) clearInterval(sysInfoTimer) })
+
 // ===== 标题栏 / BOM:绑定选型配置,支持手动覆盖 =====
 const titleBlockBom = useTitleBlockBom()
 
@@ -1614,6 +1645,44 @@ function onAlgoChange() {
 .status-text { color: #409eff; font-size: 12px; }
 .status-ok { color: #67c23a; font-size: 12px; }
 .status-err { color: #f56c6c; font-size: 12px; }
+
+/* 顶部栏进程池系统信息:竖排渐变芯片,数字发光 */
+.sys-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 1px solid #ebeef5;
+}
+.sys-info-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  white-space: nowrap;
+  background: linear-gradient(135deg, rgba(64, 158, 255, 0.14), rgba(103, 194, 58, 0.12));
+  border: 1px solid rgba(64, 158, 255, 0.28);
+  box-shadow: 0 0 6px rgba(64, 158, 255, 0.15);
+}
+.chip-label { color: #909399; letter-spacing: 0.5px; }
+.chip-value {
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(90deg, #409eff, #67c23a);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.chip-value-strong {
+  animation: chip-pulse 2.4s ease-in-out infinite;
+}
+@keyframes chip-pulse {
+  0%, 100% { filter: drop-shadow(0 0 2px rgba(103, 194, 58, 0.35)); }
+  50%      { filter: drop-shadow(0 0 6px rgba(103, 194, 58, 0.75)); }
+}
 
 .editor-shell {
   display: grid;

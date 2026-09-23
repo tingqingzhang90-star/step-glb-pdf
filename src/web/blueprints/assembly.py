@@ -2,12 +2,13 @@
 """装配体生成面板 + 构建任务 + 文件下载 + 3D 查看器
 
 挂载到 /(面板)、/viewer、/static/o3dv、/download 与 /api/options、
-/api/build、/api/task、/api/tasks、/api/files、/api/build-info。
+/api/build、/api/task、/api/tasks、/api/files、/api/build-info、/api/system-info。
 OCC 计算全部走 web.task_pool 子进程,多用户并行不互相阻塞。
 """
 import glob
 import json
 import os
+import sys
 
 from flask import (Blueprint, jsonify, request, send_file,
                    send_from_directory)
@@ -168,6 +169,96 @@ def api_task(task_id):
 def api_tasks():
     return jsonify({"ok": True, "stats": pool.stats(),
                     "tasks": pool.list_tasks()})
+
+
+def _round_gb(v):
+    """字节 → GiB,保留 1 位;None 原样返回"""
+    return round(v / (1024 ** 3), 1) if v is not None else None
+
+
+def _system_memory_gb():
+    """系统内存(GB):total/available/used/percent。多平台:
+    优先 psutil;否则 Windows 用 ctypes GlobalMemoryStatusEx;
+    Linux 回退 /proc/meminfo;都不可用则字段为 None。"""
+    total = available = used = percent = None
+    try:
+        import psutil  # 可选依赖,有则用最准
+        vm = psutil.virtual_memory()
+        total, available, used = vm.total, vm.available, vm.used
+        percent = vm.percent
+    except Exception:
+        if sys.platform.startswith("win"):
+            # Windows:ctypes 调 kernel32.GlobalMemoryStatusEx(无需装任何依赖)
+            try:
+                import ctypes
+                class _MEMORYSTATUSEX(ctypes.Structure):
+                    _fields_ = [
+                        ("dwLength", ctypes.c_ulong),
+                        ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong),
+                        ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong),
+                        ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong),
+                        ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                    ]
+                st = _MEMORYSTATUSEX()
+                st.dwLength = ctypes.sizeof(st)
+                if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                    total = st.ullTotalPhys
+                    available = st.ullAvailPhys
+                    used = total - available
+                    percent = st.dwMemoryLoad
+            except Exception:
+                pass
+        else:
+            # 回退:Linux /proc/meminfo(MemAvailable 需较新内核)
+            try:
+                info = {}
+                with open("/proc/meminfo") as fh:
+                    for line in fh:
+                        k, _, v = line.partition(":")
+                        if v:
+                            info[k.strip()] = int(v.strip().split()[0]) * 1024
+                if "MemTotal" in info:
+                    total = info["MemTotal"]
+                    available = info.get("MemAvailable",
+                                        info.get("MemFree", 0)
+                                        + info.get("Buffers", 0)
+                                        + info.get("Cached", 0))
+                    used = total - info.get("MemFree", 0) \
+                        - info.get("Buffers", 0) - info.get("Cached", 0)
+                    percent = (used / total * 100) if total else None
+            except Exception:
+                pass
+    return {
+        "total_gb": _round_gb(total),
+        "available_gb": _round_gb(available),
+        "used_gb": _round_gb(used),
+        "percent": round(percent, 1) if percent is not None else None,
+    }
+
+
+@bp.route("/api/system-info")
+def api_system_info():
+    """进程池(OCC)运行环境:worker 数、BUILD_POOL_WORKERS、CPU 核数、系统内存,
+    以及按部署经验(可用内存 ÷ 0.45GB/worker)估出的建议 worker 上限。
+    前端顶栏实时展示,用于判断 BUILD_POOL_WORKERS 能开多大。"""
+    workers = pool.max_workers
+    env_workers = os.environ.get("BUILD_POOL_WORKERS", "").strip() or None
+    cpu = os.cpu_count() or 1
+    mem = _system_memory_gb()
+    suggested = (int(mem["available_gb"] // 0.45)
+                 if mem["available_gb"] is not None else None)
+    return jsonify({
+        "ok": True,
+        "workers": workers,
+        "env_workers": env_workers,
+        "cpu_count": cpu,
+        "memory": mem,
+        "suggested_max_workers": suggested,
+    })
 
 
 @bp.route("/api/files")
