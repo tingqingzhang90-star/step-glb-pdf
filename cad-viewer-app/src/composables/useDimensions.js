@@ -54,6 +54,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     centerSubMode,
     dimHoveredEdge,
     dimFirstEdge,
+    dimHoveredId,
     dimPending,
     dimPreview,
     dimensions,

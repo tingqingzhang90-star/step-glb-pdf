@@ -26,6 +26,7 @@ export function createDimEngine(deps) {
     centerSubMode,
     dimHoveredEdge,
     dimFirstEdge,
+    dimHoveredId,
     dimPending,
     dimPreview,
     dimensions,
@@ -468,6 +469,13 @@ export function createDimEngine(deps) {
         } else {
           dimPreview.value = P.diameter(dimHoveredEdge.value, mousePos)
         }
+      } else if (dimHoveredId.value && !dimHoveredEdge.value) {
+        // 悬浮在孔组虚线分度圆上:预览分度圆直径(贯穿直线模式)
+        const hovered = dimensions.value.find(d => String(d.id) === String(dimHoveredId.value))
+        if (hovered && hovered.type === 'center-mark'
+            && (hovered.group || hovered.groupCenter) && hovered.refs) {
+          dimPreview.value = core.buildDiameterBoltCirclePreview(hovered.refs, mousePos)
+        }
       }
       return
     }
@@ -506,6 +514,16 @@ export function createDimEngine(deps) {
    * 现状:`@mousedown.stop` 阻止冒泡,不会触发 SVG 根的"落位"逻辑,所以这里打开拖拽
    * 不会与标注流程冲突;center-mark 无可调参数,自然不会被 updateDimDrag 影响。 */
   function onDimMouseDown(event, dim) {
+    // 直径工具下点孔组的虚线分度圆:对它做直径标注(PCD 分度圆直径),而非拖动孔组
+    if (activeTool.value === 'diameter' && dim.type === 'center-mark'
+        && (dim.group || dim.groupCenter) && dim.refs) {
+      const id = core.placeDiameterOnBoltCircleDim(dim.refs)
+      if (id) {
+        selectDim(id)
+        suppressPreviewAfterPlace(getSvgMousePoint(event))
+      }
+      return
+    }
     // 中心标记工具下点孔组的虚线分度圆:把它当成"一个孔",在分度圆圆心打十字
     if (activeTool.value === 'center-mark' && dim.type === 'center-mark'
         && (dim.group || dim.groupCenter)) {

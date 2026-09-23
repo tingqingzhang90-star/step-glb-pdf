@@ -619,7 +619,12 @@
                 <!-- 孔位中心标记 -->
                 <template v-if="dim.type === 'center-mark'">
                   <circle v-if="dim.pitchCircle" :cx="dim.pitchCircle.x" :cy="dim.pitchCircle.y" :r="dim.pitchCircle.r" class="dim-bolt-circle" />
-                  <circle v-if="dim.pitchCircle" :cx="dim.pitchCircle.x" :cy="dim.pitchCircle.y" :r="dim.pitchCircle.r" class="dim-hit-stroke" />
+                  <!-- 分度圆命中带:环(非填充)不挡圈内孔;仅在「选择」与「直径」工具下加宽,
+                       其余标注工具下让路给边线/孔(维持细虚线命中,等同原行为)。
+                       不使用 .dim-hit-stroke 类,以免被 .dim-active 规则在工具激活时禁用 -->
+                  <circle v-if="dim.pitchCircle && (!activeTool || activeTool === 'diameter')"
+                          :cx="dim.pitchCircle.x" :cy="dim.pitchCircle.y" :r="dim.pitchCircle.r"
+                          class="dim-bolt-hit" />
                   <g v-for="(cm, ci) in dim.centerMarks || []" :key="'cm' + ci" class="dim-center-mark" :transform="`translate(${cm.x}, ${cm.y}) rotate(${(cm.angle != null ? cm.angle : (dim.centerMarkAngle || 0)) * 180 / Math.PI})`">
                     <line :x1="-cm.r" :y1="0" :x2="cm.r" :y2="0" />
                     <line :x1="0" :y1="-cm.r" :x2="0" :y2="cm.r" />
@@ -2000,6 +2005,16 @@ function onAlgoChange() {
   stroke: var(--dimension-color, #303133);
   stroke-width: var(--center-mark-stroke, 0.8);
   stroke-dasharray: 6 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+}
+
+/* 分度圆加宽命中带:必须 fill:none(否则 SVG circle 默认黑填充会把整圆涂黑),
+   透明宽描边 + pointer-events:stroke 只留圆环带命中,不挡圈内孔/边线 */
+.dim-bolt-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
   vector-effect: non-scaling-stroke;
   pointer-events: stroke;
 }

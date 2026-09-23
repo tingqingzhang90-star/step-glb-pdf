@@ -544,6 +544,68 @@ export function createDimensionCore(deps, ctx) {
     return id
   }
 
+  // ===== 孔组虚线分度圆 → 直径标注 =====
+  // 分度圆不是模型边线,而是孔组各孔心的最小二乘(平均)圆。
+  // 这里把它的圆心/半径还原成"局部(view)坐标的合成圆 seg",
+  // 复用 buildDiameterGeometry 全部逻辑(贯穿线、箭头指向圆内、文字读 PCD)。
+  // 直径几何内部会再次 local→sheet 转换,所以这里存局部坐标即可。
+
+  /** 由孔组引用(各孔的 edgeRefData)还原分度圆,返回直径几何可用的合成 edgeRef。
+   *  不足 BOLT_MIN_CIRCLES 个孔或任一孔不可用返回 null。 */
+  function buildBoltCircleRef(groupRefsData) {
+    const refs = (groupRefsData || []).map(resolveDimRef).filter(Boolean)
+    if (refs.length < BOLT_MIN_CIRCLES) return null
+    const pts = []
+    for (const ref of refs) {
+      const center = getCircleCenterSheet(ref)
+      const circ = toCircle(ref.seg)
+      if (!center || !circ) return null
+      pts.push({ x: center.x, y: center.y, view: ref.view })
+    }
+    const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length
+    const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length
+    const radius = pts.reduce((s, p) => s + Math.hypot(p.x - cx, p.y - cy), 0) / pts.length
+    const view = pts[0].view
+    const scale = getViewDisplayScale(view)
+    return {
+      seg: {
+        type: 'circle',
+        cx: (cx - view.x) / scale,
+        cy: (cy - view.y) / scale,
+        r: radius / scale
+      },
+      view
+    }
+  }
+
+  /** 对孔组分度圆(虚线圆)做直径标注:显示其 PCD(分度圆直径) */
+  function placeDiameterOnBoltCircleDim(groupRefsData) {
+    const ref = buildBoltCircleRef(groupRefsData)
+    if (!ref) return
+    const geometry = buildDiameterGeometry(ref, -Math.PI / 4)
+    if (!geometry) return
+    const id = nextId()
+    pushDim({
+      id,
+      type: 'diameter',
+      diameterMode: 'bolt-circle',
+      // 不绑任何单条边线:直接引用孔组各孔,换型号后分度圆变化直径随之跟随
+      groupRefs: groupRefsData,
+      leaderAngle: geometry.leaderAngle,
+      leaderLength: geometry.leaderLength,
+      textSlide: 0,
+      color: ctx.dimensionColor.value
+    })
+    return id
+  }
+
+  /** 孔组分度圆直径预览:跟随光标(贯穿直线模式,与放置一致) */
+  function buildDiameterBoltCirclePreview(groupRefsData, mousePos) {
+    const ref = buildBoltCircleRef(groupRefsData)
+    if (!ref || !mousePos) return null
+    return buildDiameterPreview(ref, mousePos)
+  }
+
   // ===== 放置 =====
 
   function placeLinearDimSingle(edgeRef, offset = 50) {
@@ -1139,6 +1201,11 @@ export function createDimensionCore(deps, ctx) {
         const aim = diameterLeaderAim(ref, tl, dim.customText || '')
         geometry = buildDiameterLeaderGeometry(ref, tl, aim ?? dim.leaderAngle,
           dim.customText || '')
+      } else if (dim.diameterMode === 'bolt-circle' && dim.groupRefs) {
+        // 孔组虚线分度圆:由孔组各孔实时还原分度圆(换型号后自动跟随)
+        const ref = buildBoltCircleRef(dim.groupRefs)
+        if (ref) geometry = buildDiameterGeometry(ref, dim.leaderAngle, dim.leaderLength,
+          dim.textSlide || 0)
       } else {
         geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength,
           dim.textSlide || 0)
@@ -1223,7 +1290,10 @@ export function createDimensionCore(deps, ctx) {
         dim.offset = getLinearOffsetFromMouse(first, mousePos)
       }
     } else if (dim.type === 'diameter') {
-      const ref = resolveDimRef(dim.refs[0])
+      // 分度圆直径:引用的是孔组各孔而非单边线,ref 需由 groupRefs 实时还原
+      const ref = dim.diameterMode === 'bolt-circle' && dim.groupRefs
+        ? buildBoltCircleRef(dim.groupRefs)
+        : resolveDimRef(dim.refs[0])
       if (!ref) return
       const circ = toCircle(ref.seg)
       if (!circ) return
@@ -1308,7 +1378,10 @@ export function createDimensionCore(deps, ctx) {
     }
 
     if (dim.type === 'diameter' && dim.diameterMode !== 'leader') {
-      const ref = resolveDimRef(dim.refs?.[0])
+      // 分度圆直径:ref 由 groupRefs 实时还原
+      const ref = dim.diameterMode === 'bolt-circle' && dim.groupRefs
+        ? buildBoltCircleRef(dim.groupRefs)
+        : resolveDimRef(dim.refs?.[0])
       const circ = ref ? toCircle(ref.seg) : null
       if (!circ || !ref.view) return
       const angle = dim.leaderAngle ?? -Math.PI / 4
@@ -1408,6 +1481,8 @@ export function createDimensionCore(deps, ctx) {
     placeCenterMarkAtGroupCenter,
     placeDiameterDim,
     placeDiameterLeaderDim,
+    placeDiameterOnBoltCircleDim,
+    buildDiameterBoltCirclePreview,
     buildDiameterLeaderPreview,
     placeAngleDim,
     placeAnglePointsDim,
