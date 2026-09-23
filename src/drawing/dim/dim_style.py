@@ -22,7 +22,8 @@ PX2MM = CFG["_px_to_mm_at_96dpi"]
 # json 缺字段时的兜底值,避免旧配置文件直接崩
 _FALLBACK = {"ext_overshoot_mm": 2.5, "text_gap_mm": 4.0,
              "arrow_len_px": 14.0, "arrow_half_px": 1.6, "arrow_ext_px": 16.0,
-             "angle_text_gap_px": 4.0, "angle_arc_ext_px": 20.0}
+             "angle_text_gap_px": 4.0, "angle_arc_ext_px": 20.0,
+             "diameter_text_gap_px": 4.0}
 
 
 def _dim(section, key, fallback_key):
@@ -84,6 +85,12 @@ def dim_arrow_extension_px():
 def dim_angle_text_gap_px():
     """角度标注文字与弧线的间距(图纸 px, 与前端 core.js ANGLE_TEXT_GAP 共用同一份 json)"""
     return _dim("angle", "text_gap_px", "angle_text_gap_px")
+
+
+def dim_diameter_text_gap_px():
+    """直径标注(贯穿直线与折返引线)文字与标注线的间距
+    (图纸 px, 与前端 core.js DIAMETER_TEXT_GAP 共用同一份 json)"""
+    return _dim("diameter", "text_gap_px", "diameter_text_gap_px")
 
 
 def dim_angle_arc_ext_px():

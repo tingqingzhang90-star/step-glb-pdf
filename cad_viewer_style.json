@@ -16,6 +16,9 @@
     "angle": {
       "text_gap_px": 1,
       "arc_ext_px": 10
+    },
+    "diameter": {
+      "text_gap_px": 1
     }
   },
 

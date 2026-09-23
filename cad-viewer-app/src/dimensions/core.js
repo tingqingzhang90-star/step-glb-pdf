@@ -656,23 +656,24 @@ export function createDimensionCore(deps, ctx) {
     const leaderStart = { x: cx - dir.x * r, y: cy - dir.y * r }
     const edgePt = { x: cx + dir.x * r, y: cy + dir.y * r }
     const leaderEnd = { x: cx + dir.x * (r + leaderLength), y: cy + dir.y * (r + leaderLength) }
-    // 文字完全位于 leader 线段上:
-    //   1) 沿 -dir 方向从 leaderEnd 退回,把文字落在 leader 末端的内侧(不超出箭头)
-    //   2) 再沿屏幕"上方"法向微调 4px,与线分离避免压线
+    // 文字默认位于标注线尾部(线尾 = leaderEnd):
+    //   可读方向朝圆外(dir.x>=0)时文字末端贴线尾、起点朝圆延伸;
+    //   朝圆内(dir.x<0)时文字起点贴线尾、朝圆延伸。
+    //   文字与线的垂直间距由 cad_viewer_style.json 的 dim.diameter.text_gap_px 配置。
     // 取两个候选法向中 y 更小者作为屏幕上方方向,保证任意 leader 朝向都靠上
     const perpUp1 = { x: -dir.y, y: dir.x }
     const perpUp2 = { x: dir.y, y: -dir.x }
     const perp = perpUp1.y <= perpUp2.y ? perpUp1 : perpUp2
-    const textAlongBack = 20   // 沿 -dir 退回距离,让文字落回 leader 末端内侧
-    const textPerpGap = 4      // 垂直于 leader 的上方微调
-    // textSlide:用户沿直径线拖动文字的位移(正 = 朝箭头/外侧方向)。
-    // 与后端 _diameter 使用同一公式 text_pos = leader_end - d*(20 - slide) + perp*4,
-    // 否则编辑器里拖过的文字与导出 PDF 的位置会对不上。
-    const textPos = {
-      x: leaderEnd.x - dir.x * (textAlongBack - textSlide) + perp.x * textPerpGap,
-      y: leaderEnd.y - dir.y * (textAlongBack - textSlide) + perp.y * textPerpGap
-    }
     const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
+    const text = `ø${formatMm(mmVal)}`
+    const textW = measureTextWidth(text)
+    // textSlide:用户沿直径线拖动文字的附加位移(正 = 朝线尾/外侧方向),默认 0 = 贴线尾。
+    // 与后端 _diameter 使用同一公式,否则编辑器里拖过的文字与导出 PDF 位置对不上
+    const along = (dir.x >= 0 ? textW : 0) - textSlide
+    const textPos = {
+      x: leaderEnd.x - dir.x * along + perp.x * DIAMETER_TEXT_GAP,
+      y: leaderEnd.y - dir.y * along + perp.y * DIAMETER_TEXT_GAP
+    }
     // 让文字始终处于可读角度(不倒立)
     const textAngle = Math.abs(angle) > Math.PI / 2 ? angle + Math.PI : angle
     // 引用边线是部分弧且箭头接触角处缺失时,从弧断点无缝补一段圆弧
@@ -689,7 +690,7 @@ export function createDimensionCore(deps, ctx) {
       arcPatch,
       arrow: buildArrowPoints(edgePt, dir, false),
       textPos,
-      text: `ø${formatMm(mmVal)}`
+      text
     }
   }
 
@@ -728,7 +729,10 @@ export function createDimensionCore(deps, ctx) {
   // 文字在水平线上,引线从文字末端折向圆周,箭头指向圆。
   // 常用于孔位标注如 "6x Ø22 贯穿"。
 
-  const LEADER_TEXT_GAP = 4    // 文字与水平线垂直间距(px)
+  // 直径标注文字与标注线的垂直间距(图纸 px),与后端共用 cad_viewer_style.json:
+  // dim.diameter.text_gap_px(贯穿直线模式与折返引线模式共用)
+  const DIAMETER_TEXT_GAP = config.dim.diameter?.text_gap_px ?? 4
+  const LEADER_TEXT_GAP = DIAMETER_TEXT_GAP    // 折返模式:文字与水平搁置线间距
 
   // 实测文字宽度(sheet 单位):.dim-text 字号 = dim.text.font_px(SVG 单位),
   // canvas measureText 与 SVG 同字体同字号,比按字符数估宽(len*7)准确
@@ -1239,8 +1243,26 @@ export function createDimensionCore(deps, ctx) {
         const center = getSheetPoint(ref.view, circ.cx, circ.cy)
         const r = circ.r * getViewDisplayScale(ref.view)
         const dist = Math.hypot(mousePos.x - center.x, mousePos.y - center.y)
-        dim.leaderAngle = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
-        dim.leaderLength = Math.max(15, dist - r)
+        const start = drag && drag.startMouse ? drag.startMouse : null
+        if (start && drag.startLeaderLength != null) {
+          // 相对拖拽:按抓取时刻的角位移/径向位移增量更新。
+          // 绝对跟随(角度=圆心→鼠标)在抓点靠近圆心时 atan2 逐帧噪声极大,
+          // 标注会整条乱跳(闪烁);相对增量 + 圆心附近死区可消除抖动
+          const startRadial = Math.hypot(start.x - center.x, start.y - center.y) - r
+          if (dist > 5) {
+            const dA = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
+              - Math.atan2(start.y - center.y, start.x - center.x)
+            // 归一化到 [-π, π],跨越 ±π 边界时不跳变
+            dim.leaderAngle = drag.startLeaderAngle
+              + Math.atan2(Math.sin(dA), Math.cos(dA))
+          }
+          dim.leaderLength = Math.max(15,
+            drag.startLeaderLength + (dist - r) - startRadial)
+        } else {
+          // 无快照(程序化调用):退回绝对跟随
+          dim.leaderAngle = Math.atan2(mousePos.y - center.y, mousePos.x - center.x)
+          dim.leaderLength = Math.max(15, dist - r)
+        }
       }
     } else if (dim.type === 'angle') {
       if (dim.angleMode === 'points') {
@@ -1299,7 +1321,7 @@ export function createDimensionCore(deps, ctx) {
         ? (mousePos.x - start.x) * dir.x + (mousePos.y - start.y) * dir.y
         : 0
       const slide0 = drag?.startSlide ?? (dim.textSlide || 0)
-      // 文字沿 dir 相对 leaderEnd 的坐标 = slide - 20,限制在直径线两端外 10px 内
+      // 文字相对线尾(leaderEnd)的沿向坐标 = slide(正 = 越过线尾朝外),限制在直径线两端外 10px 内
       dim.textSlide = Math.max(10 - L, Math.min(30, slide0 + delta))
       return
     }

@@ -2,8 +2,9 @@
 """直径标注文字沿直径线滑动(textSlide)的几何测试
 
 编辑器 core.buildDiameterGeometry 与导出 _diameter 必须同公式:
-text_pos = leader_end - dir * (20 - textSlide) + perp * 4,
-否则拖过文字的标注导出后位置会跳回原位。
+text_pos = leader_end - dir * ((text_w if dir.x>=0 else 0) - textSlide) + perp * gap,
+即文字默认贴线尾(leader_end),间距 gap 由 cad_viewer_style.json
+的 dim.diameter.text_gap_px 配置,否则拖过文字的标注导出后位置会跳回原位。
 
 运行:
     C:\\Users\\<user>\\.conda\\envs\\pdf1\\python.exe -m pytest tests/test_dim_diameter_text.py -v
@@ -33,11 +34,17 @@ def _text_pos(ann, seg=None, view=None):
     return prims["texts"][0]["pos"]
 
 
-def test_text_sits_20_inward_of_leader_end():
+def test_text_ends_at_leader_end_by_default():
+    """文字默认位于标注线尾部:可读方向朝圆外(angle=0)时,文字末端贴线尾"""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
     ann = {"leaderAngle": 0.0, "leaderLength": 30}
     prims = dim_render._diameter(ann, _circle_seg(), _view())
     leader_end_x = 100.0 + 20.0 * 0.6 + 30
-    assert prims["texts"][0]["pos"][0] == pytest.approx(leader_end_x - 20, abs=0.01)
+    dim_render._ensure_font()
+    w = (stringWidth(prims["text"], dim_render._CN_FONT,
+                     dim_style.dim_text_font_mm()) * (25.4 / 72.0))
+    # anchor=start,文字沿 +dir 延伸:起点 = 线尾 - 实测字宽(末端贴线尾)
+    assert prims["texts"][0]["pos"][0] == pytest.approx(leader_end_x - w, abs=0.01)
 
 
 def test_slide_moves_text_towards_arrow():
@@ -70,7 +77,7 @@ def test_slide_accepts_negative_and_missing():
 def test_leader_custom_text_and_underline_width():
     """引线直径:自定义全文(如 "12x ø13.5 贯穿")生效,
     水平搁置线长度按 PDF 实测字宽(pdfmetrics)+ 字号等比余量,
-    间距也按字号等比(固定 4 图纸单位在 PDF 里会大近一倍,文字悬空)"""
+    文字与搁置线的间距由 dim.diameter.text_gap_px 配置"""
     from reportlab.pdfbase.pdfmetrics import stringWidth
     dim_render._ensure_font()
     font_mm = dim_style.dim_text_font_mm()
@@ -93,9 +100,10 @@ def test_leader_custom_text_and_underline_width():
     assert prims["text"] == full
     line_start, line_end = prims["dim_lines"][0]
     assert line_end[0] - line_start[0] == pytest.approx(underline_w(full), abs=0.01)
-    # 搁置线水平,且与文字基线的间距 = 字号等比(4/18 em,贴线)
+    # 搁置线水平,且与文字基线的间距由 dim.diameter.text_gap_px 配置
     assert line_end[1] == pytest.approx(line_start[1], abs=1e-9)
-    assert line_start[1] == pytest.approx(300.0 + em * (4.0 / 18.0), abs=1e-6)
+    assert line_start[1] == pytest.approx(
+        300.0 + dim_style.dim_diameter_text_gap_px(), abs=1e-6)
     assert prims["texts"][0]["anchor"] == "start"
     # 箭头:尖端触圆周指向圆心,箭身在引线外侧(距圆心比尖端远)
     apex, a1, a2 = prims["arrows"][0]

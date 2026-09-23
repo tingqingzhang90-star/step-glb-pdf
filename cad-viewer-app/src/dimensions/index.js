@@ -520,14 +520,23 @@ export function createDimEngine(deps) {
     if (!mousePos) return
     selectDim(dim.id)
     dragSnapshotTaken = false
+    // 模板传入的是 renderDimension 的几何对象(不含 textLeft/customText 等原始字段),
+    // 快照必须取自 dimensions 里的原始标注,否则快照为 null → 拖拽不跟手
+    const raw = dimensions.value.find(item => item.id === dim.id) || dim
     dimDragging.value = {
       id: dim.id,
       type: dim.type,
       startMouse: mousePos,
       startOffset: dim.offset,
       // 引线直径:记录抓取时文字左端(图纸坐标),拖动按偏移跟手
-      startTextLeft: (dim.type === 'diameter' && dim.diameterMode === 'leader')
-        ? core.diameterTextLeftSheet(dim) : undefined
+      startTextLeft: (raw.type === 'diameter' && raw.diameterMode === 'leader')
+        ? core.diameterTextLeftSheet(raw) : undefined,
+      // 贯穿直径:记录抓取时角度/引线长,拖拽按相对角位移/径向位移更新
+      // (绝对跟随在抓点靠近圆心时 atan2 噪声会导致标注闪烁)
+      startLeaderAngle: (raw.type === 'diameter' && raw.diameterMode !== 'leader')
+        ? (raw.leaderAngle ?? -Math.PI / 4) : undefined,
+      startLeaderLength: (raw.type === 'diameter' && raw.diameterMode !== 'leader')
+        ? (raw.leaderLength ?? 30) : undefined
     }
   }
 
@@ -539,15 +548,18 @@ export function createDimEngine(deps) {
     if (!mousePos) return
     selectDim(dim.id)
     dragSnapshotTaken = false
+    // 模板传入的是 renderDimension 的几何对象(不含 textLeft/customText 等原始字段),
+    // 快照必须取自 dimensions 里的原始标注,否则快照为 null → 拖拽不跟手
+    const raw = dimensions.value.find(item => item.id === dim.id) || dim
     dimDragging.value = {
       id: dim.id,
       type: dim.type,
       part: 'text',
       startMouse: mousePos,
-      startSlide: dim.textSlide || 0,
+      startSlide: raw.textSlide || 0,
       // 引线直径:记录抓取时文字左端(图纸坐标),拖动按偏移跟手
-      startTextLeft: (dim.type === 'diameter' && dim.diameterMode === 'leader')
-        ? core.diameterTextLeftSheet(dim) : undefined
+      startTextLeft: (raw.type === 'diameter' && raw.diameterMode === 'leader')
+        ? core.diameterTextLeftSheet(raw) : undefined
     }
   }
 

@@ -23,7 +23,7 @@ from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset
                           format_mm, format_deg)
 from drawing.dim.dim_style import (dim_ext_overshoot_mm, dim_text_gap_mm, dim_label_gap_mm,
                                    dim_angle_text_gap_px, dim_angle_arc_ext_px,
-                                   dim_text_font_mm)
+                                   dim_text_font_mm, dim_diameter_text_gap_px)
 
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
@@ -148,6 +148,9 @@ LABEL_GAP = dim_label_gap_mm()           # 伴随文字与数值的间距(mm),=�
 # 中心夹角标注专用量(单位与前端 core.js 同名常量一致,均为图纸 px)
 ANGLE_DEFAULT_RADIUS = 200               # 未指定时的默认弧半径
 ANGLE_EXT_OVERSHOOT = 30                 # 尺寸界线越过弧的长度
+# 直径标注(贯穿直线与折返引线)文字与标注线的间距,由 cad_viewer_style.json
+# 的 dim.diameter.text_gap_px 配置(与前端 core.js DIAMETER_TEXT_GAP 共用同一份 json)
+DIAMETER_TEXT_GAP = dim_diameter_text_gap_px()
 # 文字间距与弧延伸长度改由 cad_viewer_style.json 的 dim.angle 配置:
 #   text_gap_px 文字相对弧的内侧间距    arc_ext_px 弧越过箭头尾部的延伸长度
 # 取值为图纸 px,与前端 core.js 同名常量共用同一份 json。
@@ -491,15 +494,26 @@ def _diameter(ann, seg, view):
     perp1 = (-d[1], d[0])
     perp2 = (d[1], -d[0])
     perp = perp1 if perp1[1] <= perp2[1] else perp2
-    # textSlide: 用户沿直径线拖动文字标签的位移(正 = 朝箭头/外侧),
-    # 与前端 buildDiameterGeometry 同公式,否则编辑器里拖过的文字与导出图不一致
-    slide = ann.get("textSlide") or 0.0
-    text_pos = (leader_end[0] - d[0] * (20 - slide) + perp[0] * 4,
-                leader_end[1] - d[1] * (20 - slide) + perp[1] * 4)
     radius = (circ.get("meta") or {}).get("radius")
     mm_val = radius * 2 if radius else circ["r"] * 2 / (view["k"] or 1.0)
-    text_angle = angle + math.pi if abs(angle) > math.pi / 2 else angle
     text = f"ø{format_mm(mm_val)}"
+    text_angle = angle + math.pi if abs(angle) > math.pi / 2 else angle
+    # 文字默认位于标注线尾部(线尾 = leader_end),与前端 buildDiameterGeometry 同式:
+    #   可读方向朝圆外(d[0]>=0)时文字末端贴线尾,朝圆内时文字起点贴线尾;
+    #   textSlide 为沿直径线的附加位移(正 = 朝线尾/外侧);
+    #   文字与线的间距取 cad_viewer_style.json 的 dim.diameter.text_gap_px。
+    # 文字宽度按 PDF 实测(pdfmetrics.stringWidth),与折线模式同一套测量
+    font_mm = dim_text_font_mm()
+    pt2u = 25.4 / 72.0          # 1pt = 0.3528 图纸单位(坐标 1 单位 = 1mm)
+    try:
+        _ensure_font()
+        text_w = stringWidth(text, _CN_FONT, font_mm) * pt2u
+    except Exception:           # 字体未注册等异常时退回估宽
+        text_w = estimate_text_width(text)
+    slide = ann.get("textSlide") or 0.0
+    along = (text_w if d[0] >= 0 else 0.0) - slide
+    text_pos = (leader_end[0] - d[0] * along + perp[0] * DIAMETER_TEXT_GAP,
+                leader_end[1] - d[1] * along + perp[1] * DIAMETER_TEXT_GAP)
     # 引用圆为部分弧且箭头接触角处缺失时,从弧断点无缝补一段圆弧(与前端一致)
     patch = arc_patch_range(seg, circ, angle)
     arcs = [build_circle_patch_arc(cx, cy, r, patch)] if patch else []
@@ -552,7 +566,9 @@ def _diameter_leader(ann, seg, view):
         text_w = stringWidth(text, _CN_FONT, font_mm) * pt2u
     except Exception:           # 字体未注册等异常时退回估宽
         text_w = estimate_text_width(text)
-    text_gap = em * (4.0 / 18.0)
+    # 文字与水平搁置线的间距由 cad_viewer_style.json 的 dim.diameter.text_gap_px 配置
+    # (与前端 core.js LEADER_TEXT_GAP 共用同一份 json)
+    text_gap = DIAMETER_TEXT_GAP
     text_line_start = (text_x, text_y + text_gap)
     text_w += em * (4.0 / 18.0)   # 小余量,搁置线略长于文字(同前端)
     text_line_end = (text_x + text_w, text_y + text_gap)
