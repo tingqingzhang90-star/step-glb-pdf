@@ -26,7 +26,6 @@ export function createDimEngine(deps) {
     centerSubMode,
     dimHoveredEdge,
     dimFirstEdge,
-    dimHoveredId,
     dimPending,
     dimPreview,
     dimensions,
@@ -469,13 +468,6 @@ export function createDimEngine(deps) {
         } else {
           dimPreview.value = P.diameter(dimHoveredEdge.value, mousePos)
         }
-      } else if (dimHoveredId.value && !dimHoveredEdge.value) {
-        // 悬浮在孔组虚线分度圆上:预览分度圆直径(贯穿直线模式)
-        const hovered = dimensions.value.find(d => String(d.id) === String(dimHoveredId.value))
-        if (hovered && hovered.type === 'center-mark'
-            && (hovered.group || hovered.groupCenter) && hovered.refs) {
-          dimPreview.value = core.buildDiameterBoltCirclePreview(hovered.refs, mousePos)
-        }
       }
       return
     }
@@ -514,16 +506,6 @@ export function createDimEngine(deps) {
    * 现状:`@mousedown.stop` 阻止冒泡,不会触发 SVG 根的"落位"逻辑,所以这里打开拖拽
    * 不会与标注流程冲突;center-mark 无可调参数,自然不会被 updateDimDrag 影响。 */
   function onDimMouseDown(event, dim) {
-    // 直径工具下点孔组的虚线分度圆:对它做直径标注(PCD 分度圆直径),而非拖动孔组
-    if (activeTool.value === 'diameter' && dim.type === 'center-mark'
-        && (dim.group || dim.groupCenter) && dim.refs) {
-      const id = core.placeDiameterOnBoltCircleDim(dim.refs)
-      if (id) {
-        selectDim(id)
-        suppressPreviewAfterPlace(getSvgMousePoint(event))
-      }
-      return
-    }
     // 中心标记工具下点孔组的虚线分度圆:把它当成"一个孔",在分度圆圆心打十字
     if (activeTool.value === 'center-mark' && dim.type === 'center-mark'
         && (dim.group || dim.groupCenter)) {
@@ -534,28 +516,35 @@ export function createDimEngine(deps) {
       }
       return
     }
+    // 直径工具下点孔组的虚线分度圆:对分度圆做直径标注(显示其 PCD)。
+    // 分度圆不是真实边线,命中带 .dim-bolt-hit 挂在孔组标注上,由这里转成
+    // 直径标注(引用孔组各孔,换型号后分度圆变化、直径随之跟随)。
+    if (activeTool.value === 'diameter' && dim.type === 'center-mark'
+        && dim.group && (dim.refs || []).length >= 3) {
+      const id = core.placeDiameterOnBoltCircleDim(dim.refs)
+      if (id) {
+        selectDim(id)
+        suppressPreviewAfterPlace(getSvgMousePoint(event))
+      }
+      return
+    }
     const mousePos = getSvgMousePoint(event)
     if (!mousePos) return
     selectDim(dim.id)
     dragSnapshotTaken = false
-    // 模板传入的是 renderDimension 的几何对象(不含 textLeft/customText 等原始字段),
-    // 快照必须取自 dimensions 里的原始标注,否则快照为 null → 拖拽不跟手
-    const raw = dimensions.value.find(item => item.id === dim.id) || dim
-    dimDragging.value = {
-      id: dim.id,
-      type: dim.type,
-      startMouse: mousePos,
-      startOffset: dim.offset,
-      // 引线直径:记录抓取时文字左端(图纸坐标),拖动按偏移跟手
-      startTextLeft: (raw.type === 'diameter' && raw.diameterMode === 'leader')
-        ? core.diameterTextLeftSheet(raw) : undefined,
-      // 贯穿直径:记录抓取时角度/引线长,拖拽按相对角位移/径向位移更新
-      // (绝对跟随在抓点靠近圆心时 atan2 噪声会导致标注闪烁)
-      startLeaderAngle: (raw.type === 'diameter' && raw.diameterMode !== 'leader')
-        ? (raw.leaderAngle ?? -Math.PI / 4) : undefined,
-      startLeaderLength: (raw.type === 'diameter' && raw.diameterMode !== 'leader')
-        ? (raw.leaderLength ?? 30) : undefined
+    const drag = { id: dim.id, type: dim.type, startMouse: mousePos, startOffset: dim.offset }
+    // 直径标注补抓取快照:拖拽按"相对增量"跟手(否则引线退化为绝对语义跳 60px,
+    // 贯穿直线在抓点近圆心时角度噪声乱跳)。引线快照取限位后的文字位置——
+    // 旧数据可能存的是限位外的远点,而显示已收紧,快照必须与显示一致
+    if (dim.type === 'diameter') {
+      if (dim.diameterMode === 'leader') {
+        drag.startTextLeft = core.diameterTextLeftSheetClamped(dim)
+      } else {
+        drag.startLeaderAngle = dim.leaderAngle ?? -Math.PI / 4
+        drag.startLeaderLength = dim.leaderLength ?? 30
+      }
     }
+    dimDragging.value = drag
   }
 
   /** 文字标签 mousedown:开始拖动文字(只改 textSlide,不动尺寸线)
@@ -566,19 +555,14 @@ export function createDimEngine(deps) {
     if (!mousePos) return
     selectDim(dim.id)
     dragSnapshotTaken = false
-    // 模板传入的是 renderDimension 的几何对象(不含 textLeft/customText 等原始字段),
-    // 快照必须取自 dimensions 里的原始标注,否则快照为 null → 拖拽不跟手
-    const raw = dimensions.value.find(item => item.id === dim.id) || dim
-    dimDragging.value = {
+    const drag = {
       id: dim.id,
       type: dim.type,
       part: 'text',
       startMouse: mousePos,
-      startSlide: raw.textSlide || 0,
-      // 引线直径:记录抓取时文字左端(图纸坐标),拖动按偏移跟手
-      startTextLeft: (raw.type === 'diameter' && raw.diameterMode === 'leader')
-        ? core.diameterTextLeftSheet(raw) : undefined
+      startSlide: dim.textSlide || 0
     }
+    dimDragging.value = drag
   }
 
   /** 延长线手柄 mousedown:开始拖拽调整 lineExtension(尺寸线两端外延长度) */
@@ -617,13 +601,6 @@ export function createDimEngine(deps) {
     if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
       if (typing) return
       event.preventDefault()
-      // 孔组标记进行中:回退最近选中的一个孔(每按一次撤掉最后选的那个)
-      const pending = dimPending.value
-      if (pending && pending.mode === 'bolt-circle' && pending.circles.length) {
-        pending.circles.pop()
-        dimPreview.value = core.buildCenterMarkGroupGeometry(pending.circles.map(resolveDimRef))
-        return
-      }
       undo && undo()
       return
     }
@@ -656,6 +633,8 @@ export function createDimEngine(deps) {
     } else if (drag.part === 'extension') {
       core.updateDimExtensionDrag(dim, mousePos, drag.endSide)
     } else {
+      // 必须把 drag 快照传下去:直径(尤其引线模式)按抓取时刻的增量跟手,
+      // 不传则退回绝对跟随,引线抓点偏移丢失、近圆心处角度噪声乱跳
       core.updateDimDrag(dim, mousePos, drag)
     }
   }

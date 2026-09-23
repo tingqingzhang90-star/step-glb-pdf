@@ -419,21 +419,27 @@
                    不再有 12px 命中带互相遮挡的问题。
                    命中事件在外层 g 上统一捕获,通过 data-dim-id 反查 dim 路由到
                    onDimMouseDown/onDimClick。
-                   
-                   z-order 策略:
-                     - "等第二边" 状态(dimFirstEdge 已选、待固定态还没建立)时
-                       把本组放到 view 命中层 之前,让边线命中优先级高于已放置标注,
-                       避免已放置标注的 10px 命中带挡住底层的边线。
-                     - 其他时候放回 view 之后,已放置标注可正常点中。 -->
-              <g v-if="dimFirstEdge && !dimPending" class="dim-hit-dims" style="pointer-events:none">
+
+                   z-order 策略:本组始终位于 view 边线命中层 之前(下层)——
+                   重叠处边线优先(elementFromPoint 命中上层边线,拾取边线/点孔
+                   不会被已放置标注的 10px 命中带挡住);鼠标只在标注带上
+                   (附近无边线)时才落到本组,仍可悬浮高亮/点选已放置标注。
+                   "等第二边" 状态(dimFirstEdge 已选、待固定态还没建立)时本组
+                   整体不渲染:点击一律落到 svg 根,保持"单边标注按当前偏移
+                   直接放置"的原有语义,不会被误点已放置标注打断。 -->
+              <g v-if="!dimFirstEdge || dimPending" class="dim-hit-dims" @mousedown.stop="onDimHitMouseDown" @click.stop="onDimHitClick">
                 <template v-for="dim in renderedDimensions" :key="`ddh-${dim.id}`">
                   <template v-if="dim.type === 'linear'">
                     <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <line :x1="dim.dimLineStart.x" :y1="dim.dimLineStart.y" :x2="dim.dimLineEnd.x" :y2="dim.dimLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
                     <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cm-${dim.id}-${ci}`">
-                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <!-- 十字命中带在孔心处挖空:点孔心可穿透到几何兜底(就近找孔),
+                           已放置十字才不会挡住对同一孔的再次拾取 -->
+                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x - Math.min(6, Math.max(2, cm.r - 4))" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x + Math.min(6, Math.max(2, cm.r - 4))" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y - Math.min(6, Math.max(2, cm.r - 4))" class="dim-hit-line" :data-dim-id="dim.id" />
+                      <line :x1="cm.x" :y1="cm.y + Math.min(6, Math.max(2, cm.r - 4))" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
                     </template>
                   </template>
                   <template v-else-if="dim.type === 'diameter'">
@@ -447,14 +453,22 @@
                     </template>
                   </template>
                   <template v-else-if="dim.type === 'angle'">
+                    <!-- 延长线也铺副本:工具激活时真实层 hit-stroke 让路,
+                         没有副本的话角度标注只剩弧线可点中 -->
+                    <template v-for="(el, ei) in dim.extLines || []" :key="`ddh-el-${dim.id}-${ei}`">
+                      <line :x1="el.start.x" :y1="el.start.y" :x2="el.end.x" :y2="el.end.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                    </template>
                     <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
                   </template>
                   <template v-else-if="dim.type === 'center-mark'">
                     <!-- 孔组不铺 10px 命中带:它铺满整圈孔位,会把后续点孔全挡住 -->
                     <template v-if="!dim.group">
                       <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
-                        <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                        <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
+                        <!-- 同上:孔心挖空,已放置十字不挡对同一孔的再次拾取 -->
+                        <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x - Math.min(6, Math.max(2, cm.r - 4))" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                        <line :x1="cm.x + Math.min(6, Math.max(2, cm.r - 4))" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
+                        <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y - Math.min(6, Math.max(2, cm.r - 4))" class="dim-hit-line" :data-dim-id="dim.id" />
+                        <line :x1="cm.x" :y1="cm.y + Math.min(6, Math.max(2, cm.r - 4))" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
                       </template>
                     </template>
                   </template>
@@ -470,41 +484,6 @@
                   <line v-if="seg.type === 'line' && activeTool !== 'diameter'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <polyline v-else-if="seg.type === 'polyline'" :points="polylinePoints(seg.points)" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-line" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
                   <circle v-else-if="seg.type === 'circle' && circleHitTools.includes(activeTool)" :cx="seg.cx" :cy="seg.cy" :r="seg.r" fill="none" vector-effect="non-scaling-stroke" class="dim-hit-circle" :data-dim-view="pv.id" :data-dim-idx="i" :data-dim-type="'hiddenEdges'" />
-                </template>
-              </g>
-              <g v-if="!dimFirstEdge || dimPending" class="dim-hit-dims" @mousedown.stop="onDimHitMouseDown" @click.stop="onDimHitClick">
-                <template v-for="dim in renderedDimensions" :key="`ddh-${dim.id}`">
-                  <template v-if="dim.type === 'linear'">
-                    <line :x1="dim.ext1.x" :y1="dim.ext1.y" :x2="dim.ext1End.x" :y2="dim.ext1End.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    <line :x1="dim.ext2.x" :y1="dim.ext2.y" :x2="dim.ext2End.x" :y2="dim.ext2End.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    <line :x1="dim.dimLineStart.x" :y1="dim.dimLineStart.y" :x2="dim.dimLineEnd.x" :y2="dim.dimLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cm-${dim.id}-${ci}`">
-                      <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                      <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
-                    </template>
-                  </template>
-                  <template v-else-if="dim.type === 'diameter'">
-                    <template v-if="dim.diameterMode === 'leader'">
-                      <!-- 引线模式:水平文字线 + 折线引线铺命中带 -->
-                      <line :x1="dim.textLineStart.x" :y1="dim.textLineStart.y" :x2="dim.textLineEnd.x" :y2="dim.textLineEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                      <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    </template>
-                    <template v-else>
-                      <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                    </template>
-                  </template>
-                  <template v-else-if="dim.type === 'angle'">
-                    <path :d="dim.arcPath" class="dim-hit-line" :data-dim-id="dim.id" />
-                  </template>
-                  <template v-else-if="dim.type === 'center-mark'">
-                    <!-- 孔组不铺 10px 命中带:它铺满整圈孔位,会把后续点孔全挡住 -->
-                    <template v-if="!dim.group">
-                      <template v-for="(cm, ci) in dim.centerMarks || []" :key="`ddh-cmk-${dim.id}-${ci}`">
-                        <line :x1="cm.x - cm.r" :y1="cm.y" :x2="cm.x + cm.r" :y2="cm.y" class="dim-hit-line" :data-dim-id="dim.id" />
-                        <line :x1="cm.x" :y1="cm.y - cm.r" :x2="cm.x" :y2="cm.y + cm.r" class="dim-hit-line" :data-dim-id="dim.id" />
-                      </template>
-                    </template>
-                  </template>
                 </template>
               </g>
             </g>
@@ -608,7 +587,8 @@
                     <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />
                     <line :x1="dim.leaderBend.x" :y1="dim.leaderBend.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-hit-stroke" />
                     <polygon v-if="dim.arrow" :points="dim.arrow" class="dim-arrow" />
-                    <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" style="cursor: move" text-anchor="start" dominant-baseline="auto" @mousedown.stop="onDimTextMouseDown($event, dim)">{{ dim.text }}</text>
+                    <!-- 引线折线模式:文字不支持单独拖动,按下即拖整条标注(与引线一致) -->
+                    <text :x="dim.textPos.x" :y="dim.textPos.y" class="dim-text" style="cursor: move" text-anchor="start" dominant-baseline="auto" @mousedown.stop="onDimMouseDown($event, dim)">{{ dim.text }}</text>
                   </template>
                   <template v-else>
                     <line :x1="dim.leaderStart.x" :y1="dim.leaderStart.y" :x2="dim.leaderEnd.x" :y2="dim.leaderEnd.y" class="dim-line" />

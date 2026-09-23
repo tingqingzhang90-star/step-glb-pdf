@@ -1,5 +1,5 @@
 // 标注工具:状态声明 + 引擎装配(dimCore 几何构建 / dimEngine 交互状态机)
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { createDimEngine, coreFactory } from '@/dimensions/index.js'
 import { toCircle, toLineSeg } from '@/dimensions/geometry.js'
 
@@ -23,17 +23,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   function selectDim(id) {
     selectedDimId.value = id
     selectedViewId.value = null
-    // 选中标注时,把颜色选择器同步为该标注当前颜色,方便“选中即改色”
-    const dim = id != null ? dimensions.value.find(d => d.id === id) : null
-    if (dim && dim.color) dimensionColor.value = dim.color
   }
-
-  /** 颜色选择器变化:若有选中标注则改该标注颜色,否则仅作为后续放置的默认色 */
-  watch(dimensionColor, (color) => {
-    if (selectedDimId.value == null) return
-    const dim = dimensions.value.find(d => d.id === selectedDimId.value)
-    if (dim) setDimField(dim.id, 'color', color)
-  })
 
   const dimCore = coreFactory({
     getSheetPoint: coords.getSheetPoint,
@@ -64,7 +54,6 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     centerSubMode,
     dimHoveredEdge,
     dimFirstEdge,
-    dimHoveredId,
     dimPending,
     dimPreview,
     dimensions,
@@ -216,6 +205,16 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
       // 附近没有孔:保留已选的孔,避免点偏一下就把选好的清掉(要清按 Esc)
       if (commitCenterMarkGroup()) return
       return
+    }
+    // 单孔十字:点孔心时命中带只在圆周、分度圆虚线又恰穿过孔心,elementFromPoint
+    // 常命中不到孔,这里按几何就近找最近的小孔直接放置(附近无孔则继续走清空)。
+    if (activeTool.value === 'center-mark' && centerSubMode.value === 'single') {
+      const near = pickCircleNear(coords.eventToSheetPoint(event))
+      if (near) {
+        const id = dimCore.placeCenterMarkDim(near)
+        if (id) selectDim(id)
+        return
+      }
     }
     // 只选了一根边线：单边标注按当前偏移直接放置
     const first = dimFirstEdge.value

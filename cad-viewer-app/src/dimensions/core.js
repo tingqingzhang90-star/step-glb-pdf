@@ -844,11 +844,6 @@ export function createDimensionCore(deps, ctx) {
     const cx = view.x + circ.cx * getViewDisplayScale(view)
     const cy = view.y + circ.cy * getViewDisplayScale(view)
     const r = circ.r * getViewDisplayScale(view)
-    const dir = { x: Math.cos(leaderAngle), y: Math.sin(leaderAngle) }
-
-    // 文字左端(用户拖拽/鼠标位置),水平向右延伸
-    const textX = textLeft.x
-    const textY = textLeft.y
 
     // 估算文字宽度,确定肩部起点。
     // 文字支持自定义全文(如 "12x ø13.5 贯穿"):前缀计数 + 直径值 + 后缀说明,
@@ -857,12 +852,23 @@ export function createDimensionCore(deps, ctx) {
     const text = (customText && customText.trim()) ? customText : `ø${formatMm(mmVal)}`
     const textW = measureTextWidth(text) + 4   // 小余量,搁置线略长于文字
 
+    // 引线长度限位:文字放得太远时把整个标注拉近圆(预览/拖拽/渲染统一生效)
+    textLeft = clampDiameterLeaderTextLeft(edgeRef, textLeft, customText)
+
+    // 文字左端(用户拖拽/鼠标位置),水平向右延伸
+    const textX = textLeft.x
+    const textY = textLeft.y
+
     // 水平线: 文字下方,长度≈文字宽+小余量(与文字长度基本一致)
     const textLineStart = { x: textX, y: textY + LEADER_TEXT_GAP }
     const textLineEnd = { x: textX + textW, y: textY + LEADER_TEXT_GAP }
 
     // 肩部终点(折点): 从这里沿 leaderAngle 方向向圆引线
     const bendPt = { x: textLineEnd.x, y: textLineEnd.y }
+
+    // 限位后重算瞄准角(折点→圆心),保证引线方向与新折点吻合(射线必与圆相交)
+    leaderAngle = Math.atan2(cy - bendPt.y, cx - bendPt.x)
+    const dir = { x: Math.cos(leaderAngle), y: Math.sin(leaderAngle) }
 
     // 计算折点到圆的射线与圆的交点(取离折点近的那个交点)
     // 射线参数方程: P = bendPt + t * dir, t > 0
@@ -923,6 +929,44 @@ export function createDimensionCore(deps, ctx) {
     const bendX = textLeft.x + measureTextWidth(text) + 4
     const bendY = textLeft.y + LEADER_TEXT_GAP
     return Math.atan2(cy - bendY, cx - bendX)
+  }
+
+  // 引线折点距圆周的最大距离(px):超过则把文字/折点整体拉近圆,避免拖出超长折线
+  const LEADER_MAX_LENGTH = 120
+
+  /** 引线长度限位:折点(文字线右端)距圆心超过 r + LEADER_MAX_LENGTH 时,
+   *  沿"折点→圆心"方向把整个标注(文字+折点)拉近圆。返回 clamp 后的
+   *  textLeft(图纸坐标);在限位内原样返回。预览/放置/拖拽/渲染统一走这里。 */
+  function clampDiameterLeaderTextLeft(edgeRef, textLeft, customText = '') {
+    if (!edgeRef || !textLeft) return textLeft
+    const { seg, view } = edgeRef
+    const circ = toCircle(seg)
+    if (!circ || !view) return textLeft
+    const cx = view.x + circ.cx * getViewDisplayScale(view)
+    const cy = view.y + circ.cy * getViewDisplayScale(view)
+    const r = circ.r * getViewDisplayScale(view)
+    const mmVal = circ.meta && circ.meta.radius ? circ.meta.radius * 2 : (circ.r * 2) / getViewMmScale(view)
+    const text = (customText && customText.trim()) ? customText : `ø${formatMm(mmVal)}`
+    const w = measureTextWidth(text) + 4
+    const dx = textLeft.x + w - cx
+    const dy = textLeft.y + LEADER_TEXT_GAP - cy
+    const dist = Math.hypot(dx, dy)
+    const maxDist = r + LEADER_MAX_LENGTH
+    if (dist <= maxDist || dist < 1e-6) return textLeft
+    const k = maxDist / dist
+    return {
+      x: cx + dx * k - w,
+      y: cy + dy * k - LEADER_TEXT_GAP
+    }
+  }
+
+  /** 读取引线直径标注的文字左端(图纸坐标)并做引线长度限位。
+   *  供拖拽快照用:数据可能是限位外的旧值,显示已收紧,快照必须与显示一致。 */
+  function diameterTextLeftSheetClamped(dim) {
+    const tl = diameterTextLeftSheet(dim)
+    if (!tl) return null
+    const ref = resolveDimRef(dim.refs?.[0])
+    return ref ? clampDiameterLeaderTextLeft(ref, tl, dim.customText || '') : tl
   }
 
   function buildDiameterLeaderPreview(edgeRef, mousePos) {
@@ -1304,7 +1348,9 @@ export function createDimensionCore(deps, ctx) {
           || { x: mousePos.x - 60, y: mousePos.y }
         const dx = drag && drag.startMouse ? mousePos.x - drag.startMouse.x : 0
         const dy = drag && drag.startMouse ? mousePos.y - drag.startMouse.y : 0
-        const tlSheet = { x: s0.x + dx, y: s0.y + dy }
+        // 限位:拖得太远时把文字拉近圆(数据也收敛到限位内,显示与数据一致)
+        const tlSheet = clampDiameterLeaderTextLeft(ref, { x: s0.x + dx, y: s0.y + dy },
+          dim.customText || '')
         dim.textLeft = sheetToLocal(ref.view, tlSheet)
         dim.textLeftLocal = true
         const aim = diameterLeaderAim(ref, tlSheet, dim.customText || '')
@@ -1356,26 +1402,10 @@ export function createDimensionCore(deps, ctx) {
    *  - 线性:鼠标位置投影到尺寸线方向,相对中点取有符号滑动量(允许稍出界)。
    *    基准用 dimLineStart/dimLineEnd(含延长线的全长),保证文字能沿整条线拖动;
    *  - 直径(贯穿圆心直线模式):按鼠标位移增量沿直径线滑动——文字 anchor=start,
-   *    若直接对齐鼠标点会瞬移,故用增量;可拖范围覆盖整条直径线两端略外。*/
+   *    若直接对齐鼠标点会瞬移,故用增量;可拖范围覆盖整条直径线两端略外。
+   *  - 引线折线模式不支持文字单独拖动:文字按下走整体拖拽(onDimMouseDown)。*/
   function updateDimTextDrag(dim, mousePos, drag) {
     if (!dim || !mousePos) return
-
-    if (dim.type === 'diameter' && dim.diameterMode === 'leader') {
-      const ref = resolveDimRef(dim.refs?.[0])
-      if (!ref || !ref.view) return
-      // 抓取点跟随:按抓取时"鼠标→文字左端"的偏移整体平移,文字完全跟手;
-      // 引线角随新折点(文字线右端)→圆心重算
-      const s0 = (drag && drag.startTextLeft) || diameterTextLeftSheet(dim)
-      if (!s0) return
-      const dx = drag && drag.startMouse ? mousePos.x - drag.startMouse.x : 0
-      const dy = drag && drag.startMouse ? mousePos.y - drag.startMouse.y : 0
-      const tlSheet = { x: s0.x + dx, y: s0.y + dy }
-      dim.textLeft = sheetToLocal(ref.view, tlSheet)
-      dim.textLeftLocal = true
-      const aim = diameterLeaderAim(ref, tlSheet, dim.customText || '')
-      if (aim != null) dim.leaderAngle = aim
-      return
-    }
 
     if (dim.type === 'diameter' && dim.diameterMode !== 'leader') {
       // 分度圆直径:ref 由 groupRefs 实时还原
@@ -1492,6 +1522,7 @@ export function createDimensionCore(deps, ctx) {
     updateDimTextDrag,
     updateDimExtensionDrag,
     diameterTextLeftSheet,
+    diameterTextLeftSheetClamped,
     previewBuilders
   }
 }
