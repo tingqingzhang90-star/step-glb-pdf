@@ -139,11 +139,14 @@ def _content_bbox(segs, hidden):
             "width": max(xs) - min(xs), "height": max(ys) - min(ys)}
 
 
-def _write_model_source(model_code, template_doc, placements, palette, out_dir):
+def _write_model_source(model_code, template_doc, placements, palette, out_dir,
+                        annotations=None):
     """出图同时落盘该型号的可导入源文件
 
     存的是本型号自己的投影几何(不是基准型号的),以后导入可直接渲染,
-    不必重跑 OCC 投影。标注沿用模板定义:同系列边线索引一致,refs 仍有效。
+    不必重跑 OCC 投影。标注 refs 必须指向本型号边线的下标:同系列边线
+    数量/顺序并不一致(实测 618 vs 422),照抄模板下标会全部悬空,
+    前端导入后一条标注都渲染不出来,故传 annotations=重映射后的标注。
     """
     views = []
     for v in template_doc["views"]:
@@ -166,7 +169,8 @@ def _write_model_source(model_code, template_doc, placements, palette, out_dir):
     # 只保留引用完整的标注:悬空引用渲染不出,落盘只会制造脏数据
     view_ids = {v["id"] for v in template_doc["views"]}
     annotations = [
-        a for a in template_doc.get("annotations", [])
+        a for a in (annotations if annotations is not None
+                    else template_doc.get("annotations", []))
         if all(r.get("viewId") in view_ids for r in a.get("refs", []))
         and all(r.get("viewId") in view_ids for r in a.get("groupRefs") or [])
     ]
@@ -253,10 +257,20 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         r["annotation"] = item["dim"]
         rebound.append(r)
 
+    # 源文件的标注 refs 要指向本型号边线:用重绑匹配到的目标边下标
+    # 替换模板里的基准下边,否则下标对不上,前端导入后标注全部丢失
+    source_annotations = []
+    for item, r in zip(base_refs, rebound):
+        ann = dict(item["dim"])
+        if r.get("ref_map"):
+            ann[r.get("ref_map_target") or "refs"] = r["ref_map"]
+        source_annotations.append(ann)
+
     dim_pdf_sheet.render_frontend_pdf(
         rebound, placements, template_doc, model_code, pdf_path)
     source_path = _write_model_source(
-        model_code, template_doc, placements, palette, out_dir)
+        model_code, template_doc, placements, palette, out_dir,
+        annotations=source_annotations)
 
     unmatched = [f"{i['annotation'].get('id')}: {i['reason']}"
                  for i in rebound if i["status"] == "unmatched"]

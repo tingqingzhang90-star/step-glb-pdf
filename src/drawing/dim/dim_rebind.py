@@ -145,16 +145,16 @@ def match_edge(base_seg, view_name, ctx, target_segs):
     """在目标边线列表中寻找基准边线的对应边
 
     Returns:
-        (target_seg, score) 匹配成功; (None, 失配原因) 失败
+        (target_seg, score, target_idx) 匹配成功; (None, 失配原因, None) 失败
     """
     axis_sign = AXIAL_MAP.get(view_name)
     axis, sign = axis_sign if axis_sign else (None, 1.0)
     exp = _expected_mm(base_seg, axis, sign, ctx)
     if exp is None:
-        return None, "基准边线缺少 mm 元数据"
+        return None, "基准边线缺少 mm 元数据", None
 
-    best, best_score = None, None
-    for seg in target_segs:
+    best, best_score, best_idx = None, None, None
+    for i, seg in enumerate(target_segs):
         key = _target_key(seg)
         if key is None or not _kind_compatible(key["kind"], exp["kind"]):
             continue
@@ -188,10 +188,10 @@ def match_edge(base_seg, view_name, ctx, target_segs):
                 continue
             score = pos + dr
         if best_score is None or score < best_score:
-            best, best_score = seg, score
+            best, best_score, best_idx = seg, score, i
     if best is None:
-        return None, "目标视图中无几何指纹相符的边线"
-    return best, best_score
+        return None, "目标视图中无几何指纹相符的边线", None
+    return best, best_score, best_idx
 
 
 def _motor_face_lines(target_profile, view_name):
@@ -396,6 +396,8 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
 
     Returns:
         {"status": "matched"|"motor"|"unmatched", "reason", "segs", "views"}
+        matched 时附带 "ref_map"(重映射后的 refs,下标换成目标型号边线)与
+        "ref_map_target"(写回 refs 还是 groupRefs),供源文件落盘使用
     """
     # bind_motor 线性标注:两端绑电机包络面(换电机型号自动跟随)
     if ann.get("bind_motor"):
@@ -452,7 +454,7 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
     if not ref_entries:
         return {"status": "unmatched", "reason": "标注无引用边线(refs 为空)",
                 "segs": [], "views": []}
-    segs, views = [], []
+    segs, views, ref_map = [], [], []
     for entry in ref_entries:
         if "error" in entry:
             return {"status": "unmatched", "reason": entry["error"],
@@ -464,15 +466,20 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
                     "segs": [], "views": []}
         cache_key = (placement["source_view"], ref.get("type"), ref.get("idx"))
         if cache_key in match_cache:
-            target_seg = match_cache[cache_key]
+            target_seg, target_idx = match_cache[cache_key]
         else:
-            target_seg, _ = match_edge(entry["seg"], placement["source_view"],
-                                       ctx, placement["segs"])
-            match_cache[cache_key] = target_seg
+            target_seg, _, target_idx = match_edge(
+                entry["seg"], placement["source_view"], ctx, placement["segs"])
+            match_cache[cache_key] = (target_seg, target_idx)
         if target_seg is None:
             return {"status": "unmatched",
                     "reason": f"边线未匹配(视图 {placement['source_view']} idx={ref.get('idx')})",
                     "segs": [], "views": []}
         segs.append(_align_seg_direction(entry["seg"], target_seg))
         views.append(placement)
-    return {"status": "matched", "reason": "", "segs": segs, "views": views}
+        ref_map.append({"viewId": ref["viewId"], "idx": target_idx,
+                        "type": ref.get("type")})
+    used_group = bool(ann.get("groupRefs") and group_refs)
+    return {"status": "matched", "reason": "", "segs": segs, "views": views,
+            "ref_map": ref_map,
+            "ref_map_target": "groupRefs" if used_group else "refs"}
