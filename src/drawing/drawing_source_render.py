@@ -16,7 +16,6 @@ import os
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 from drawing.table_split import (
     LINE_SPACING, cell_text_rects, draw_split_dividers, line_baselines,
@@ -44,10 +43,10 @@ _C_EXT = (0.4, 0.4, 0.4)
 
 
 def _ensure_font():
-    global _FONT_READY
-    if not _FONT_READY:
-        pdfmetrics.registerFont(UnicodeCIDFont(_CN_FONT))
-        _FONT_READY = True
+    global _CN_FONT, _FONT_READY
+    from drawing.pdf_font import ensure_cn_font
+    _CN_FONT = ensure_cn_font()
+    _FONT_READY = True
 
 
 def _hex_rgb(hex_color, default):

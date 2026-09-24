@@ -60,6 +60,7 @@
         </el-button-group>
         <el-divider direction="vertical" />
         <el-button size="small" :icon="RefreshLeft" :disabled="!canUndo" @click="undo">撤销</el-button>
+        <el-button size="small" :icon="RefreshRight" :disabled="!canRedo" @click="redo">重做</el-button>
         <div class="mobile-hide">
         <el-divider direction="vertical" />
         <el-button-group>
@@ -189,6 +190,7 @@
         </el-button-group>
         <el-divider direction="vertical" />
         <el-button size="small" :icon="RefreshLeft" :disabled="!canUndo" @click="undo">撤销</el-button>
+        <el-button size="small" :icon="RefreshRight" :disabled="!canRedo" @click="redo">重做</el-button>
         <span v-if="viewLoading" class="status-text">加载中...</span>
         <span v-else-if="selectedModel" class="status-text">{{ selectedModel }}</span>
         <span v-if="viewError" class="status-err">{{ viewError }}</span>
@@ -764,6 +766,7 @@
               placeholder="留空显示测量值"
               clearable
               @update:model-value="v => setDimField(selectedDim.id, 'customText', v || null)"
+              @blur="endFieldEdit"
             />
           </div>
           <div class="prop-row stacked">
@@ -774,6 +777,7 @@
               placeholder='如"行程"、"总长"'
               clearable
               @update:model-value="v => setDimField(selectedDim.id, 'label', v || null)"
+              @blur="endFieldEdit"
             />
             <span class="prop-hint">显示在数值左侧,前后端位置一致</span>
           </div>
@@ -842,7 +846,7 @@
 // 依赖链单向:canvas → views → coords → viewDrag/dims;paletteDrag 依赖 coords+views。
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh, WarningFilled, RefreshLeft } from '@element-plus/icons-vue'
+import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDown, Refresh, WarningFilled, RefreshLeft, RefreshRight } from '@element-plus/icons-vue'
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
 import { useTouchCanvas } from '@/composables/useTouchCanvas'
@@ -1013,7 +1017,7 @@ const {
   toggleTool, onDimEdgeSelect, onMotorEnvelopePick, onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove, onGlobalDimMouseUp,
   onKeyDown, selectDim, onDimClick,   onSvgMouseDown: onSvgMouseDownDim, onSvgMouseMove,
   onSvgMouseLeave, clearTransientSelection, removeByView, resetAll, setDimensions,
-  undo, canUndo
+  undo, canUndo, redo, canRedo, endFieldEdit
 } = useDimensions({ placedViews, selectedViewId, coords, getMotorEnvelope })
 
 function closeAllContextMenus() {

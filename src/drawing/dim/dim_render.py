@@ -9,9 +9,7 @@ import math
 
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
-from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.pdfmetrics import stringWidth
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset_point,
                           signed_distance_to_line, closest_point_on_line,
@@ -33,10 +31,10 @@ PDF_W, PDF_H = 420.0, 297.0  # A3 横放 mm
 
 
 def _ensure_font():
-    global _FONT_READY
-    if not _FONT_READY:
-        pdfmetrics.registerFont(UnicodeCIDFont(_CN_FONT))
-        _FONT_READY = True
+    global _CN_FONT, _FONT_READY
+    from drawing.pdf_font import ensure_cn_font
+    _CN_FONT = ensure_cn_font()
+    _FONT_READY = True
 
 
 def _hex_rgb(color):
@@ -483,9 +481,31 @@ def _linear_circle_edge(ann, segs, views):
     }
 
 
+def _pcd_mm_from_meta(segs):
+    """全部孔圆都带模型 mm 真值圆心(meta.center)时返回分度圆直径,否则 None
+
+    px 坐标经 bbox.scale(仅 4 位小数)换算,合成的 PCD 会有 ±0.1mm 抖动;
+    真值圆心是投影前的模型坐标,孔心距不受缩放/舍入影响。
+    """
+    pts = []
+    for seg in segs:
+        meta = seg.get("meta") or {}
+        c = meta.get("center")
+        if seg.get("type") != "circle" or not isinstance(c, list) or len(c) != 2:
+            return None
+        pts.append((float(c[0]), float(c[1])))
+    if len(pts) < BOLT_MIN_CIRCLES:
+        return None
+    cx = sum(p[0] for p in pts) / len(pts)
+    cy = sum(p[1] for p in pts) / len(pts)
+    return 2 * sum(math.hypot(p[0] - cx, p[1] - cy) for p in pts) / len(pts)
+
+
 def _bolt_circle_seg(segs, views):
     """孔组各孔圆 → 分度圆合成 seg,与前端 buildBoltCircleRef 同公式:
-    圆心取各孔心均值,半径取各孔心到圆心的平均距离。要求同一视图。"""
+    圆心取各孔心均值,半径取各孔心到圆心的平均距离。要求同一视图。
+    直径值(语义)优先取孔 meta.center 的 mm 真值挂在 meta.radius,
+    px 几何只用于画线;前端 buildDiameterGeometry 同样优先 meta.radius。"""
     view0 = views[0] if views else None
     circles = []
     for seg, view in zip(segs, views):
@@ -500,7 +520,9 @@ def _bolt_circle_seg(segs, views):
     r = sum(math.hypot(c["cx"] - cx, c["cy"] - cy) for c in circles) / len(circles)
     if r < 1e-6:
         return None
-    return {"type": "circle", "cx": cx, "cy": cy, "r": r}
+    pcd_mm = _pcd_mm_from_meta(segs)
+    meta = {"radius": pcd_mm / 2} if pcd_mm else {}
+    return {"type": "circle", "cx": cx, "cy": cy, "r": r, "meta": meta}
 
 
 def _diameter(ann, seg, view):
@@ -526,16 +548,20 @@ def _diameter(ann, seg, view):
     mm_val = radius * 2 if radius else circ["r"] * 2 / (view["k"] or 1.0)
     text = f"ø{format_mm(mm_val)}"
     text_angle = angle + math.pi if abs(angle) > math.pi / 2 else angle
+    # 存储约定与 _linear_text 一致:texts[].angle 为 PDF(y 向上)空间角度,
+    # 即图纸(y 向下)角度取反,否则 PDF 里文字倾斜方向与标注线相反
     # 文字默认位于标注线尾部(线尾 = leader_end),与前端 buildDiameterGeometry 同式:
     #   可读方向朝圆外(d[0]>=0)时文字末端贴线尾,朝圆内时文字起点贴线尾;
     #   textSlide 为沿直径线的附加位移(正 = 朝线尾/外侧);
     #   文字与线的间距取 cad_viewer_style.json 的 dim.diameter.text_gap_px。
-    # 文字宽度按 PDF 实测(pdfmetrics.stringWidth),与折线模式同一套测量
+    # 文字宽度按 PDF 实测(pdfmetrics.stringWidth)。画布已 scale(mm,mm),
+    # setFont(font_mm) 的字号数值以 mm 计,而 stringWidth 返回值 = em宽×字号,
+    # 数值上就是图纸单位宽,不能再乘 pt→mm 系数(否则测宽只有实际值的
+    # 1/2.83,文字贴线位置整体内移)。前端 measureTextWidth 同为该字号实测宽。
     font_mm = dim_text_font_mm()
-    pt2u = 25.4 / 72.0          # 1pt = 0.3528 图纸单位(坐标 1 单位 = 1mm)
     try:
         _ensure_font()
-        text_w = stringWidth(text, _CN_FONT, font_mm) * pt2u
+        text_w = stringWidth(text, _CN_FONT, font_mm)
     except Exception:           # 字体未注册等异常时退回估宽
         text_w = estimate_text_width(text)
     slide = ann.get("textSlide") or 0.0
@@ -550,7 +576,7 @@ def _diameter(ann, seg, view):
         "arcs": arcs,
         "arrows": [build_arrow_points(edge_pt, d, False)],
         "texts": [{"pos": text_pos, "text": text,
-                   "angle": text_angle, "anchor": "start"}],
+                   "angle": -text_angle, "anchor": "start"}],
         "center_marks": [], "text": text,
     }
 
@@ -586,23 +612,36 @@ def _diameter_leader(ann, seg, view):
     text = ann.get("customText") or f"ø{format_mm(mm_val)}"
 
     # 水平文字线:长度按 PDF 实测文字宽度(pdfmetrics.stringWidth)计算。
-    # 图纸坐标 1:1 当 mm 用,而 PDF 字号 = font_px×PX2MM(pt),实际字高只有
-    # ~1.7 图纸单位;前端估宽(len×7)按 18 单位字号校准,直接当 mm 会让
-    # 下划线比实际文字宽 3~4 倍、间距也大近一倍(文字悬空、线甩出老远)。
-    # 间距/余量/肩部按字号等比(与前端 4/8/10 ÷ 字号18 同比例),两端视觉一致。
+    # 画布已 scale(mm,mm),setFont(font_mm) 的字号数值以 mm 计,stringWidth
+    # 返回值 = em宽×字号,数值上就是图纸单位宽,不能再乘 pt→mm 系数
+    # (否则测宽只有实际值的 1/2.83,搁置线比文字短一大截)。
+    # 余量与前端 buildDiameterLeaderGeometry 的 measureTextWidth(text)+4 同为
+    # 固定 +4 图纸单位,保证两端搁置线等长。
     font_mm = dim_text_font_mm()
-    pt2u = 25.4 / 72.0          # 1pt = 0.3528 图纸单位(坐标 1 单位 = 1mm)
-    em = font_mm * pt2u         # 字号换算到图纸单位
     try:
         _ensure_font()
-        text_w = stringWidth(text, _CN_FONT, font_mm) * pt2u
+        text_w = stringWidth(text, _CN_FONT, font_mm)
     except Exception:           # 字体未注册等异常时退回估宽
         text_w = estimate_text_width(text)
+    text_w += 4.0
     # 文字与水平搁置线的间距由 cad_viewer_style.json 的 dim.diameter.text_gap_px 配置
     # (与前端 core.js LEADER_TEXT_GAP 共用同一份 json)
     text_gap = DIAMETER_TEXT_GAP
+
+    # 引线长度限位(与前端 clampDiameterLeaderTextLeft 同式):折点(文字线
+    # 右端)距圆心超过 r + LEADER_MAX_LENGTH 时把整个文字拉近圆。重绑到
+    # 几何差异较大的型号后不做限位的话,PDF 引线会比编辑器显示的长一截。
+    leader_max_len = 120.0      # 前端 core.js LEADER_MAX_LENGTH
+    dx_c = text_x + text_w - cx
+    dy_c = text_y + text_gap - cy
+    dist_c = math.hypot(dx_c, dy_c)
+    max_dist = r + leader_max_len
+    if dist_c > max_dist and dist_c > 1e-6:
+        k = max_dist / dist_c
+        text_x = cx + dx_c * k - text_w
+        text_y = cy + dy_c * k - text_gap
+
     text_line_start = (text_x, text_y + text_gap)
-    text_w += em * (4.0 / 18.0)   # 小余量,搁置线略长于文字(同前端)
     text_line_end = (text_x + text_w, text_y + text_gap)
 
     # 折点 = 水平线右端

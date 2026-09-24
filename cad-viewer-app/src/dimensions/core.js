@@ -551,28 +551,45 @@ export function createDimensionCore(deps, ctx) {
   // 直径几何内部会再次 local→sheet 转换,所以这里存局部坐标即可。
 
   /** 由孔组引用(各孔的 edgeRefData)还原分度圆,返回直径几何可用的合成 edgeRef。
-   *  不足 BOLT_MIN_CIRCLES 个孔或任一孔不可用返回 null。 */
+   *  不足 BOLT_MIN_CIRCLES 个孔或任一孔不可用返回 null。
+   *  直径值(语义)优先取各孔 meta.center 的模型 mm 真值挂到 meta.radius:
+   *  px 坐标经 bbox.scale(4 位小数)换算有 ±0.1mm 抖动,真值不受影响;
+   *  与后端 _bolt_circle_seg/_pcd_mm_from_meta 同源。 */
   function buildBoltCircleRef(groupRefsData) {
     const refs = (groupRefsData || []).map(resolveDimRef).filter(Boolean)
     if (refs.length < BOLT_MIN_CIRCLES) return null
     const pts = []
+    const mmPts = []
     for (const ref of refs) {
       const center = getCircleCenterSheet(ref)
       const circ = toCircle(ref.seg)
       if (!center || !circ) return null
       pts.push({ x: center.x, y: center.y, view: ref.view })
+      const seg = ref.seg
+      const c = seg && seg.meta && seg.meta.center
+      if (seg && seg.type === 'circle' && Array.isArray(c) && c.length === 2) {
+        mmPts.push(c)
+      }
     }
     const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length
     const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length
     const radius = pts.reduce((s, p) => s + Math.hypot(p.x - cx, p.y - cy), 0) / pts.length
     const view = pts[0].view
     const scale = getViewDisplayScale(view)
+    let meta
+    if (mmPts.length === refs.length) {
+      const mx = mmPts.reduce((s, c) => s + c[0], 0) / mmPts.length
+      const my = mmPts.reduce((s, c) => s + c[1], 0) / mmPts.length
+      const pcdMm = 2 * mmPts.reduce((s, c) => s + Math.hypot(c[0] - mx, c[1] - my), 0) / mmPts.length
+      meta = { radius: pcdMm / 2 }
+    }
     return {
       seg: {
         type: 'circle',
         cx: (cx - view.x) / scale,
         cy: (cy - view.y) / scale,
-        r: radius / scale
+        r: radius / scale,
+        ...(meta ? { meta } : {})
       },
       view
     }

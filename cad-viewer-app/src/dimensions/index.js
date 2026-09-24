@@ -42,7 +42,8 @@ export function createDimEngine(deps) {
     selectView,
     core,
     record,
-    undo
+    undo,
+    redo
   } = deps
 
   // 直径/中心标记是"点击即落位",落位后预览要压住,直到鼠标移开落位点;
@@ -139,6 +140,7 @@ export function createDimEngine(deps) {
     const pending = dimPending.value
     if (!pending || pending.mode !== 'angle-points' || pending.points.length < 2) return false
     const radius = dimPreview.value?.radius ?? 200
+    record && record()
     const id = core.placeAnglePointsDim(
       pending.vertexRef, pending.points[0], pending.points[1], radius)
     if (!id) return false
@@ -226,6 +228,7 @@ export function createDimEngine(deps) {
   function commitCenterMarkGroup() {
     const pending = dimPending.value
     if (!pending || pending.mode !== 'bolt-circle') return false
+    record && record()
     const id = core.placeCenterMarkGroupDim(pending.circles)
     if (!id) return false
     selectDim(id)
@@ -237,6 +240,7 @@ export function createDimEngine(deps) {
   function commitPendingLinear() {
     const pending = dimPending.value
     if (!pending) return
+    record && record()
     const id = commitPending(core, pending, dimPreview.value?.offset)
     if (!id) return
     selectDim(id)
@@ -270,6 +274,7 @@ export function createDimEngine(deps) {
       }
       if (toCircle(seg)) {
         // 孔位中心标记：点击即放置，十字线长度自动取该孔直径
+        record && record()
         const id = core.placeCenterMarkDim(edgeRef)
         if (id) {
           selectDim(id)
@@ -282,6 +287,7 @@ export function createDimEngine(deps) {
     if (activeTool.value === 'diameter') {
       // 直径：点击即放置（圆/圆弧/孔，circle 或可拟合的 polyline）
       if (toCircle(seg)) {
+        record && record()
         let id
         if (diameterSubMode.value === 'leader') {
           const mousePos = getSvgMousePoint(event)
@@ -313,6 +319,7 @@ export function createDimEngine(deps) {
       const offset = mousePos
         ? core.getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, mousePos)
         : 50
+      record && record()
       const id = core.placeMotorEnvelopeDim(view, envelope, edgeRef, offset, '电机减速机尺寸')
       if (id) selectDim(id)
       finishDimPlacement(true)
@@ -336,9 +343,18 @@ export function createDimEngine(deps) {
         ElMessage.warning(toCircle(first.seg) ? '请选择另一个孔或边线' : '线性标注需要选择平行边线')
         return
       }
+      // 先构建预览再决定是否进入待固定态:两边线虽通过平行判定但几何无法
+      // 构建时(间距 <0.5 图纸单位、零长边、HLR 重合段等),不要把 null 写进
+      // dimPreview —— 否则单边预览会静默消失、dimPending 卡死直到 Esc。
+      // 保留第一边与单边预览,提示换一条边,与"非平行"分支行为一致。
+      const preview = buildPendingPreview(core, pending, getSvgMousePoint(event))
+      if (!preview) {
+        ElMessage.warning('两条边线间距过小或重合,无法标注,请另选边线')
+        return
+      }
       // 进入待固定态：之后预览跟着鼠标走，下一次点击才落位
       dimPending.value = pending
-      dimPreview.value = buildPendingPreview(core, pending, getSvgMousePoint(event))
+      dimPreview.value = preview
       return
     }
 
@@ -362,6 +378,7 @@ export function createDimEngine(deps) {
         return
       }
       // 放置角度
+      record && record()
       const id = core.placeAngleDim(first, edgeRef, dimPreview.value?.radius)
       if (id) selectDim(id)
       finishDimPlacement()
@@ -383,6 +400,7 @@ export function createDimEngine(deps) {
       ? core.getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, mousePos)
       : 50
     // refs 只记录所属视图：idx/type 对电机包络无意义,重绑走 bind_motor 分支
+    record && record()
     const id = core.placeMotorEnvelopeDim(
       view, envelope, { viewId: view.id, idx: -1, type: 'edges' }, offset, '电机减速机尺寸')
     if (id) selectDim(id)
@@ -559,6 +577,7 @@ export function createDimEngine(deps) {
     // 中心标记工具下点孔组的虚线分度圆:把它当成"一个孔",在分度圆圆心打十字
     if (activeTool.value === 'center-mark' && dim.type === 'center-mark'
         && (dim.group || dim.groupCenter)) {
+      record && record()
       const id = core.placeCenterMarkAtGroupCenter(dim.refs)
       if (id) {
         selectDim(id)
@@ -575,6 +594,7 @@ export function createDimEngine(deps) {
         && dim.group && (dim.refs || []).length >= 3) {
       const pt = getSvgMousePoint(event)
       const pv = dimPreview.value
+      record && record()
       const id = core.placeDiameterOnBoltCircleDim(dim.refs,
         diameterSubMode.value === 'leader'
           ? {
@@ -662,7 +682,16 @@ export function createDimEngine(deps) {
     if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
       if (typing) return
       event.preventDefault()
-      undo && undo()
+      // Ctrl+Shift+Z 重做,与 Ctrl+Z 撤销互补
+      if (event.shiftKey) redo && redo()
+      else undo && undo()
+      return
+    }
+    // Ctrl+Y 也走重做(部分浏览器 Ctrl+Shift+Z 会被吞)
+    if ((event.ctrlKey || event.metaKey) && (event.key === 'y' || event.key === 'Y')) {
+      if (typing) return
+      event.preventDefault()
+      redo && redo()
       return
     }
     if (event.key === 'Delete' || event.key === 'Del') {

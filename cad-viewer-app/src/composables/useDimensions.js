@@ -71,12 +71,18 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     selectView: (id) => { selectedViewId.value = id },
     core: dimCore,
     record: recordHistory,
-    undo
+    undo,
+    redo
   })
 
   // ===== 撤销栈:快照已放置标注 + 选中态,Ctrl+Z 整体回退 =====
   const HISTORY_LIMIT = 50
   const undoStack = ref([])
+  const redoStack = ref([])
+  // 文本字段(自定义文字/标签)连续输入合并为一次撤销:记录首个按键前的快照,
+  // 同一 (id,field) 的后续按键不再入栈,blur 后复位。否则每键一步、50 字吃满栈,
+  // 撤销只能逐字回退。
+  let fieldEditCtx = null
 
   function cloneDimensions() {
     // 标注对象均为纯 JSON 数据(refs/centerMarks 等嵌套数组),深拷贝隔离
@@ -87,11 +93,16 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   function recordHistory() {
     undoStack.value.push({ dims: cloneDimensions(), sel: selectedDimId.value })
     if (undoStack.value.length > HISTORY_LIMIT) undoStack.value.shift()
+    // 新的修改分支使 redo 链失效:清空重做栈
+    redoStack.value = []
+    fieldEditCtx = null
   }
 
   function undo() {
     const snap = undoStack.value.pop()
     if (!snap) return
+    // 撤销前把当前态压入重做栈,支持 Ctrl+Shift+Z / Ctrl+Y 重做
+    redoStack.value.push({ dims: cloneDimensions(), sel: selectedDimId.value })
     dimensions.value = snap.dims.map(d => ({ ...d }))
     selectedDimId.value = snap.sel
     // 撤销后清掉进行中的临时选择,避免悬空态
@@ -100,9 +111,25 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimPreview.value = null
     dimDragging.value = null
     dimHoveredId.value = null
+    fieldEditCtx = null
+  }
+
+  function redo() {
+    const snap = redoStack.value.pop()
+    if (!snap) return
+    undoStack.value.push({ dims: cloneDimensions(), sel: selectedDimId.value })
+    dimensions.value = snap.dims.map(d => ({ ...d }))
+    selectedDimId.value = snap.sel
+    dimFirstEdge.value = null
+    dimPending.value = null
+    dimPreview.value = null
+    dimDragging.value = null
+    dimHoveredId.value = null
+    fieldEditCtx = null
   }
 
   const canUndo = computed(() => undoStack.value.length > 0)
+  const canRedo = computed(() => redoStack.value.length > 0)
 
   const renderedDimensions = computed(() => dimensions.value
     .map(dim => dimCore.renderDimension(dim))
@@ -113,12 +140,24 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimensions.value.find(d => d.id === selectedDimId.value) || null
   )
 
-  /** 属性面板编辑标注字段(customText/bind_motor),直接改对象触发重渲染 */
+  /** 属性面板编辑标注字段(customText/label/bind_motor),直接改对象触发重渲染。
+   *  文本字段每键触发:只在一段编辑的首次按键记录快照,后续按键合并,撤销时
+   *  整段回退;开关字段(bind_motor)每次切换都是离散操作,必须每次都记录。 */
   function setDimField(id, field, value) {
     const dim = dimensions.value.find(d => d.id === id)
     if (!dim || dim[field] === value) return
-    recordHistory()
+    const isText = field === 'customText' || field === 'label'
+    const sameCtx = fieldEditCtx && fieldEditCtx.id === id && fieldEditCtx.field === field
+    if (!isText || !sameCtx) {
+      recordHistory()
+      if (isText) fieldEditCtx = { id, field }
+    }
     dim[field] = value
+  }
+
+  /** 文本输入失焦:结束本次编辑会话,下次聚焦/输入再记一次快照 */
+  function endFieldEdit() {
+    fieldEditCtx = null
   }
 
   /** 标注右键菜单 */
@@ -193,6 +232,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
       if (bolt) {
         const hole = pickCircleNear(pt)
         if (!hole || bolt.d <= hole.d) {
+          recordHistory()
           let id
           if (activeTool.value === 'diameter') {
             const pv = dimPreview.value
@@ -235,6 +275,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
           onCenterMarkGroupPick(hole)
           return
         }
+        recordHistory()
         const id = dimCore.placeCenterMarkDim(hole)
         if (id) selectDim(id)
         return
@@ -250,6 +291,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     const preview = dimPreview.value
     if (activeTool.value === 'linear' && first && preview && toLineSeg(first.seg) && preview.type === 'linear' && preview.mode === 'single') {
       const offset = preview.offset ?? dimCore.getLinearOffsetFromMouse(first, coords.eventToSheetPoint(event))
+      recordHistory()
       const id = dimCore.placeLinearDimSingle(first, offset)
       if (id) selectDim(id)
       dimFirstEdge.value = null
@@ -363,6 +405,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     dimPending.value = null
     dimPreview.value = null
     undoStack.value = []
+    redoStack.value = []
+    fieldEditCtx = null
   }
 
   /** 从源文件批量载入标注 */
@@ -371,6 +415,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     selectedDimId.value = null
     dimHoveredId.value = null
     undoStack.value = []
+    redoStack.value = []
+    fieldEditCtx = null
   }
 
   return {
@@ -384,6 +430,7 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     onDimExtensionHandleDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, selectDim, onDimClick,
     onSvgMouseDown, onSvgMouseMove, onSvgMouseLeave,
-    clearTransientSelection, removeByView, resetAll, undo, canUndo
+    clearTransientSelection, removeByView, resetAll, undo, redo, canUndo, canRedo,
+    endFieldEdit
   }
 }
