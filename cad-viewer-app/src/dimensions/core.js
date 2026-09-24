@@ -578,11 +578,44 @@ export function createDimensionCore(deps, ctx) {
     }
   }
 
-  /** 对孔组分度圆(虚线圆)做直径标注:显示其 PCD(分度圆直径) */
-  function placeDiameterOnBoltCircleDim(groupRefsData) {
+  /** 直径标注统一的圆引用:分度圆标注(有 groupRefs)由孔组各孔实时还原合成圆
+   *  (换型号后自动跟随),其余取单边线。渲染/拖拽/快照全走这里,组引用不再散落判断。 */
+  function diameterRefOf(dim) {
+    if (!dim) return null
+    if (dim.groupRefs) return buildBoltCircleRef(dim.groupRefs)
+    return resolveDimRef(dim.refs?.[0]) || null
+  }
+
+  /** 对孔组分度圆(虚线圆)做直径标注:显示其 PCD(分度圆直径)。
+   *  opts.leaderAngle:贯穿直线模式的角度(取预览角度,与所见一致);
+   *  opts.mode === 'leader':引线折线模式,textLeft 为图纸坐标(与预览一致)。 */
+  function placeDiameterOnBoltCircleDim(groupRefsData, opts = {}) {
     const ref = buildBoltCircleRef(groupRefsData)
     if (!ref) return
-    const geometry = buildDiameterGeometry(ref, -Math.PI / 4)
+    if (opts.mode === 'leader') {
+      const textLeft = opts.textLeft
+      if (!textLeft) return
+      // 放置时以折点→圆心的瞄准角为准(即使预览缺失也能正确落位)
+      const angle = diameterLeaderAim(ref, textLeft) ?? opts.leaderAngle ?? -Math.PI / 4
+      const geometry = buildDiameterLeaderGeometry(ref, textLeft, angle)
+      if (!geometry) return
+      const id = nextId()
+      pushDim({
+        id,
+        type: 'diameter',
+        diameterMode: 'leader',
+        // 引用孔组各孔而非单条边线:换型号后分度圆变化,引线/文字自动跟随
+        groupRefs: groupRefsData,
+        leaderAngle: geometry.leaderAngle,
+        // textLeft 存视图局部坐标:视图拖动/缩放时文字跟着圆走(与 refs 同坐标系)
+        textLeft: sheetToLocal(ref.view, geometry.textPos),
+        textLeftLocal: true,
+        color: ctx.dimensionColor.value,
+        text: geometry.text
+      })
+      return id
+    }
+    const geometry = buildDiameterGeometry(ref, opts.leaderAngle ?? -Math.PI / 4)
     if (!geometry) return
     const id = nextId()
     pushDim({
@@ -831,7 +864,7 @@ export function createDimensionCore(deps, ctx) {
   /** 引线直径 textLeft → 图纸坐标(兼容旧数据的绝对坐标存储) */
   function diameterTextLeftSheet(dim) {
     if (!dim || !dim.textLeft) return null
-    const ref = resolveDimRef(dim.refs?.[0])
+    const ref = diameterRefOf(dim)
     if (!ref || !ref.view) return null
     return dim.textLeftLocal ? localToSheet(ref.view, dim.textLeft) : { ...dim.textLeft }
   }
@@ -965,7 +998,7 @@ export function createDimensionCore(deps, ctx) {
   function diameterTextLeftSheetClamped(dim) {
     const tl = diameterTextLeftSheet(dim)
     if (!tl) return null
-    const ref = resolveDimRef(dim.refs?.[0])
+    const ref = diameterRefOf(dim)
     return ref ? clampDiameterLeaderTextLeft(ref, tl, dim.customText || '') : tl
   }
 
@@ -1237,22 +1270,21 @@ export function createDimensionCore(deps, ctx) {
         ? buildCenterMarkGroupGeometry((dim.refs || []).map(resolveDimRef), !!dim.groupCenter)
         : buildCenterMarkGeometry(resolveDimRef(dim.refs[0]))
     } else if (dim.type === 'diameter') {
-      if (dim.diameterMode === 'leader' && dim.textLeft) {
-        const ref = resolveDimRef(dim.refs[0])
-        // textLeftLocal:局部坐标(新版);缺省视为旧数据的图纸绝对坐标。
-        // 视图缩放后折点→圆心的角度会变,按换算后的折点重算瞄准角
-        const tl = dim.textLeftLocal ? localToSheet(ref.view, dim.textLeft) : dim.textLeft
-        const aim = diameterLeaderAim(ref, tl, dim.customText || '')
-        geometry = buildDiameterLeaderGeometry(ref, tl, aim ?? dim.leaderAngle,
-          dim.customText || '')
-      } else if (dim.diameterMode === 'bolt-circle' && dim.groupRefs) {
-        // 孔组虚线分度圆:由孔组各孔实时还原分度圆(换型号后自动跟随)
-        const ref = buildBoltCircleRef(dim.groupRefs)
-        if (ref) geometry = buildDiameterGeometry(ref, dim.leaderAngle, dim.leaderLength,
-          dim.textSlide || 0)
-      } else {
-        geometry = buildDiameterGeometry(resolveDimRef(dim.refs[0]), dim.leaderAngle, dim.leaderLength,
-          dim.textSlide || 0)
+      // 圆引用统一走 diameterRefOf:分度圆标注(有 groupRefs)由孔组各孔实时
+      // 还原合成圆(换型号后自动跟随),其余取单边线
+      const ref = diameterRefOf(dim)
+      if (ref) {
+        if (dim.diameterMode === 'leader' && dim.textLeft) {
+          // textLeftLocal:局部坐标(新版);缺省视为旧数据的图纸绝对坐标。
+          // 视图缩放后折点→圆心的角度会变,按换算后的折点重算瞄准角
+          const tl = dim.textLeftLocal ? localToSheet(ref.view, dim.textLeft) : dim.textLeft
+          const aim = diameterLeaderAim(ref, tl, dim.customText || '')
+          geometry = buildDiameterLeaderGeometry(ref, tl, aim ?? dim.leaderAngle,
+            dim.customText || '')
+        } else {
+          geometry = buildDiameterGeometry(ref, dim.leaderAngle, dim.leaderLength,
+            dim.textSlide || 0)
+        }
       }
     } else if (dim.type === 'angle') {
       // points 模式的 refs 是"点引用"(顶点在前),不走 resolveDimRef 取边线
@@ -1334,10 +1366,8 @@ export function createDimensionCore(deps, ctx) {
         dim.offset = getLinearOffsetFromMouse(first, mousePos)
       }
     } else if (dim.type === 'diameter') {
-      // 分度圆直径:引用的是孔组各孔而非单边线,ref 需由 groupRefs 实时还原
-      const ref = dim.diameterMode === 'bolt-circle' && dim.groupRefs
-        ? buildBoltCircleRef(dim.groupRefs)
-        : resolveDimRef(dim.refs[0])
+      // 分度圆直径(有 groupRefs)由孔组实时还原,统一走 diameterRefOf
+      const ref = diameterRefOf(dim)
       if (!ref) return
       const circ = toCircle(ref.seg)
       if (!circ) return
@@ -1408,10 +1438,8 @@ export function createDimensionCore(deps, ctx) {
     if (!dim || !mousePos) return
 
     if (dim.type === 'diameter' && dim.diameterMode !== 'leader') {
-      // 分度圆直径:ref 由 groupRefs 实时还原
-      const ref = dim.diameterMode === 'bolt-circle' && dim.groupRefs
-        ? buildBoltCircleRef(dim.groupRefs)
-        : resolveDimRef(dim.refs?.[0])
+      // 分度圆直径(有 groupRefs)由孔组实时还原,统一走 diameterRefOf
+      const ref = diameterRefOf(dim)
       const circ = ref ? toCircle(ref.seg) : null
       if (!circ || !ref.view) return
       const angle = dim.leaderAngle ?? -Math.PI / 4
@@ -1483,6 +1511,7 @@ export function createDimensionCore(deps, ctx) {
   return {
     // 几何构建
     getCircleCenterSheet,
+    buildBoltCircleRef,
     getLinearOffsetFromMouse,
     getParallelOffsetFromMouse,
     getCenterOffsetFromMouse,

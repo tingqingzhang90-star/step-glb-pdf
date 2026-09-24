@@ -383,7 +383,7 @@ def _align_seg_direction(base_seg, target_seg):
 
 
 def rebind_annotation(ann, base_refs, ctx, target_profile,
-                      view_placements, match_cache):
+                      view_placements, match_cache, group_refs=None):
     """重绑单条标注
 
     Args:
@@ -447,8 +447,13 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
         return {"status": "motor", "reason": "",
                 "segs": [seg_min, seg_max], "views": [placement, placement]}
 
+    # 孔组引用(分度圆直径标注):按各孔边线匹配,渲染端再合成 Bolt 圆
+    ref_entries = group_refs if ann.get("groupRefs") and group_refs else base_refs
+    if not ref_entries:
+        return {"status": "unmatched", "reason": "标注无引用边线(refs 为空)",
+                "segs": [], "views": []}
     segs, views = [], []
-    for entry in base_refs:
+    for entry in ref_entries:
         if "error" in entry:
             return {"status": "unmatched", "reason": entry["error"],
                     "segs": [], "views": []}

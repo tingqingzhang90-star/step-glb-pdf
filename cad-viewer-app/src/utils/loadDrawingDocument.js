@@ -31,7 +31,8 @@ export function parseDrawingDocument(raw) {
   const viewIds = new Set(views.map(v => v.id))
   const annotationsRaw = doc.annotations || []
   const dimensions = annotationsRaw
-    .filter(d => (d.refs || []).every(r => viewIds.has(r.viewId)))
+    .filter(d => (d.refs || []).every(r => viewIds.has(r.viewId))
+      && (d.groupRefs || []).every(r => viewIds.has(r.viewId)))
     .map(d => ({ ...d }))
   const droppedAnnotations = annotationsRaw.length - dimensions.length
 

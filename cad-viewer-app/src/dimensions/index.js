@@ -178,7 +178,32 @@ export function createDimEngine(deps) {
         }
       }
     }
-    return best ? makeEdgeRef(best.view, best.idx, best.type, best.seg) : null
+    return best ? { ...makeEdgeRef(best.view, best.idx, best.type, best.seg), d: best.d } : null
+  }
+
+  /**
+   * 几何命中已放置孔组的分度圆(虚线圆),与 pickCircleNear 同一算法骨架。
+   * 分度圆的 DOM 命中带(.dim-bolt-hit)在标注工具下让路给孔/边线,虚线本身
+   * 只有 1px 极难点中;这里按"点到圆周距离 ≤ tolerance"几何判定。
+   * 返回 { dim, ref, circle, d }:ref 为分度圆的合成 edgeRef(局部坐标 seg + view,
+   * 可直接喂直径/中心标记的几何构建),circle 为图纸坐标 {x,y,r};未命中返回 null。
+   */
+  function pickBoltCircleNear(mousePos) {
+    if (!mousePos) return null
+    let best = null
+    for (const dim of dimensions.value) {
+      if (dim.type !== 'center-mark' || !(dim.group || dim.groupCenter)) continue
+      const ref = core.buildBoltCircleRef(dim.refs)
+      if (!ref || !ref.view) continue
+      const scale = ref.view.scale || 1
+      const tolerance = Math.max(6, 12 / scale)   // ≈屏幕 12px,与 pickCircleNear 一致
+      const c = getSheetPoint(ref.view, ref.seg.cx, ref.seg.cy)
+      const r = ref.seg.r * scale
+      const d = Math.abs(Math.hypot(mousePos.x - c.x, mousePos.y - c.y) - r)
+      if (d > tolerance) continue
+      if (!best || d < best.d) best = { dim, ref, circle: { x: c.x, y: c.y, r }, d }
+    }
+    return best
   }
 
   /** 加入/移出一个孔;满 3 个孔起出预览(分度圆 + 各孔径向十字) */
@@ -381,6 +406,31 @@ export function createDimEngine(deps) {
       previewSuppressAt = null
     }
 
+    // 直径/中心标记:已放置孔组的分度圆几何命中(择近于孔)优先出预览。
+    // 分度圆 DOM 命中带在工具下让路给孔、虚线仅 1px 极难点中;鼠标贴着分度圆时
+    // 按"分度圆"出预览——直径:贯穿线/引线跟随鼠标,中心标记:孔组中心的十字,
+    // 与 mousedown 的放置行为完全一致(同一择近判定)。
+    // 孔组选孔中(dimPending)不干扰:保留已选孔的分度圆+径向十字预览
+    if ((activeTool.value === 'diameter' || activeTool.value === 'center-mark') && !dimPending.value) {
+      const bolt = pickBoltCircleNear(mousePos)
+      if (bolt) {
+        const hole = pickCircleNear(mousePos)
+        if (!hole || bolt.d <= hole.d) {
+          // 清边线高亮:预览按分度圆,高亮孔会造成"预览/高亮"分裂
+          if (dimHoveredEdge.value) dimHoveredEdge.value = null
+          if (activeTool.value === 'diameter') {
+            dimPreview.value = diameterSubMode.value === 'leader'
+              ? core.buildDiameterLeaderPreview(bolt.ref, mousePos)
+              : core.previewBuilders.diameter(bolt.ref, mousePos)
+          } else {
+            dimPreview.value = core.buildCenterMarkGroupGeometry(
+              (bolt.dim.refs || []).map(resolveDimRef), true)
+          }
+          return
+        }
+      }
+    }
+
     const P = core.previewBuilders
 
     if (activeTool.value === 'motor-envelope') {
@@ -519,12 +569,23 @@ export function createDimEngine(deps) {
     // 直径工具下点孔组的虚线分度圆:对分度圆做直径标注(显示其 PCD)。
     // 分度圆不是真实边线,命中带 .dim-bolt-hit 挂在孔组标注上,由这里转成
     // 直径标注(引用孔组各孔,换型号后分度圆变化、直径随之跟随)。
+    // 子模式与预览参数跟 hover 预览一致:引线模式用预览的 textLeft,
+    // 直线模式用预览角度,所见即所得
     if (activeTool.value === 'diameter' && dim.type === 'center-mark'
         && dim.group && (dim.refs || []).length >= 3) {
-      const id = core.placeDiameterOnBoltCircleDim(dim.refs)
+      const pt = getSvgMousePoint(event)
+      const pv = dimPreview.value
+      const id = core.placeDiameterOnBoltCircleDim(dim.refs,
+        diameterSubMode.value === 'leader'
+          ? {
+              mode: 'leader',
+              textLeft: pv?.textLeft || (pt ? { x: pt.x - 60, y: pt.y } : null),
+              leaderAngle: pv?.leaderAngle
+            }
+          : { leaderAngle: pv?.leaderAngle })
       if (id) {
         selectDim(id)
-        suppressPreviewAfterPlace(getSvgMousePoint(event))
+        suppressPreviewAfterPlace(pt)
       }
       return
     }
@@ -656,6 +717,8 @@ export function createDimEngine(deps) {
     commitCenterMarkGroup,
     onCenterMarkGroupPick,
     pickCircleNear,
+    pickBoltCircleNear,
+    suppressPreviewAfterPlace,
     clearSelection,
     // 供模板/删除视图时清理标注
     clearDimState: clearSelection

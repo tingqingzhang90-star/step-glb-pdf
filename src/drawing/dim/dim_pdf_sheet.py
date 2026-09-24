@@ -397,7 +397,7 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
 
     unmatched = 0
     for item in rebound:
-        if item.get("status") == "unmatched":
+        if item.get("status") == "unmatched" or not item.get("segs"):
             unmatched += 1
             continue
         ann = item["annotation"]

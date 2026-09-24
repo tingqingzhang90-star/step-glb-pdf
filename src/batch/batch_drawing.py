@@ -168,6 +168,7 @@ def _write_model_source(model_code, template_doc, placements, palette, out_dir):
     annotations = [
         a for a in template_doc.get("annotations", [])
         if all(r.get("viewId") in view_ids for r in a.get("refs", []))
+        and all(r.get("viewId") in view_ids for r in a.get("groupRefs") or [])
     ]
     doc = {
         "schema_version": "1.0",
@@ -248,7 +249,7 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
     for item in base_refs:
         r = dim_rebind.rebind_annotation(
             item["dim"], item["refs"], ctx, target_profile,
-            placements, match_cache)
+            placements, match_cache, group_refs=item.get("group_refs"))
         r["annotation"] = item["dim"]
         rebound.append(r)
 

@@ -223,10 +223,18 @@ def build_dim_primitives(ann, segs, views):
             return None
         prims = builder(ann, segs, views)
     elif dtype == "diameter":
-        if ann.get("diameterMode") == "leader":
-            prims = _diameter_leader(ann, segs[0], views[0])
+        if ann.get("groupRefs"):
+            # 分度圆直径:segs 是匹配到的各孔圆,先合成 Bolt 圆再构建
+            seg = _bolt_circle_seg(segs, views)
+            view0 = views[0] if views else None
+            if seg is None or view0 is None:
+                return None
         else:
-            prims = _diameter(ann, segs[0], views[0])
+            seg, view0 = segs[0], views[0]
+        if ann.get("diameterMode") == "leader":
+            prims = _diameter_leader(ann, seg, view0)
+        else:
+            prims = _diameter(ann, seg, view0)
     elif dtype == "angle":
         prims = (_angle_points(ann, segs, views)
                  if ann.get("angleMode") == "points" else _angle(ann, segs, views))
@@ -475,6 +483,26 @@ def _linear_circle_edge(ann, segs, views):
     }
 
 
+def _bolt_circle_seg(segs, views):
+    """孔组各孔圆 → 分度圆合成 seg,与前端 buildBoltCircleRef 同公式:
+    圆心取各孔心均值,半径取各孔心到圆心的平均距离。要求同一视图。"""
+    view0 = views[0] if views else None
+    circles = []
+    for seg, view in zip(segs, views):
+        circ = to_circle(seg)
+        if not circ or view is not view0:
+            return None
+        circles.append(circ)
+    if len(circles) < BOLT_MIN_CIRCLES:
+        return None
+    cx = sum(c["cx"] for c in circles) / len(circles)
+    cy = sum(c["cy"] for c in circles) / len(circles)
+    r = sum(math.hypot(c["cx"] - cx, c["cy"] - cy) for c in circles) / len(circles)
+    if r < 1e-6:
+        return None
+    return {"type": "circle", "cx": cx, "cy": cy, "r": r}
+
+
 def _diameter(ann, seg, view):
     circ = to_circle(seg)
     if not circ or not view:
@@ -538,6 +566,10 @@ def _diameter_leader(ann, seg, view):
 
     # 文字左端位置(前端保存的 textPos)
     text_left = ann.get("textLeft") or {"x": 0, "y": 0}
+    if ann.get("textLeftLocal"):
+        # 前端存视图局部坐标(sheetToLocal 的逆变换),换算回图纸坐标
+        text_left = {"x": view["x"] + text_left.get("x", 0) * view["scale"],
+                     "y": view["y"] + text_left.get("y", 0) * view["scale"]}
     text_x = text_left.get("x", 0)
     text_y = text_left.get("y", 0)
 
@@ -575,6 +607,12 @@ def _diameter_leader(ann, seg, view):
 
     # 折点 = 水平线右端
     bend_pt = text_line_end
+
+    # 与前端 buildDiameterLeaderGeometry 一致:瞄准角按"折点→圆心"重算,
+    # 保存的 leaderAngle 只在缺 textLeft 时作回退(拖动文字后保存值会过时)
+    if ann.get("textLeft"):
+        angle = math.atan2(cy - bend_pt[1], cx - bend_pt[0])
+        d = (math.cos(angle), math.sin(angle))
 
     # 折点到圆的射线交点
     dx = bend_pt[0] - cx

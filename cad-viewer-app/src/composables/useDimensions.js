@@ -44,7 +44,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
 
   const {
     toggleTool, onDimEdgeSelect, onMotorEnvelopePick, updateDimPreviewAt, commitPendingLinear,
-    commitAnglePoints, commitCenterMarkGroup, onCenterMarkGroupPick, pickCircleNear,
+    commitAnglePoints, commitCenterMarkGroup, onCenterMarkGroupPick, pickCircleNear, pickBoltCircleNear,
+    suppressPreviewAfterPlace,
     onDimMouseDown, onDimTextMouseDown, onDimExtensionHandleDown, onDimDragMove,
     onGlobalDimMouseUp, onKeyDown, clearDimState: clearDimToolState
   } = createDimEngine({
@@ -181,6 +182,36 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
   /** SVG mousedown:标注工具激活时的边线选择/放置/取消 */
   function onSvgMouseDown(event) {
     if (!activeTool.value) return
+    // 直径/中心标记:先做分度圆几何择近命中(与 hover 预览同一判定)。
+    // 必须在 DOM 命中之前——孔都长在分度圆周上,DOM 命中带会先抓到孔,
+    // 否则"预览按分度圆、点击却落在孔"行为分裂。
+    // 命中分度圆=对分度圆做直径标注(PCD)/在孔组中心打十字,引用整组孔,
+    // 换型号后位置自动跟随
+    if (activeTool.value === 'diameter' || activeTool.value === 'center-mark') {
+      const pt = coords.eventToSheetPoint(event)
+      const bolt = pickBoltCircleNear(pt)
+      if (bolt) {
+        const hole = pickCircleNear(pt)
+        if (!hole || bolt.d <= hole.d) {
+          let id
+          if (activeTool.value === 'diameter') {
+            const pv = dimPreview.value
+            id = dimCore.placeDiameterOnBoltCircleDim(bolt.dim.refs,
+              diameterSubMode.value === 'leader'
+                ? { mode: 'leader', textLeft: pv?.textLeft || (pt ? { x: pt.x - 60, y: pt.y } : null),
+                    leaderAngle: pv?.leaderAngle }
+                : { leaderAngle: pv?.leaderAngle })
+          } else {
+            id = dimCore.placeCenterMarkAtGroupCenter(bolt.dim.refs)
+          }
+          if (id) {
+            selectDim(id)
+            suppressPreviewAfterPlace(pt)
+          }
+          return
+        }
+      }
+    }
     const target = document.elementFromPoint(event.clientX, event.clientY)
     const hit = target && target.closest ? target.closest('[data-dim-view]') : null
     if (hit) {
@@ -194,25 +225,23 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     }
     // 中心夹角:三点选齐后点空白按当前半径落位(未选齐则继续走清空分支)
     if (activeTool.value === 'angle' && commitAnglePoints()) return
-    // 孔组中心标记:没落到命中元素上时,先按鼠标位置就近找孔;
-    // 附近没有孔才当落位处理(孔数不够则清空重来)
-    if (activeTool.value === 'center-mark' && centerSubMode.value === 'group') {
-      const near = pickCircleNear(coords.eventToSheetPoint(event))
-      if (near) {
-        onCenterMarkGroupPick(near)
+    // 中心标记(单孔/孔组共用):DOM 命中带未覆盖时按几何兜底就近找孔
+    // (分度圆已在函数开头择近处理,这里只管孔)
+    if (activeTool.value === 'center-mark') {
+      const pt = coords.eventToSheetPoint(event)
+      const hole = pickCircleNear(pt)
+      if (hole) {
+        if (centerSubMode.value === 'group') {
+          onCenterMarkGroupPick(hole)
+          return
+        }
+        const id = dimCore.placeCenterMarkDim(hole)
+        if (id) selectDim(id)
         return
       }
-      // 附近没有孔:保留已选的孔,避免点偏一下就把选好的清掉(要清按 Esc)
-      if (commitCenterMarkGroup()) return
-      return
-    }
-    // 单孔十字:点孔心时命中带只在圆周、分度圆虚线又恰穿过孔心,elementFromPoint
-    // 常命中不到孔,这里按几何就近找最近的小孔直接放置(附近无孔则继续走清空)。
-    if (activeTool.value === 'center-mark' && centerSubMode.value === 'single') {
-      const near = pickCircleNear(coords.eventToSheetPoint(event))
-      if (near) {
-        const id = dimCore.placeCenterMarkDim(near)
-        if (id) selectDim(id)
+      // 孔与分度圆都没命中:孔组模式保留已选的孔(要清按 Esc),选够了就地落位
+      if (centerSubMode.value === 'group') {
+        if (commitCenterMarkGroup()) return
         return
       }
     }
@@ -294,6 +323,23 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
         }
         updateDimPreviewAt(event)
         return
+      }
+    }
+    // 直径/中心标记工具:分度圆几何 hover(与 mousedown 同一"择近"判定)。
+    // DOM 命中带让路给孔,分度圆虚线 1px 极难点中,靠几何兜底高亮孔组标注
+    // (虚线变蓝给出瞄准反馈),预览由引擎按分度圆生成(择近);
+    // 鼠标更靠近孔时让位给孔的既有 DOM hover/预览通道
+    if (activeTool.value === 'center-mark' || activeTool.value === 'diameter') {
+      const pt = coords.eventToSheetPoint(event)
+      const bolt = pickBoltCircleNear(pt)
+      if (bolt) {
+        const hole = pickCircleNear(pt)
+        if (!hole || bolt.d <= hole.d) {
+          dimHoveredId.value = String(bolt.dim.id)
+          if (dimHoveredEdge.value) dimHoveredEdge.value = null
+          updateDimPreviewAt(event)
+          return
+        }
       }
     }
     if (dimHoveredEdge.value) dimHoveredEdge.value = null

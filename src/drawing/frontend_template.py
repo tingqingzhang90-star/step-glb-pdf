@@ -134,29 +134,37 @@ def save_base_cache(path, base):
         pass
 
 
+def _resolve_ref(ref, base_views):
+    """单个引用 → {"ref", "view", "seg"} 或 {"ref", "error"}"""
+    entry = {"ref": ref}
+    view = base_views.get(ref.get("viewId"))
+    if view is None:
+        entry["error"] = f"视图不存在: {ref.get('viewId')}"
+        return entry
+    segs = (view["hidden_edges"] if ref.get("type") == "hiddenEdges"
+            else view["edges"])
+    idx = ref.get("idx")
+    if not isinstance(idx, int) or not (0 <= idx < len(segs)):
+        entry["error"] = f"基准边线下标越界: idx={idx}"
+        return entry
+    entry["view"] = view
+    entry["seg"] = segs[idx]
+    return entry
+
+
 def resolve_base_refs(template_doc, base_views):
     """还原每条标注引用的基准边线(下标 → 边线对象)
 
     Returns:
-        list: 每项 {"dim", "refs": [{"ref", "view", "seg"}或{"ref", "error"}]}
+        list: 每项 {"dim", "refs": [...], "group_refs": [...]}
+        group_refs 是孔组引用(分度圆直径标注的 groupRefs),与 refs 同构
     """
     resolved = []
     for ann in template_doc.get("annotations", []):
-        item = {"dim": ann, "refs": []}
+        item = {"dim": ann, "refs": [], "group_refs": []}
         for ref in ann.get("refs", []):
-            entry = {"ref": ref}
-            view = base_views.get(ref.get("viewId"))
-            if view is None:
-                entry["error"] = f"视图不存在: {ref.get('viewId')}"
-            else:
-                segs = (view["hidden_edges"] if ref.get("type") == "hiddenEdges"
-                        else view["edges"])
-                idx = ref.get("idx")
-                if not isinstance(idx, int) or not (0 <= idx < len(segs)):
-                    entry["error"] = f"基准边线下标越界: idx={idx}"
-                else:
-                    entry["view"] = view
-                    entry["seg"] = segs[idx]
-            item["refs"].append(entry)
+            item["refs"].append(_resolve_ref(ref, base_views))
+        for ref in ann.get("groupRefs") or []:
+            item["group_refs"].append(_resolve_ref(ref, base_views))
         resolved.append(item)
     return resolved
