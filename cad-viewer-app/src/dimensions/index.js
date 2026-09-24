@@ -292,9 +292,11 @@ export function createDimEngine(deps) {
         if (diameterSubMode.value === 'leader') {
           const mousePos = getSvgMousePoint(event)
           const preview = dimPreview.value
+          // 回退偏移"鼠标左侧60屏幕px"按画布缩放折算(sheet单位)
+          const su = core.sheetPerScreenPx()
           id = core.placeDiameterLeaderDim(
             edgeRef,
-            preview?.textLeft || (mousePos ? { x: mousePos.x - 60, y: mousePos.y } : { x: 0, y: 0 }),
+            preview?.textPos || (mousePos ? { x: mousePos.x - 60 * su, y: mousePos.y } : { x: 0, y: 0 }),
             preview?.leaderAngle || -Math.PI / 4
           )
         } else {
@@ -595,11 +597,13 @@ export function createDimEngine(deps) {
       const pt = getSvgMousePoint(event)
       const pv = dimPreview.value
       record && record()
+      // 回退偏移"鼠标左侧60屏幕px"按画布缩放折算(sheet单位)
+      const su = core.sheetPerScreenPx()
       const id = core.placeDiameterOnBoltCircleDim(dim.refs,
         diameterSubMode.value === 'leader'
           ? {
               mode: 'leader',
-              textLeft: pv?.textLeft || (pt ? { x: pt.x - 60, y: pt.y } : null),
+              textLeft: pv?.textPos || (pt ? { x: pt.x - 60 * su, y: pt.y } : null),
               leaderAngle: pv?.leaderAngle
             }
           : { leaderAngle: pv?.leaderAngle })
@@ -619,7 +623,8 @@ export function createDimEngine(deps) {
     // 旧数据可能存的是限位外的远点,而显示已收紧,快照必须与显示一致
     if (dim.type === 'diameter') {
       if (dim.diameterMode === 'leader') {
-        drag.startTextLeft = core.diameterTextLeftSheetClamped(dim)
+        // 快照限位与拖拽一致,用屏幕语义上限
+        drag.startTextLeft = core.diameterTextLeftSheetClamped(dim, core.leaderMaxLenSheet())
       } else {
         drag.startLeaderAngle = dim.leaderAngle ?? -Math.PI / 4
         drag.startLeaderLength = dim.leaderLength ?? 30

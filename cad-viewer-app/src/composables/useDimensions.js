@@ -32,6 +32,8 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
     edgeRefData: coords.edgeRefData,
     getSvgMousePoint: coords.eventToSheetPoint,
     resolveDimRef: coords.resolveDimRef,
+    // 屏幕 px → 图纸单位:引线预览偏移/限位等"屏幕 px 语义"常量的换算用
+    screenPxToSheet: coords.screenPxToSheet,
     // 电机包络的 refs 只记 viewId(idx=-1),按 id 取视图,不能走 resolveDimRef
     findViewById: (id) => placedViews.value.find(v => v.id === id),
     getMotorEnvelope
@@ -236,9 +238,11 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
           let id
           if (activeTool.value === 'diameter') {
             const pv = dimPreview.value
+            // 回退偏移"鼠标左侧60屏幕px"按画布缩放折算(sheet单位)
+            const su = dimCore.sheetPerScreenPx()
             id = dimCore.placeDiameterOnBoltCircleDim(bolt.dim.refs,
               diameterSubMode.value === 'leader'
-                ? { mode: 'leader', textLeft: pv?.textLeft || (pt ? { x: pt.x - 60, y: pt.y } : null),
+                ? { mode: 'leader', textLeft: pv?.textPos || (pt ? { x: pt.x - 60 * su, y: pt.y } : null),
                     leaderAngle: pv?.leaderAngle }
                 : { leaderAngle: pv?.leaderAngle })
           } else {

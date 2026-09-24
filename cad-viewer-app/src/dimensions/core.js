@@ -48,7 +48,8 @@ export function createDimensionCore(deps, ctx) {
     getSvgMousePoint,
     resolveDimRef,
     findViewById,
-    getMotorEnvelope
+    getMotorEnvelope,
+    screenPxToSheet
   } = deps
 
   const formatMm = (value) => Number(value || 0).toFixed(1).replace(/\.0$/, '')
@@ -614,7 +615,7 @@ export function createDimensionCore(deps, ctx) {
       if (!textLeft) return
       // 放置时以折点→圆心的瞄准角为准(即使预览缺失也能正确落位)
       const angle = diameterLeaderAim(ref, textLeft) ?? opts.leaderAngle ?? -Math.PI / 4
-      const geometry = buildDiameterLeaderGeometry(ref, textLeft, angle)
+      const geometry = buildDiameterLeaderGeometry(ref, textLeft, angle, '', leaderMaxLenSheet())
       if (!geometry) return
       const id = nextId()
       pushDim({
@@ -886,7 +887,7 @@ export function createDimensionCore(deps, ctx) {
     return dim.textLeftLocal ? localToSheet(ref.view, dim.textLeft) : { ...dim.textLeft }
   }
 
-  function buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle = -Math.PI / 4, customText = '') {
+  function buildDiameterLeaderGeometry(edgeRef, textLeft, leaderAngle = -Math.PI / 4, customText = '', maxLenSheet) {
     if (!edgeRef) return null
     const { seg, view } = edgeRef
     const circ = toCircle(seg)
@@ -902,8 +903,9 @@ export function createDimensionCore(deps, ctx) {
     const text = (customText && customText.trim()) ? customText : `ø${formatMm(mmVal)}`
     const textW = measureTextWidth(text) + 4   // 小余量,搁置线略长于文字
 
-    // 引线长度限位:文字放得太远时把整个标注拉近圆(预览/拖拽/渲染统一生效)
-    textLeft = clampDiameterLeaderTextLeft(edgeRef, textLeft, customText)
+    // 引线长度限位:文字放得太远时把整个标注拉近圆(预览/拖拽/渲染统一生效)。
+    // maxLenSheet 由交互时机传入(屏幕语义);渲染路径不传,用固定兜底。
+    textLeft = clampDiameterLeaderTextLeft(edgeRef, textLeft, customText, maxLenSheet)
 
     // 文字左端(用户拖拽/鼠标位置),水平向右延伸
     const textX = textLeft.x
@@ -981,13 +983,25 @@ export function createDimensionCore(deps, ctx) {
     return Math.atan2(cy - bendY, cx - bendX)
   }
 
-  // 引线折点距圆周的最大距离(px):超过则把文字/折点整体拉近圆,避免拖出超长折线
+  // 引线折点距圆周的最大距离(屏幕 px 语义):超过则把文字/折点整体拉近圆,
+  // 避免拖出超长折线。注意这是"屏幕 px"而不是图纸单位——编辑器画布约
+  // 2.5~3.5 px/mm,若直接当 sheet 单位用,限位/偏移会被放大 3 倍,小孔的
+  // 引线能拉到 120mm 外、甩出图框。交互时机(预览/放置/拖拽)用
+  // leaderMaxLenSheet() 按当前缩放换算;渲染路径(buildDimGeometry)不传
+  // maxLenSheet,用固定 120 图纸单位兜底,避免缩放时已放置标注视觉跳动。
   const LEADER_MAX_LENGTH = 120
 
-  /** 引线长度限位:折点(文字线右端)距圆心超过 r + LEADER_MAX_LENGTH 时,
+  /** 交互时机的引线限位上限(图纸单位)= 屏幕 px 上限 ÷ 当前 px/单位 */
+  function leaderMaxLenSheet() {
+    const su = screenPxToSheet ? screenPxToSheet() : 1
+    return LEADER_MAX_LENGTH * (su > 0 && isFinite(su) ? su : 1)
+  }
+
+  /** 引线长度限位:折点(文字线右端)距圆心超过 r + 上限时,
    *  沿"折点→圆心"方向把整个标注(文字+折点)拉近圆。返回 clamp 后的
-   *  textLeft(图纸坐标);在限位内原样返回。预览/放置/拖拽/渲染统一走这里。 */
-  function clampDiameterLeaderTextLeft(edgeRef, textLeft, customText = '') {
+   *  textLeft(图纸坐标);在限位内原样返回。预览/放置/拖拽传 maxLenSheet
+   *  (屏幕语义),渲染走默认固定上限。 */
+  function clampDiameterLeaderTextLeft(edgeRef, textLeft, customText = '', maxLenSheet) {
     if (!edgeRef || !textLeft) return textLeft
     const { seg, view } = edgeRef
     const circ = toCircle(seg)
@@ -1001,7 +1015,7 @@ export function createDimensionCore(deps, ctx) {
     const dx = textLeft.x + w - cx
     const dy = textLeft.y + LEADER_TEXT_GAP - cy
     const dist = Math.hypot(dx, dy)
-    const maxDist = r + LEADER_MAX_LENGTH
+    const maxDist = r + (maxLenSheet ?? LEADER_MAX_LENGTH)
     if (dist <= maxDist || dist < 1e-6) return textLeft
     const k = maxDist / dist
     return {
@@ -1012,26 +1026,27 @@ export function createDimensionCore(deps, ctx) {
 
   /** 读取引线直径标注的文字左端(图纸坐标)并做引线长度限位。
    *  供拖拽快照用:数据可能是限位外的旧值,显示已收紧,快照必须与显示一致。 */
-  function diameterTextLeftSheetClamped(dim) {
+  function diameterTextLeftSheetClamped(dim, maxLenSheet) {
     const tl = diameterTextLeftSheet(dim)
     if (!tl) return null
     const ref = diameterRefOf(dim)
-    return ref ? clampDiameterLeaderTextLeft(ref, tl, dim.customText || '') : tl
+    return ref ? clampDiameterLeaderTextLeft(ref, tl, dim.customText || '', maxLenSheet) : tl
   }
 
   function buildDiameterLeaderPreview(edgeRef, mousePos) {
     if (!edgeRef || !mousePos) return null
-    // 文字左端放在鼠标位置左侧一点,引线从折点折向圆
-    const textLeft = { x: mousePos.x - 60, y: mousePos.y }
+    // 文字左端放在鼠标位置左侧一点(60 屏幕 px,按画布缩放折算),引线从折点折向圆
+    const su = screenPxToSheet ? screenPxToSheet() : 1
+    const textLeft = { x: mousePos.x - 60 * su, y: mousePos.y }
     const angle = diameterLeaderAim(edgeRef, textLeft)
     if (angle == null) return null
-    return buildDiameterLeaderGeometry(edgeRef, textLeft, angle)
+    return buildDiameterLeaderGeometry(edgeRef, textLeft, angle, '', leaderMaxLenSheet())
   }
 
   function placeDiameterLeaderDim(edgeRef, textLeft, leaderAngle) {
     // 放置时以折点→圆心的瞄准角为准(即使预览缺失也能正确落位)
     const angle = diameterLeaderAim(edgeRef, textLeft) ?? leaderAngle
-    const geometry = buildDiameterLeaderGeometry(edgeRef, textLeft, angle)
+    const geometry = buildDiameterLeaderGeometry(edgeRef, textLeft, angle, '', leaderMaxLenSheet())
     if (!geometry) return
     const id = nextId()
     pushDim({
@@ -1390,14 +1405,16 @@ export function createDimensionCore(deps, ctx) {
       if (!circ) return
       if (dim.diameterMode === 'leader') {
         // 引线模式:拖拽更新文字位置(存局部坐标),引线角随新折点重算(折点→圆心)。
-        // 有抓取快照时按偏移跟手,否则退回"文字左端=鼠标左侧60px"的落位语义
+        // 有抓取快照时按偏移跟手,否则退回"文字左端=鼠标左侧60屏幕px"的落位语义
+        const su = screenPxToSheet ? screenPxToSheet() : 1
         const s0 = (drag && drag.startTextLeft)
-          || { x: mousePos.x - 60, y: mousePos.y }
+          || { x: mousePos.x - 60 * su, y: mousePos.y }
         const dx = drag && drag.startMouse ? mousePos.x - drag.startMouse.x : 0
         const dy = drag && drag.startMouse ? mousePos.y - drag.startMouse.y : 0
-        // 限位:拖得太远时把文字拉近圆(数据也收敛到限位内,显示与数据一致)
+        // 限位:拖得太远时把文字拉近圆(数据也收敛到限位内,显示与数据一致)。
+        // 交互时机用屏幕语义上限,与预览/放置一致
         const tlSheet = clampDiameterLeaderTextLeft(ref, { x: s0.x + dx, y: s0.y + dy },
-          dim.customText || '')
+          dim.customText || '', leaderMaxLenSheet())
         dim.textLeft = sheetToLocal(ref.view, tlSheet)
         dim.textLeftLocal = true
         const aim = diameterLeaderAim(ref, tlSheet, dim.customText || '')
@@ -1569,6 +1586,9 @@ export function createDimensionCore(deps, ctx) {
     updateDimExtensionDrag,
     diameterTextLeftSheet,
     diameterTextLeftSheetClamped,
+    // 屏幕语义常量的换算:放置回退偏移(鼠标左侧60屏幕px)、拖拽快照限位用
+    leaderMaxLenSheet,
+    sheetPerScreenPx: () => (screenPxToSheet ? screenPxToSheet() : 1),
     previewBuilders
   }
 }

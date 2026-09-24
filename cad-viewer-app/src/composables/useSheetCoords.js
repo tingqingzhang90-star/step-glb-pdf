@@ -14,6 +14,18 @@ export function useSheetCoords({ placedViews }) {
     return { x: pt.x, y: pt.y }
   }
 
+  /** 1 屏幕 px = 多少图纸单位(sheet mm):由 SVG CTM 实时反推。
+   *  供"屏幕 px 语义"的 UI 常量(引线预览偏移 -60px、引线限位 120px 等)
+   *  换算到图纸坐标——这些常量原先直接当 sheet 单位用,在 ~3px/mm 的画布上
+   *  会被放大 3 倍,导致折线直径的文字/引线被甩到几十毫米外。 */
+  function screenPxToSheet() {
+    const svg = svgRef.value
+    if (!svg) return 1
+    const ctm = svg.getScreenCTM()
+    if (!ctm || !ctm.a || !isFinite(ctm.a) || ctm.a <= 0) return 1
+    return 1 / ctm.a
+  }
+
   /** 指针是否落在图纸卡范围内 */
   function isPointerOverSheet(event) {
     const svg = svgRef.value
@@ -103,6 +115,6 @@ export function useSheetCoords({ placedViews }) {
   return {
     svgRef, eventToSheetPoint, isPointerOverSheet, findViewAtPoint, viewSheetRect,
     getEdgeByRef, getViewDisplayScale, getSheetPoint, getViewMmScale,
-    edgeRefData, makeEdgeRef, resolveDimRef
+    edgeRefData, makeEdgeRef, resolveDimRef, screenPxToSheet
   }
 }
