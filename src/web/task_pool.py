@@ -153,8 +153,28 @@ def _worker(kind, log_path, payload):
         except OSError:
             pass
 
-    # build_assembly 内部通过模块全局 log() 输出,替换即接管全部进度
+    def _progress(percent, stage=None, _p=log_path):
+        """进度上报:百分比 + 阶段文案写一行标记,主进程轮询时读取
+
+        每次调用只是追加一行文本(微秒级),不做同步/排序/等待,对构建
+        耗时的影响可以忽略。
+        """
+        try:
+            p = max(0.0, min(100.0, float(percent)))
+        except (TypeError, ValueError):
+            return
+        line = "[%s] %s %s" % (
+            time.strftime("%H:%M:%S"), _PROGRESS_TAG,
+            json.dumps({"p": round(p, 1), "s": stage or ""}, ensure_ascii=False))
+        try:
+            with open(_p, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError:
+            pass
+
+    # build_assembly 内部通过模块全局 log()/progress() 输出,替换即接管全部进度
     rb.log = _log
+    rb.progress = _progress
     _log("任务启动 (pid=%d, kind=%s)" % (os.getpid(), kind))
     t0 = time.time()
     try:
@@ -225,6 +245,30 @@ def _tail(path, n):
     except OSError:
         return []
     return [ln.rstrip("\r\n") for ln in lines[-n:]]
+
+
+# 进度标记:子进程写 `[时间] __PROGRESS__ {"p":42,"s":"STEP 导出"}`,
+# 主进程轮询时从日志尾部取最后一条。走日志文件而非队列/管道,是因为子进程
+# 的返回值只在任务结束时才跨进程回来,而日志文件本就用于回传实时进度,
+# 不额外引入 IPC 开销,也不影响构建本身的速度。
+_PROGRESS_TAG = "__PROGRESS__"
+# 找进度标记时向后看的日志行数(进度行之间可能夹着大量零件日志)
+_PROGRESS_SCAN_LINES = 400
+
+
+def _parse_progress(lines):
+    """日志尾部 → (percent, stage),无标记返回 (None, None)"""
+    tag = _PROGRESS_TAG
+    for ln in reversed(lines or []):
+        i = ln.find(tag)
+        if i < 0:
+            continue
+        try:
+            obj = json.loads(ln[i + len(tag):].strip())
+        except (ValueError, TypeError):
+            continue
+        return obj.get("p"), obj.get("s")
+    return None, None
 
 
 class TaskPool:
@@ -395,7 +439,11 @@ class TaskPool:
 
     # ---------- 查询 ----------
     def status(self, task_id, log_lines=80):
-        """任务快照(含日志尾部);任务不存在返回 None"""
+        """任务快照(含日志尾部与实时进度);任务不存在返回 None
+
+        快照额外给出 progress(0~100 浮点)与 message(阶段文案),供前端
+        画平滑进度条;数值取自子进程写入日志的最后一条进度标记。
+        """
         with self._lock:
             t = self._tasks.get(task_id)
             if t is None:
@@ -406,7 +454,21 @@ class TaskPool:
             snap["status"] = "running"
         snap["elapsed"] = round(
             (snap["finished_at"] or time.time()) - snap["submitted_at"], 2)
-        snap["log"] = _tail(t["log_path"], log_lines)
+        # 进度标记可能夹在零件日志之间,取比回传日志更长的尾部来定位
+        lines = _tail(t["log_path"], max(log_lines, _PROGRESS_SCAN_LINES))
+        snap["log"] = lines[-log_lines:] if log_lines and log_lines > 0 else []
+        pct, stage = _parse_progress(lines)
+        if snap["status"] == "done":
+            snap["progress"], snap["message"] = 100.0, "完成"
+        elif snap["status"] == "error":
+            snap["progress"] = pct if pct is not None else 100.0
+            snap["message"] = "失败"
+        elif pct is None:
+            # 还没写出第一条标记:排队中(未开始)或刚开始执行
+            snap["progress"] = 0.0
+            snap["message"] = "排队中" if snap["status"] == "pending" else "启动中"
+        else:
+            snap["progress"], snap["message"] = pct, (stage or "执行中")
         snap.pop("log_path", None)
         return snap
 

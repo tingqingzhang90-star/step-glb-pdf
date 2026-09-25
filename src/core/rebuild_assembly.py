@@ -64,6 +64,15 @@ def log(msg):
     print(f"[{ts}] {msg}", flush=True)
 
 
+def progress(percent, stage=None):
+    """进度上报钩子(默认空实现,直接跑脚本时静默)。
+
+    子进程侧 task_pool._worker 会把它替换成"写一行进度标记"的实现,
+    主进程轮询 /api/task/<id> 时读出来给前端画进度条。单独的命令行
+    运行不受影响——这里不做任何 IO,不会拖慢构建。
+    """
+
+
 def set_series(series_name):
     """切换当前激活系列,刷新零件目录 / 变换矩阵 / 查找路径"""
     global PARTS_DIR, MATRIX_JSON, PART_SEARCH_PATH
@@ -767,18 +776,29 @@ def step1_read_all_parts(parts_data):
     shapes = {}
     t0 = time.time()
     skipped_suppressed = 0
+    # 读取零件是全流程最耗时的一段(几十个零件 × 数百 ms),逐件上报进度,
+    # 否则前端在这一整段时间里只能看到一个静止的百分比
+    _P0, _P1 = 8.0, 46.0
+    todo = [1 for i in parts_data.values() if not i.get("suppressed", False)]
+    n_todo = max(1, len(todo))
+    n_done = 0
     for name, info in parts_data.items():
         # ★ 先检查抑制状态，被抑制的零件不需要读取（省 9s+）
         if info.get("suppressed", False):
             skipped_suppressed += 1
             continue
+        n_done += 1
         step_file = info.get("step_file", "")
         if not step_file or step_file in MISSING_PARTS:
             log(f"  ⏭ 跳过 {name} (缺失或无 step_file)")
+            progress(_P0 + (_P1 - _P0) * n_done / n_todo,
+                     f"读取零件 {n_done}/{n_todo}")
             continue
         path = resolve_part_file(step_file)
         if not os.path.exists(path):
             log(f"  ✗ 文件不存在: {path}")
+            progress(_P0 + (_P1 - _P0) * n_done / n_todo,
+                     f"读取零件 {n_done}/{n_todo}")
             continue
         t1 = time.time()
         try:
@@ -788,6 +808,8 @@ def step1_read_all_parts(parts_data):
             log(f"  ✓ {name} ← {step_file} ({elapsed*1000:.0f}ms)")
         except Exception as e:
             log(f"  ✗ 读取失败 {name}: {e}")
+        progress(_P0 + (_P1 - _P0) * n_done / n_todo,
+                 f"读取零件 {n_done}/{n_todo}")
     total = time.time() - t0
     log(f"  小计: 读取 {len(shapes)} 个, 跳过抑制 {skipped_suppressed} 个, 总耗时 {total:.2f}s")
     return shapes, total
@@ -799,6 +821,7 @@ def step2_apply_transform_and_merge(shapes, parts_data):
     from OCC.Core.BRep import BRep_Builder
     from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
     log("\n=== Step 2: 应用变换矩阵 + 合并装配体 ===")
+    progress(50.0, "合并装配体")
     t0 = time.time()
     builder = BRep_Builder()
     compound = TopoDS_Compound()
@@ -896,6 +919,7 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
     from OCC.Core.gp import gp_Trsf
 
     log("\n=== Step 3: 导出装配体 STEP (XCAF 模式,保留零件名称) ===")
+    progress(60.0, "导出 STEP")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     t0 = time.time()
 
@@ -1054,6 +1078,7 @@ def _export_assembly_brep(shape, out_path):
 def step5_export_glb(compound, out_path):
     """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB,out_path 为完整输出路径)"""
     log("\n=== Step 5: 装配体 GLB 导出 ===")
+    progress(82.0, "导出 GLB")
     import trimesh
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     stl_path = os.path.join(tempfile.gettempdir(), "assembly_tmp.stl")
@@ -1201,6 +1226,7 @@ def build_assembly(model_code, motor=None, series=None):
     # 切换激活系列:后续零件读取与 anchor_resolver(rb.PARTS_DIR)都依赖它
     set_series(series_name)
 
+    progress(5.0, "解析选型配置")
     # 计算选型显隐
     visibility = resolve_visibility(config, sel['mount'], sel['load'], motor)
     with open(paths.transform_json(series_name), "r", encoding="utf-8") as f:
@@ -1217,11 +1243,13 @@ def build_assembly(model_code, motor=None, series=None):
         stroke_num, d1, scale = None, None, 1.0
 
     # Step 1: 读取零件
+    progress(8.0, "读取零件")
     shapes, t_read = step1_read_all_parts(parts_data)
 
     # 缸体拉伸(主流程) + 配合零件位移补偿(通用数据驱动)
     # cylinder_part 来自配置 JSON, 不硬编码关键词; 主轴方向自动检测
     t_stretch_main = 0.0
+    progress(48.0, "缸体拉伸")
     cyl_part_name = config.get("cylinder_part")
     if cyl and cyl_part_name:
         for key, shape in list(shapes.items()):
@@ -1285,6 +1313,7 @@ def build_assembly(model_code, motor=None, series=None):
     asm_step, t_step, xcaf_doc = step3_export_assembly_step_xcaf(
         shapes, parts_data, asm_path, asm_name=model_code)
 
+    progress(72.0, "缓存 BREP")
     # Step 3.5: 装配体 BREP 缓存
     # 出图投影/锚点解析/查看器这些内部消费方读的都是 .brep; 若只留 STEP,
     # 它们第一次都要重新解析 30MB STEP(实测 5.3s)+ 自行落盘(1.5s) —— 新型号
@@ -1294,6 +1323,7 @@ def build_assembly(model_code, motor=None, series=None):
     t_brep = _export_assembly_brep(compound, os.path.join(model_dir, "assembly.brep"))
 
     # Step 4: 缸体验证
+    progress(78.0, "缸体验证")
     t_stretch = 0.0
     cyl_out = None
     cyl_part = config.get("cylinder_part")
@@ -1329,6 +1359,7 @@ def build_assembly(model_code, motor=None, series=None):
             "glb": round(t_glb, 2),
         },
     }
+    progress(96.0, "写入构建信息")
     # 保存构建元数据到 output 子目录,供前端加载历史结果
     def _rel(p):
         return os.path.relpath(p, OUT_DIR).replace("\\", "/") if p else None
