@@ -23,6 +23,7 @@ from web import common
 from web.drawing_spec_map import find_drawing_source, apply_spec
 from web.blueprints import template_helpers as th
 from drawing.drawing_source_render import render_drawing_source_pdf
+from core import storage
 
 bp = Blueprint("render", __name__)
 
@@ -114,6 +115,12 @@ def api_render_drawing():
     except Exception as e:  # 渲染失败不污染已有源文件
         return jsonify({"ok": False, "error": f"渲染失败: {e}"}), 500
     render_elapsed = round(time.time() - t_render, 3)
+
+    # 结果产出后同步到对象存储(若配置 OSS);本地后端为空操作
+    try:
+        storage.publish_model(os.path.dirname(out_abs))
+    except Exception:
+        pass
 
     # pdf_url 为 OUT_DIR 下真实落盘的相对路径(可能按去品牌前缀目录存储),
     # 编码由前端 downloadUrl() 按段处理

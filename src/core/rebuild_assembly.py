@@ -1373,6 +1373,12 @@ def build_assembly(model_code, motor=None, series=None):
             json.dump(info, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
+    # 结果产出后同步到对象存储(若 .env 配置 OSS);本地后端为空操作,失败不阻断
+    try:
+        from core import storage
+        storage.publish_model(model_code)
+    except Exception:
+        pass
     return result
 
 

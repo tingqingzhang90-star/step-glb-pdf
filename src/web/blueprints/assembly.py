@@ -11,12 +11,13 @@ import os
 import sys
 
 from flask import (Blueprint, jsonify, request, send_file,
-                   send_from_directory)
+                   send_from_directory, redirect)
 
 from web import common
 from web import task_pool
 from core import rebuild_assembly as rb
 from core import build_config
+from core import storage
 
 pool = task_pool.get_pool()
 bp = Blueprint("assembly", __name__)
@@ -348,6 +349,10 @@ def download(filename):
     品牌前缀容错:型号目录可能带也可能不带 YRJ 前缀(前端可能用带前缀型号
     直接拼下载地址),首段按候选写法逐一尝试;命中即返回真实文件,否则回退原路径。
     """
+    # 结果若已镜像到对象存储,直接 302 到外链(前端无需改动)
+    u = storage.url((filename or "").replace("\\", "/"))
+    if u:
+        return redirect(u)
     norm = (filename or "").replace("\\", "/")
     parts = [p for p in norm.split("/") if p not in ("", ".")]
     out_root = os.path.abspath(common.OUT_DIR)

@@ -12,3 +12,8 @@ pymupdf==1.28.2         # src/drawing/drawing_generator.py(遗留 PyMuPDF 管线
 
 # 测试与静态检查
 pytest==9.1.1           # tests/ 后端接口测试,须装在 pdf1 环境
+
+# 对象存储(S3 兼容:阿里云 OSS / 腾讯云 COS / MinIO / AWS S3 通用)。
+# 仅当 .env 配置 STORAGE_BACKEND=oss 时才需要;core/storage.py 内延迟 import,
+# 不配 OSS 时完全不会加载,不影响本地部署。
+boto3==1.40.0

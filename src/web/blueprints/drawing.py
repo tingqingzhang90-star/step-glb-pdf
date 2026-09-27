@@ -10,7 +10,9 @@ import io
 import os
 import traceback
 
-from flask import Blueprint, jsonify, request, send_file, send_from_directory
+from flask import Blueprint, jsonify, request, send_file, send_from_directory, redirect
+
+from core import storage
 
 from web import common
 from web import task_pool
@@ -112,6 +114,14 @@ def api_generate_drawing(model_code):
             "step_path": step_path, "output_pdf": output_pdf, "params": params})
         if not result["success"]:
             return jsonify({"ok": False, "error": result.get("error", "生成失败")}), 500
+        rel = os.path.relpath(output_pdf, common.OUT_DIR).replace("\\", "/")
+        try:
+            storage.publish_model(model_code)
+        except Exception:
+            pass
+        u = storage.url(rel)
+        if u:
+            return redirect(u)
         return send_file(output_pdf, mimetype="application/pdf",
                          as_attachment=True, download_name=f"工程图_{model_code}.pdf")
     except Exception as e:
@@ -134,6 +144,14 @@ def api_drawing_dxf(model_code):
         dxf_path, elapsed, unmatched = pool.run(
             "drawing-dxf", "dxf:%s" % model_code, {
                 "step_path": step_path, "output_dxf": output_dxf, "params": params})
+        rel = os.path.relpath(dxf_path, common.OUT_DIR).replace("\\", "/")
+        try:
+            storage.publish_model(model_code)
+        except Exception:
+            pass
+        u = storage.url(rel)
+        if u:
+            return redirect(u)
         return send_file(dxf_path, as_attachment=True,
                          download_name=f"工程图_{model_code}.dxf")
     except task_pool.TaskError as e:

@@ -7,13 +7,23 @@
 import json
 import os
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, jsonify, request, send_file, redirect
 
 from drawing import frontend_template
 from web import common
 from web.blueprints import template_helpers as th
+from core import storage
 
 bp = Blueprint("template", __name__)
+
+
+def _to_out_rel(relpath):
+    """relpath 相对项目根(如 output/250-X/drawing.pdf)→ 相对 output/ 的路径,
+    作为对象存储的 key。"""
+    relpath = relpath.replace("\\", "/").strip("/")
+    if relpath.startswith("output/"):
+        relpath = relpath[len("output/"):]
+    return relpath
 
 
 @bp.route("/api/drawing-template", methods=["POST"])
@@ -183,6 +193,11 @@ def api_prepare_source_from_template():
     # 源文件目录名取实际落盘目录(型号可能带/不带 YRJ 前缀),前端据此调
     # /api/drawing-sources/<dir> 取回原文
     source_dir = os.path.basename(os.path.dirname(shape_path))
+    # 结果产出后同步到对象存储(若配置 OSS);本地后端为空操作
+    try:
+        storage.publish_dir(os.path.join(common.OUT_DIR, source_dir))
+    except Exception:
+        pass
     return jsonify({
         "ok": True,
         "model": model,
@@ -202,6 +217,9 @@ def api_download_template_pdf(relpath):
         return jsonify({"ok": False, "error": "非法路径"}), 400
     if not os.path.isfile(abs_path):
         return jsonify({"ok": False, "error": "文件不存在"}), 404
+    u = storage.url(_to_out_rel(relpath))
+    if u:
+        return redirect(u)
     return send_file(abs_path, mimetype="application/pdf", as_attachment=True,
                      download_name=os.path.basename(abs_path))
 
@@ -214,4 +232,7 @@ def api_preview_template_pdf(relpath):
         return jsonify({"ok": False, "error": "非法路径"}), 400
     if not os.path.isfile(abs_path):
         return jsonify({"ok": False, "error": "文件不存在"}), 404
+    u = storage.url(_to_out_rel(relpath))
+    if u:
+        return redirect(u)
     return send_file(abs_path, mimetype="application/pdf")
