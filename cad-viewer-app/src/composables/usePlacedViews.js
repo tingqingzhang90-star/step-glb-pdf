@@ -102,11 +102,6 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
     applyGlobalScale(Math.max(0.1, Math.min(5, newScale)))
   }
 
-  /** 工具栏放大/缩小 */
-  function zoomCanvas(factor) {
-    applyGlobalScale(Math.max(0.1, Math.min(5, (globalScale.value || 1) * factor)))
-  }
-
   /** 工具栏"适应":按所有视图最大长边统一缩放 */
   function resetCanvas() {
     if (placedViews.value.length === 0) return
@@ -148,6 +143,6 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
     selectedView, placedViewNames,
     placeView, selectView, deleteSelectedView, clearViews, resetScale,
     setViews,
-    onViewScaleChange, zoomCanvas, resetCanvas
+    onViewScaleChange, resetCanvas
   }
 }

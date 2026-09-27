@@ -54,8 +54,8 @@
         </el-select>
         <el-divider direction="vertical" />
         <el-button-group>
-          <el-button size="small" :icon="ZoomIn" :disabled="!viewsLoaded" @click="zoomCanvas(1.2)">放大</el-button>
-          <el-button size="small" :icon="ZoomOut" :disabled="!viewsLoaded" @click="zoomCanvas(0.8)">缩小</el-button>
+          <el-button size="small" :icon="ZoomIn" :disabled="!viewsLoaded" @click="zoomSheet(1.2)">放大</el-button>
+          <el-button size="small" :icon="ZoomOut" :disabled="!viewsLoaded" @click="zoomSheet(0.8)">缩小</el-button>
           <el-button size="small" :disabled="!viewsLoaded" @click="resetCanvas">适应</el-button>
         </el-button-group>
         <el-divider direction="vertical" />
@@ -184,8 +184,8 @@
         <span class="app-title">工程图预览</span>
         <el-divider direction="vertical" />
         <el-button-group>
-          <el-button size="small" :icon="ZoomIn" :disabled="!viewerReady" @click="zoomCanvas(1.2)">放大</el-button>
-          <el-button size="small" :icon="ZoomOut" :disabled="!viewerReady" @click="zoomCanvas(0.8)">缩小</el-button>
+          <el-button size="small" :icon="ZoomIn" :disabled="!viewerReady" @click="zoomSheet(1.2)">放大</el-button>
+          <el-button size="small" :icon="ZoomOut" :disabled="!viewerReady" @click="zoomSheet(0.8)">缩小</el-button>
           <el-button size="small" :disabled="!viewerReady" @click="resetCanvas">适应</el-button>
         </el-button-group>
         <el-divider direction="vertical" />
@@ -933,7 +933,7 @@ async function loadViewSource(srcUrl) {
 // ===== 画布:图纸尺寸/整卡缩放平移 =====
 const {
   sheetAreaRef, sheetSize, sheetWidth, sheetHeight, sheetZoom, sheetPan, sheetPanning, sheetCardStyle,
-  setSheetSize, centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel
+  setSheetSize, centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel, zoomSheet
 } = useCanvasTransform()
 
 // 移动端查看浏览:单指平移 + 双指缩放(桌面端不接鼠标,无副作用)
@@ -956,7 +956,7 @@ const {
   placedViews, selectedViewId, globalScale, selectedView, placedViewNames,
   placeView, selectView, deleteSelectedView: removeSelectedView, clearViews, resetScale,
   setViews,
-  onViewScaleChange, zoomCanvas, resetCanvas
+  onViewScaleChange, resetCanvas
 } = usePlacedViews({ sheetWidth, sheetHeight })
 
 // ===== 图纸坐标换算与边线引用 =====
