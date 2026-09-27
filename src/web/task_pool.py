@@ -43,8 +43,17 @@ import sys
 import time
 import threading
 import traceback
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
+
+# 子进程启动上下文:显式用 spawn,而非 Linux 默认的 fork。
+# 原因:pythonOCC 在 fork 下会继承父进程已加载的 OCC 全局/线程局部状态,实测有
+# 崩溃隐患;spawn 让每个 worker 干净地重新初始化 OCC。spawn 在 Windows 本就是
+# 默认(无差别),在 Linux/macOS 也可用,因此跨平台统一为 spawn 最稳。
+# 代价:每个 worker 首次启动会重新导入主模块(含 OCC,约 1~2s),因 worker 常驻,
+# 仅是一次性开销。
+_MP_CTX = multiprocessing.get_context("spawn")
 
 # 本文件位于 src/web/,需把 src 加入 sys.path 才能导入 core/drawing/batch 包
 _HERE = os.path.dirname(os.path.abspath(__file__))          # src/web
@@ -306,9 +315,13 @@ class TaskPool:
         if self._executor is None:
             with self._pool_lock:
                 if self._executor is None:
-                    self._executor = ProcessPoolExecutor(
-                        max_workers=self.max_workers,
-                        max_tasks_per_child=_max_tasks_per_child())
+                    # max_tasks_per_child 仅 Python 3.11+ 的 ProcessPoolExecutor 支持,
+                    # 旧版本传该 kwarg 会直接 TypeError;按版本条件传入,保证 3.10 也能跑。
+                    pool_kwargs = {"max_workers": self.max_workers,
+                                   "mp_context": _MP_CTX}
+                    if sys.version_info >= (3, 11):
+                        pool_kwargs["max_tasks_per_child"] = _max_tasks_per_child()
+                    self._executor = ProcessPoolExecutor(**pool_kwargs)
         return self._executor
 
     # ---------- 提交 ----------

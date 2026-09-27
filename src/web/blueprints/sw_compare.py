@@ -6,6 +6,7 @@ SW COM 非线程安全,用 _lock 串行所有选型操作。
 """
 import json
 import os
+import sys
 import threading
 
 from flask import Blueprint, jsonify, request, Response
@@ -29,7 +30,16 @@ def index():
 
 @bp.route("/api/sw-apply", methods=["POST"])
 def api_sw_apply():
-    """在 SW 中切换选型"""
+    """在 SW 中切换选型
+
+    仅 Windows 支持:SolidWorks COM 无法在 Linux 运行;Linux 部署用预导出
+    零件库,这里直接返回 501,不触发 COM。
+    """
+    if sys.platform != "win32":
+        return jsonify({
+            "ok": False,
+            "error": "仅 Windows 支持：选型切换依赖 SolidWorks，服务器无需运行",
+        }), 501
     body = request.get_json(force=True)
     model_code = body.get("model_code", "").strip()
     motor = body.get("motor")

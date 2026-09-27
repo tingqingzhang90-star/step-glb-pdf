@@ -15,9 +15,10 @@ import os
 import sys
 import time
 
-import pythoncom
-import win32com.client
-
+# 注意:pythoncom / win32com.client 是 Windows 专属,不能在模块顶层 import,
+# 否则 Linux 上 import 本模块(经 part_export 蓝图)直接 ModuleNotFoundError,
+# 连带整个 5001 服务起不来。统一在函数体内延迟 import(见 _int_ref / _nothing /
+# preview_components / export_series),与 sw_compare_ops.py 保持一致。
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
 if os.path.join(_PROJECT_ROOT, "src") not in sys.path:
@@ -72,10 +73,14 @@ _SW_SAVE_ERRORS = {
 
 def _int_ref():
     """SW COM 需要的 byref int 输出参数(errors / warnings)"""
+    import pythoncom
+    import win32com.client
     return win32com.client.VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)
 
 
 def _nothing():
+    import pythoncom
+    import win32com.client
     return win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)
 
 
@@ -232,6 +237,8 @@ def _load_error_text(code, path):
 
 def preview_components(series, assembly=None):
     """只扫描不导出,返回组件清单(面板用它做导出前的路径体检)"""
+    import pythoncom
+    import win32com.client
     asm_path = resolve_assembly(series, assembly)
     search = [os.path.dirname(asm_path), paths.LIB_ROOT]
     pythoncom.CoInitialize()
@@ -341,6 +348,8 @@ def export_series(series, assembly=None, overwrite=False, on_progress=None):
     os.makedirs(parts_dir, exist_ok=True)
     emit = on_progress or (lambda *_: None)
 
+    import pythoncom
+    import win32com.client
     pythoncom.CoInitialize()
     try:
         sw = win32com.client.Dispatch("SldWorks.Application")

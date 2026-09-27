@@ -1,14 +1,16 @@
 # Linux 云服务器部署适配清单
 
-> **状态: 未改动 —— 本文只记录待办项、涉及位置与验证方法,后续按需逐条落实。**
+> **状态: §1（COM 启动阻断）已落实；其余为部署期配置项。**
 > 现状:生产环境跑在 Windows(conda 环境 `pdf1`),入口 `src/web/app.py`(5001)。
 > 本文来自一次**代码走查 + 本机实测**(实测数据见文末附录),用于迁移到 Linux 时按序处理。
+> 选型决策:**零件库改为 Windows 预导出**,Linux 运行时彻底不依赖 SolidWorks——
+> 因此"穿透/隧道暴露 SW"的方案不再需要。SW 相关接口在 Linux 上返回 501。
 
 ---
 
 ## 1. 阻断项:不改就起不来
 
-### 1.1 SolidWorks COM 依赖被模块级导入
+### 1.1 SolidWorks COM 依赖被模块级导入  ✅ 已落实
 
 | 位置 | 内容 |
 |---|---|
@@ -19,16 +21,21 @@
 **现象**:Linux 上 `python app.py` 在 import 阶段直接 `ModuleNotFoundError: No module named 'pythoncom'`,
 **整个 5001 服务起不来** —— 连带装配体生成、出图等与 SolidWorks 无关的功能一起不可用。
 
-**待办**:照 `src/web/blueprints/sw_compare_ops.py:43,243` 已有的做法(函数内延迟 import),
-把 COM 导入挪进函数体;`part_export` / `sw_compare` 两个蓝图在不支持的平台上返回明确错误(如 501)。
+**已改**:
+- `part_exporter.py`:顶层两行 COM 导入删除,改到 `_int_ref` / `_nothing` /
+  `preview_components` / `export_series` 函数体内延迟 import(与 `sw_compare_ops.py` 同款做法)。
+- `part_export.py`:删除顶层 `from core import part_exporter as pe`;新增 `_sw_only()` 守卫,
+  `api_series` / `api_preview` / `_run_export` 内延迟 import `pe`;非 Windows 直接返回 501。
+- `sw_compare.py`:`api_sw_apply` 加非 Windows 返回 501(`sw_compare_ops` 本就延迟 import,模块可安全导入)。
 
 **验证**:
 ```
-# ① 导入不再报错
+# ① 导入不再报错(关键:不再依赖 pythoncom)
 python -c "import web.app"
 # ② 主链路可用
 curl -s http://127.0.0.1:5001/api/options | head -c 120
-# ③ 仅零件导出/SW 对比返回"仅 Windows 支持"
+# ③ 仅零件导出/SW 对比返回"仅 Windows 支持"(HTTP 501)
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:5001/api/sw-apply -H 'Content-Type: application/json' -d '{}'
 ```
 
 ---
@@ -51,10 +58,17 @@ curl -s http://127.0.0.1:5001/api/options | head -c 120
 | `src/core/drawing_engine.py:1413` | `_MIN_PARALLEL_VIEWS = 2` | 同上(并行收益变大) |
 | `src/web/task_pool.py:231-235` | "必须懒创建(防 spawn 重导主模块而无限派生)" | fork 下无此问题,但改为 spawn/forkserver context 时注释依然成立 |
 
+**已改(启动上下文)**:`src/web/task_pool.py` 已显式 `multiprocessing.get_context("spawn")`
+并作为 `mp_context` 传给 `ProcessPoolExecutor`,跨平台统一用 spawn,避免 fork 继承 OCC 全局状态。
+`spawn` 在 Windows 本就是默认(无差别);Linux/macOS 也可用。`server.py` 已有
+`if __name__ == "__main__"` 守卫,spawn 子进程重导 `__main__` 时不会重复起服务。
+
 **待办**:
-1. 显式指定启动上下文:`multiprocessing.get_context("spawn")` 或 `"forkserver"`(更稳),
-   或实测 fork 下连续跑无异常后保留默认;
-2. 在 Linux 上重测视图并行阈值。
+1. (无需再改代码)在 Linux 上重测视图并行阈值(`hlr_poly.py:209` 的 `len(view_names)<=4`、
+   `drawing_engine.py:1413` 的 `_MIN_PARALLEL_VIEWS`)。
+2. `max_tasks_per_child` 已按 Python 版本条件传入(3.11+ 才传该 kwarg,3.10 不传),
+   避免旧版本 `TypeError`;部署机 Python ≥3.11 时可在 `.env` 设
+   `BUILD_POOL_MAX_TASKS_PER_CHILD=8` 回收常驻内存。
 
 **验证**:同一型号 3 视图,分别用 `parallel=True/False` 跑,比较墙钟与 `timing.parallel`;
 再连续跑 100 次出图,确认无崩溃(fork 继承 OCC 全局状态的隐患)。
@@ -96,6 +110,13 @@ curl -s http://127.0.0.1:5001/api/options | head -c 120
 - `pythonocc-core` **只能 conda 装**(见 `requirements.txt` 注释):
   `conda install -c conda-forge pythonocc-core`
 - 其余按 `requirements.txt` pip 安装
+- **[Linux 专属] OCC 系统级共享库必须预装**:conda 的 pythonocc-core 只带 Python 包,
+  运行/导入时还依赖系统的 OpenGL/X11 库,缺了会 `ImportError: libGL.so.1` 之类。
+  Debian/Ubuntu 系:
+  `apt-get install -y libgl1-mesa-glx libglu1-mesa libxmu6 libxi6 libsm6 libice6
+   libxcursor1 libxrandr2 libxinerama1 libgomp1`
+  (容器镜像同理;Alpine 用 `mesa-gl glu libxmu libxi libsm libice` 等)。
+  HLR/三角化走 CPU,一般不需 Xvfb,但上述 `.so` 必须存在。
 - **中文字体不用额外准备**:PDF 用的是 reportlab 内置 CID 字体
   `STSong-Light`(`src/drawing/drawing_source_render.py:26`),与系统字体无关 ✅
 

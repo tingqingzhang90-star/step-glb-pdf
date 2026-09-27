@@ -18,13 +18,26 @@ from flask import Blueprint, jsonify, request, send_file
 
 from web import common
 from core import build_config as bc
-from core import part_exporter as pe
 from core import paths
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 bp = Blueprint("part_export", __name__)
+
+
+def _sw_only():
+    """SolidWorks 相关接口仅 Windows 支持。
+
+    Linux 部署使用预导出的零件库,运行时不再依赖 SolidWorks,这里直接返回
+    501,避免在无 SW 环境的服务器上触发 COM 调用而崩溃。
+    """
+    if sys.platform != "win32":
+        return jsonify({
+            "ok": False,
+            "error": "仅 Windows 支持：零件库已预导出，服务器无需运行 SolidWorks",
+        }), 501
+    return None
 
 _MAX_LOGS = 500
 _task_lock = threading.Lock()
@@ -48,6 +61,14 @@ def _reset_task(series):
 
 def _run_export(series, assembly, overwrite):
     """后台线程执行导出,进度写进全局 _task 供前端轮询"""
+    global _task
+    # 预导出方案:Linux 部署不装 SolidWorks,直接标记失败并返回
+    if sys.platform != "win32":
+        _task["running"] = False
+        _task["finished"] = True
+        _task["error"] = "仅 Windows 支持：零件库已预导出，服务器无需运行 SolidWorks"
+        return
+    from core import part_exporter as pe
 
     def on_progress(event, payload):
         if _cancel_event.is_set():
@@ -125,6 +146,10 @@ def index():
 @bp.route("/api/series")
 def api_series():
     """扫描图库,返回每个系列的装配体候选与导出状态"""
+    blocked = _sw_only()
+    if blocked:
+        return blocked
+    from core import part_exporter as pe
     if not os.path.isdir(paths.LIB_ROOT):
         return jsonify({"ok": False, "error": f"图库不存在: {paths.LIB_ROOT}"}), 500
     items = []
@@ -143,6 +168,10 @@ def api_series():
 @bp.route("/api/preview")
 def api_preview():
     """打开装配体列出组件,用于导出前检查零件路径能否在本机解析"""
+    blocked = _sw_only()
+    if blocked:
+        return blocked
+    from core import part_exporter as pe
     series = request.args.get("series", "")
     if not series:
         return jsonify({"ok": False, "error": "缺少 series"}), 400
@@ -177,6 +206,9 @@ def api_config():
 
 @bp.route("/api/export", methods=["POST"])
 def api_export():
+    blocked = _sw_only()
+    if blocked:
+        return blocked
     global _task
     body = request.get_json(silent=True) or {}
     series = body.get("series", "")
