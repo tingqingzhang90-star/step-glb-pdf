@@ -765,7 +765,7 @@
               size="small"
               placeholder="留空显示测量值"
               clearable
-              @update:model-value="v => setDimField(selectedDim.id, 'customText', v || null)"
+              @update:model-value="v => applyCadCodes('customText', v)"
               @blur="endFieldEdit"
             />
           </div>
@@ -776,7 +776,7 @@
               size="small"
               placeholder='如"行程"、"总长"'
               clearable
-              @update:model-value="v => setDimField(selectedDim.id, 'label', v || null)"
+              @update:model-value="v => applyCadCodes('label', v)"
               @blur="endFieldEdit"
             />
             <span class="prop-hint">显示在数值左侧,前后端位置一致</span>
@@ -1023,6 +1023,14 @@ const {
 function closeAllContextMenus() {
   closeContextMenu()
   closeDimContextMenu()
+}
+
+// AutoCAD 控制码:标注文本里输入 %%C/%%D/%%P(不区分大小写),实时转成工程图符号
+const CAD_CODE_RE = /%%([cdp])/gi
+const CAD_CODE_SYMBOLS = { C: 'Φ', D: '°', P: '±' }
+function applyCadCodes(field, value) {
+  const out = (value || '').replace(CAD_CODE_RE, (m, k) => CAD_CODE_SYMBOLS[k.toUpperCase()] || m)
+  setDimField(selectedDim.value.id, field, out || null)
 }
 
 // 预览模式(外部 ?src= 打开)下,编辑工具栏/调色板/属性面板已隐藏;

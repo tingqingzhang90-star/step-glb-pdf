@@ -16,7 +16,7 @@ _SRC_DIR = os.path.dirname(_HERE)
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from flask import Flask
+from flask import Flask, send_from_directory
 
 from web import env_settings, task_pool
 from web import common
@@ -60,6 +60,20 @@ def create_app() -> Flask:
                symbols_bp, table_presets_bp, drawing_sources_bp,
                render_bp, series_bp):
         app.register_blueprint(bp)
+
+    # 微信等业务域名核验:把校验 txt 放到项目根 verify/ 下,
+    # 即可通过 https://域名/<文件名> 访问(必须在域名根,不能在 /editor 子路径)。
+    # 仅匹配单段文件名(带扩展名),不覆盖 /editor、/api 等已有路由,也不匹配根路径。
+    verify_dir = os.path.join(common.PROJECT_ROOT, "verify")
+
+    @app.route("/<filename>")
+    def serve_verify_file(filename):
+        name = os.path.basename(filename)
+        target = os.path.join(verify_dir, name)
+        if os.path.isfile(target):
+            return send_from_directory(verify_dir, name)
+        return ("", 404)
+
     return app
 
 

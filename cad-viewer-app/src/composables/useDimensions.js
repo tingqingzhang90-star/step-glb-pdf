@@ -415,7 +415,20 @@ export function useDimensions({ placedViews, selectedViewId, coords, getMotorEnv
 
   /** 从源文件批量载入标注 */
   function setDimensions(dims) {
-    dimensions.value = (dims || []).map(d => ({ ...d }))
+    // 源文件(模板 rebind 出图)原样保留模板标注的 id,而计数器从 0 起算,
+    // 新画标注会与已有 id 撞号——选中/删除按 id 全局匹配,会同时命中两个视图的标注。
+    // 载入时重排重复 id,并把计数器推到现有最大编号之后。
+    const seen = new Set()
+    let maxId = 0
+    dimensions.value = (dims || []).map(d => {
+      const item = { ...d }
+      const n = parseInt(String(item.id).replace(/^dim_/, ''), 10)
+      if (Number.isFinite(n) && n > maxId) maxId = n
+      if (seen.has(item.id)) item.id = `dim_${++maxId}`
+      seen.add(item.id)
+      return item
+    })
+    dimIdCounter.value = maxId
     selectedDimId.value = null
     dimHoveredId.value = null
     undoStack.value = []
