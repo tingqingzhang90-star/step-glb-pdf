@@ -149,6 +149,25 @@ npm install && npm run build      # 实测 node v20.19 / npm 10.8,build 约 14s
 
 ---
 
+## 5.1 结果存储(可选 OSS 对象存储)
+
+默认纯本地(`output/`),无需任何改动。**可选**把结果(STEP/GLB/PDF/DXF/`drawing_source.json` 等)
+镜像到对象存储,并让下载/预览路由 302 到外链(前端无需改动)。
+
+- 后端抽象:`src/core/storage.py`,本地仍是工作存储,只在结果产出后镜像 + 对外 302
+- 协议:**S3 兼容**,通吃阿里云 OSS / 腾讯云 COS / MinIO / AWS S3(统一用 `boto3`)
+- 接入点:`.env`(示例见 `.env.example`),核心三项:
+  - `STORAGE_BACKEND=oss`(不配=local,零行为变化)
+  - `OSS_ENDPOINT` / `OSS_REGION` / `OSS_BUCKET` / `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET`
+  - `OSS_PREFIX`(key 前缀,可空) + `OSS_PUBLIC_BASE`(留空=临时签名 URL;`填了`=公开 CDN 基址)
+- 上传失败的容错:任何 OSS 异常都被吞掉并打到 stderr,**绝不阻断构建/出图主流程**
+- `requirements.txt` 已加 `boto3==1.40.0`(仅 OSS 模式加载,本地部署不装也能跑)
+
+> 验证:配好 OSS 后,跑一次构建/出图,确认对象存储桶里出现 `PREFIX/<型号>/...`;
+> 再访问下载/预览接口,确认返回 302 且 Location 指向对象存储。
+
+---
+
 ## 6. 迁移完成后建议复测的三项
 
 1. **并发**:6~20 路混合(构建 + 出图),确认线性度与内存回落
