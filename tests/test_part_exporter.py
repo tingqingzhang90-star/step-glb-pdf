@@ -76,10 +76,18 @@ class _FakeSW:
 
 
 def _install_fake_sw(monkeypatch, comps):
-    monkeypatch.setattr(pe.pythoncom, "CoInitialize", lambda: None)
-    monkeypatch.setattr(pe.pythoncom, "CoUninitialize", lambda: None)
-    monkeypatch.setattr(pe.win32com.client, "Dispatch",
-                        lambda _name: _FakeSW(comps))
+    _patch_sw_modules(monkeypatch, lambda _name: _FakeSW(comps))
+
+
+def _patch_sw_modules(monkeypatch, dispatch):
+    # part_exporter 改为函数内延迟 import,模块顶层没有 pythoncom/win32com;
+    # importorskip 已保证这两个模块在 sys.modules 中,直接 patch 真实模块属性,
+    # 函数体内 import 时拿到的就是被 patch 的同一对象。
+    import pythoncom
+    import win32com.client
+    monkeypatch.setattr(pythoncom, "CoInitialize", lambda: None)
+    monkeypatch.setattr(pythoncom, "CoUninitialize", lambda: None)
+    monkeypatch.setattr(win32com.client, "Dispatch", dispatch)
 
 
 def _use_tmp_library(monkeypatch, tmp_path, series="测试系列"):
@@ -228,10 +236,7 @@ class _FakeSWAlreadyOpen:
 
 
 def _install_already_open_sw(monkeypatch, comps):
-    monkeypatch.setattr(pe.pythoncom, "CoInitialize", lambda: None)
-    monkeypatch.setattr(pe.pythoncom, "CoUninitialize", lambda: None)
-    monkeypatch.setattr(pe.win32com.client, "Dispatch",
-                        lambda _name: _FakeSWAlreadyOpen(comps))
+    _patch_sw_modules(monkeypatch, lambda _name: _FakeSWAlreadyOpen(comps))
 
 
 def test_export_reuses_already_open_doc_by_title(monkeypatch, tmp_path):

@@ -41,8 +41,8 @@ def test_text_ends_at_leader_end_by_default():
     prims = dim_render._diameter(ann, _circle_seg(), _view())
     leader_end_x = 100.0 + 20.0 * 0.6 + 30
     dim_render._ensure_font()
-    w = (stringWidth(prims["text"], dim_render._CN_FONT,
-                     dim_style.dim_text_font_mm()) * (25.4 / 72.0))
+    w = stringWidth(prims["text"], dim_render._CN_FONT,
+                    dim_style.dim_text_font_mm())
     # anchor=start,文字沿 +dir 延伸:起点 = 线尾 - 实测字宽(末端贴线尾)
     assert prims["texts"][0]["pos"][0] == pytest.approx(leader_end_x - w, abs=0.01)
 
@@ -81,21 +81,16 @@ def test_leader_custom_text_and_underline_width():
     from reportlab.pdfbase.pdfmetrics import stringWidth
     dim_render._ensure_font()
     font_mm = dim_style.dim_text_font_mm()
-    pt2u = 25.4 / 72.0
-    em = font_mm * pt2u
 
     def underline_w(s):
-        return (stringWidth(s, dim_render._CN_FONT, font_mm) * pt2u
-                + em * (4.0 / 18.0))
+        return stringWidth(s, dim_render._CN_FONT, font_mm) + 4.0
 
     seg, view = _circle_seg(), _view()
-    # 弯折点 = 文字线右端,引线角度取弯折点指向圆心,保证与圆相交
+    # 文字放在限位范围内(距圆心 < r+LEADER_MAX_LENGTH),不被拉近,
+    # 才能稳定验证"搁置线与文字基线间距 = dim.diameter.text_gap_px"。
     full = "12x ø13.5 贯穿"
-    bend_x = 200.0 + underline_w(full)
-    angle = math.atan2(50.0 - 304.0, 100.0 - bend_x)
-    ann = {"diameterMode": "leader", "leaderAngle": angle,
-           "textLeft": {"x": 200.0, "y": 300.0},
-           "customText": full}
+    text_left = {"x": 150.0, "y": 60.0}
+    ann = {"diameterMode": "leader", "textLeft": text_left, "customText": full}
     prims = dim_render._diameter_leader(ann, seg, view)
     assert prims["text"] == full
     line_start, line_end = prims["dim_lines"][0]
@@ -103,7 +98,7 @@ def test_leader_custom_text_and_underline_width():
     # 搁置线水平,且与文字基线的间距由 dim.diameter.text_gap_px 配置
     assert line_end[1] == pytest.approx(line_start[1], abs=1e-9)
     assert line_start[1] == pytest.approx(
-        300.0 + dim_style.dim_diameter_text_gap_px(), abs=1e-6)
+        text_left["y"] + dim_style.dim_diameter_text_gap_px(), abs=1e-6)
     assert prims["texts"][0]["anchor"] == "start"
     # 箭头:尖端触圆周指向圆心,箭身在引线外侧(距圆心比尖端远)
     apex, a1, a2 = prims["arrows"][0]
