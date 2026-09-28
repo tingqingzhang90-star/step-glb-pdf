@@ -1309,10 +1309,9 @@ STANDARD_VIEW_CONFIGS = {
     "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
     "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, -1), "label": "上视",  "group": "standard"},
     "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
-    # 左视基础上的上视图：以左视图为正视方向，从上往下看
-    # dir=(0,-1,0) 沿-Y方向投影，up=(1,0,0) X轴向上
-    # 屏幕右方向 U = up × dir = (1,0,0) × (0,-1,0) = (0,0,-1) → -Z世界坐标（缸体长轴水平）
-    "left_top": {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(1, 0, 0),  "label": "左视上视", "group": "standard"},
+    # 左视上视：左视图绕屏幕横轴(世界 Z 轴，即缸体长轴)旋转 180° —— 相机从 +Y
+    # 侧绕到 -Y 侧，屏幕右方向仍为 +Z(长轴水平)，屏幕上方由 -X 翻为 +X
+    "left_top": {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(-1, 0, 0), "label": "左视上视", "group": "standard"},
     # 3 个轴测视图
     "isometric":      {"dir": gp_Dir(-1, -1, 1),   "up": gp_Dir(0, 0, 1), "label": "等轴测",     "group": "isometric"},
     "dimetric_left":  {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "左右二等角", "group": "isometric"},
