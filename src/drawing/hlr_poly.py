@@ -35,6 +35,7 @@ from OCC.Core.BRepBndLib import brepbndlib
 
 from core import drawing_engine as DE
 from drawing.hlr_arcfit import fit_circular_features
+from drawing.hlr_arc_geom import drop_fake_resampled
 from drawing.hlr_brep_circles import (build_view_circles, drop_duplicate_fitted,
                                       strip_bogus_circle_meta)
 
@@ -149,6 +150,7 @@ def _circle_pass(shape, ax2, raw_segs, fitted, model_path, view_name,
         return fitted
     kept = drop_duplicate_fitted(fitted, circles)
     kept = strip_bogus_circle_meta(kept, circles)
+    kept = drop_fake_resampled(kept, entities)
     return kept + entities
 
 
