@@ -106,8 +106,16 @@ def coverage():
     for item in enumerate_template_identities():
         base = item["base_model"]
         step_path = os.path.join(common.OUT_DIR, base, "assembly.step")
+        glb_path = os.path.join(common.OUT_DIR, base, "assembly.glb")
         model_built = os.path.isfile(step_path)
-        rows.append({**item, "model_built": model_built,
+        # 3D 查看器优先用 GLB(渲染优化),无则退回 STEP;两者都没有(model 未生成)则为 None
+        if model_built:
+            model_url = ("/download/%s/assembly.glb" % base
+                         if os.path.isfile(glb_path)
+                         else "/download/%s/assembly.step" % base)
+        else:
+            model_url = None
+        rows.append({**item, "model_built": model_built, "model_url": model_url,
                      "template": _template_state(item["identity"], index, defaults)})
     return rows
 

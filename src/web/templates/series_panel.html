@@ -46,6 +46,9 @@
   .row-btn.annot{background:var(--accent2);color:#06281b}
   .row-btn.annot:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
   .row-btn.cont{background:var(--warn);color:#3a2400}
+  .row-btn.view3d{background:var(--panel2);color:var(--txt);border:1px solid var(--border)}
+  .row-btn.view3d:hover{border-color:var(--accent);color:var(--accent)}
+  .row-btn.view3d:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
   .row-btn.cont:disabled{background:#475569;color:#cbd5e1;cursor:not-allowed}
   .tpl-cell{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
   .tpl-pick{max-width:230px;padding:4px 6px;font-size:12px;border-radius:6px;
@@ -149,6 +152,7 @@ function renderGroups(rows) {
     for (const r of list) {
       const tr = document.createElement('tr');
       tr.dataset.base = r.base_model;
+      tr.dataset.url = r.model_url || '';
       tr.dataset.tpl = r.template.template_id || '';
       const canCont = r.model_built && r.template.saved;
       const contTip = canCont
@@ -165,6 +169,8 @@ function renderGroups(rows) {
           <button class="row-btn annot" data-act="annot" ${r.model_built ? '' : 'disabled'}>去标注</button>
           <button class="row-btn cont" data-act="cont" ${canCont ? '' : 'disabled'}
             title="${contTip}">继续标注</button>
+          <button class="row-btn view3d" data-act="view3d" ${r.model_url ? '' : 'disabled'}
+            title="在 3D 查看器中打开基准模型">查看3D</button>
         </td>`;
       tbody.appendChild(tr);
     }
@@ -303,6 +309,10 @@ function bindRows() {
     if (btn.dataset.act === 'gen') genModel(base, tr);
     if (btn.dataset.act === 'annot') window.open(`/editor?model=${encodeURIComponent(base)}`, '_blank');
     if (btn.dataset.act === 'cont') continueAnnotate(base, tr);
+    if (btn.dataset.act === 'view3d') {
+      const url = tr.dataset.url;
+      if (url) window.open(`/viewer?modelUrl=${encodeURIComponent(url)}&productName=${encodeURIComponent(base)}`, '_blank');
+    }
   });
   $('#groups').addEventListener('change', e => {
     const sel = e.target.closest('select[data-act="pin"]');
