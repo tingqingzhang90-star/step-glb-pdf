@@ -13,6 +13,9 @@
       "half_px": 1.1,
       "extension_px": 12
     },
+    "linear": {
+      "min_offset_px": 0
+    },
     "angle": {
       "text_gap_px": 1,
       "arc_ext_px": 10

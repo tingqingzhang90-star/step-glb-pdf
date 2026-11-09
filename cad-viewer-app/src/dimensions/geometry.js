@@ -321,6 +321,11 @@ export function linearTextAngle(unit) {
 /** 文字与尺寸线的间距(图纸 mm,取自共用样式配置) */
 export const DIM_TEXT_GAP = styleConfig.dim.text.gap_mm ?? 4
 
+/** 线性标注尺寸线离被测要素的最小距离(图纸 px)。0 = 完全自由拖动。
+ *  旧版本在 core.js 里硬编码为 2px(单边)/20px(孔间中心距),拖近时被弹住,
+ *  现改为共用样式配置,按需设值即可恢复限位。 */
+export const LINEAR_MIN_OFFSET = styleConfig.dim.linear?.min_offset_px ?? 0
+
 /** linear 文字位置:沿线滑动 slide,法向偏移 gap;水平在线上方,竖直在左侧 */
 export function linearTextPos(unit, mid, gap = DIM_TEXT_GAP, slide = 0) {
   let nx = -unit.y, ny = unit.x

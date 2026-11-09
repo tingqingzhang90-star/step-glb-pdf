@@ -2,7 +2,9 @@
 // 输入 envelope 来自后端 /api/drawing-view-palette 的 motor_envelope 字段,
 // 各字段为模型 mm 投影坐标,与 palette 边线 meta.mm_coords 同源。
 
-import { lineBasis, extendExtEnd, linearTextAngle, linearTextPos } from './geometry.js'
+import {
+  lineBasis, extendExtEnd, linearTextAngle, linearTextPos, LINEAR_MIN_OFFSET
+} from './geometry.js'
 import { buildLinearArrows, extendLinearLine } from './arrow.js'
 
 function pickEnvelopeEndpoint(face, orientation, offset) {
@@ -152,10 +154,10 @@ export function getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, m
     const mid = (baseNear + baseFar) / 2
     const base = mousePos.y < mid ? baseNear : baseFar
     const raw = mousePos.y - base
-    return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+    return Math.max(LINEAR_MIN_OFFSET, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
   }
   const mid = (baseNear + baseFar) / 2
   const base = mousePos.x < mid ? baseNear : baseFar
   const raw = mousePos.x - base
-  return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+  return Math.max(LINEAR_MIN_OFFSET, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
 }

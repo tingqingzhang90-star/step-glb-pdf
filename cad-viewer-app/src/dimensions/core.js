@@ -30,6 +30,7 @@ import {
   extendExtEnd,
   linearTextAngle,
   linearTextPos,
+  LINEAR_MIN_OFFSET,
   DIM_TEXT_GAP
 } from './geometry.js'
 import { buildArrowPoints, buildLinearArrows, extendLinearLine, estimateTextWidth } from './arrow.js'
@@ -156,8 +157,8 @@ export function createDimensionCore(deps, ctx) {
     if (!dir) return 50
     const mid = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
     const raw = (mousePos.x - mid.x) * dir.perp.x + (mousePos.y - mid.y) * dir.perp.y
-//    钳位限制 保留4px安全距离
-    return Math.max(2, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+    // 最小偏移取样式配置(默认 0 = 完全自由拖动);旧版硬编码 2px 会拖不近
+    return Math.max(LINEAR_MIN_OFFSET, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
 
   }
 
@@ -297,7 +298,8 @@ export function createDimensionCore(deps, ctx) {
     if (!basis) return 50
     const mid = { x: (c1.x + c2.x) / 2, y: (c1.y + c2.y) / 2 }
     const raw = (mousePos.x - mid.x) * basis.perp.x + (mousePos.y - mid.y) * basis.perp.y
-    return Math.max(20, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
+    // 孔间(两圆心)标注同样按配置放开:旧版硬编码 20px,尺寸线贴不到孔心
+    return Math.max(LINEAR_MIN_OFFSET, Math.abs(raw)) * (raw >= 0 ? 1 : -1)
   }
 
   function buildLinearCenterGeometry(edgeRef1, edgeRef2, offset = 50, arrowMode = 'auto', extStartPx, extEndPx) {
