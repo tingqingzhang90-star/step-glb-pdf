@@ -21,6 +21,7 @@ import os
 import json
 import time
 import math
+import logging
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 from OCC.Core.STEPControl import STEPControl_Reader
@@ -40,6 +41,8 @@ from OCC.Core.GeomAdaptor import GeomAdaptor_Curve
 from OCC.Core.GCPnts import GCPnts_QuasiUniformDeflection
 from OCC.Core.TopAbs import TopAbs_VERTEX
 from OCC.Core.BRep import BRep_Tool
+
+logger = logging.getLogger(__name__)
 
 
 def read_step_to_shape(step_path):
@@ -1522,13 +1525,20 @@ def generate_all_standard_views(step_path, include_hidden=False,
     if _resolve_drawing_algo(algo) == "poly":
         from drawing.hlr_poly import generate_all_standard_views_poly
         opts = _resolve_poly_opts()
-        return generate_all_standard_views_poly(
-            step_path, include_hidden=include_hidden,
-            thumb_width=thumb_width, thumb_height=thumb_height,
-            canvas_width=canvas_width, canvas_height=canvas_height,
-            view_names=view_names, parallel=parallel,
-            max_workers=max_workers,
-            deflection=opts["deflection"], do_fit=opts["do_fit"])
+        try:
+            return generate_all_standard_views_poly(
+                step_path, include_hidden=include_hidden,
+                thumb_width=thumb_width, thumb_height=thumb_height,
+                canvas_width=canvas_width, canvas_height=canvas_height,
+                view_names=view_names, parallel=parallel,
+                max_workers=max_workers,
+                deflection=opts["deflection"], do_fit=opts["do_fit"])
+        except (IndexError, RuntimeError) as exc:
+            # 个别装配体的三角网格会让 HLRBRep_PolyAlgo::Update 数组越界,
+            # OCC 的 Standard_OutOfRange 经 SWIG 映射成 IndexError,改用精确 HLR
+            if "OutOfRange" not in str(exc) and "ChangeValue" not in str(exc):
+                raise
+            logger.warning("poly 投影越界,降级精确 HLR: %s (%s)", step_path, exc)
     t0 = time.time()
 
     # 读取 shape(使用 BRep 缓存)

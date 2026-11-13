@@ -21,6 +21,7 @@ import re
 import sys
 import json
 import argparse
+import logging
 
 # Windows 控制台默认 GBK,打印中文系列名会 UnicodeEncodeError
 if hasattr(sys.stdout, "reconfigure"):
@@ -36,6 +37,7 @@ if os.path.join(_PROJECT_ROOT, "src") not in sys.path:
 from core import paths  # noqa: E402  依赖上面的 sys.path 补齐
 
 LIB_ROOT = paths.LIB_ROOT
+logger = logging.getLogger(__name__)
 
 # "250底部法兰前盖<1>" → ("250底部法兰前盖", 1)
 _FEATURE_RE = re.compile(r"^(.+?)<(\d+)>$")
@@ -69,6 +71,15 @@ def strip_code(s):
         if ch in s:
             return s.split(ch)[0].strip()
     return s.strip()
+
+
+def parse_power_kw(text):
+    """从名称里解析功率(kW),支持 '4.4kw' 与 '汇川1500w';解析不出返回 None"""
+    m = re.search(r"([\d.]+)\s*(kw|w)", str(text), re.I)
+    if not m:
+        return None
+    value = float(m.group(1))
+    return value / 1000 if m.group(2).lower() == "w" else value
 
 
 def read_xlsx_rows(path):
@@ -118,6 +129,8 @@ def build_motor(rows):
     扭矩列(如「扭矩(Nm)」)为可选:存在则一并读取,供选型界面按电机直接取额定扭矩,
     缺失时前端回退 T=P*9550/n 估算。功率从电机名列解析(kW/KW 或 W,汇川1500w 等),
     统一为 kW;刹车由名称含"刹车/抱闸"或编号以 B 结尾判断。
+    重复代号与 OnFeature 功率错配会写 warning 日志但不阻断生成:多个系列存在
+    同名多行(不同减速机),硬报错会让面板无法生成任何配置。
     """
     header = [str(c).strip().lower() if c else "" for c in rows[0]]
     if "onfeature" in header and "offfeature" in header:
@@ -129,23 +142,32 @@ def build_motor(rows):
     idx_torque = next((i for i, h in enumerate(header) if "扭矩" in h), None)
 
     cfg = {}
-    for r in rows[1:]:  # 跳过表头
+    seen = {}
+    for lineno, r in enumerate(rows[1:], start=2):
         if not r or not r[0]:
             continue
         raw = str(r[0]).strip()
         code = strip_code(raw)
         if not code:
             continue
+        # 同名多行(不同减速机)互相覆盖,保留既有行为但要留痕
+        if code in seen:
+            logger.warning("电机表代号重复: %s 第 %d 行覆盖第 %d 行(%s),前面的减速机选项会丢失",
+                           code, lineno, seen[code], raw)
+        seen[code] = lineno
         reducer = r[idx_reducer] if idx_reducer is not None and idx_reducer < len(r) else ""
-        # 功率:从电机名解析 kW/KW 或 W(汇川1500w 等),统一为 kW
-        power_kw = None
-        m = re.search(r"([\d.]+)\s*(kw|w)", raw, re.I)
-        if m:
-            v = float(m.group(1))
-            power_kw = v / 1000 if m.group(2).lower() == "w" else v
-        # 刹车:名称含"刹车/抱闸"或编号以 B 结尾
+        power_kw = parse_power_kw(raw)
+        on_list = parse_feature_list(r[idx_on]) if idx_on < len(r) else []
+        off_list = parse_feature_list(r[idx_off]) if idx_off < len(r) else []
+        # OnFeature 里电机零件的功率必须与行名一致,否则装错电机而配置不报错
+        for feat in on_list:
+            feat_kw = parse_power_kw(feat)
+            if (feat_kw is not None and power_kw is not None
+                    and ("汇川" in feat or "电机" in feat)
+                    and abs(feat_kw - power_kw) > 1e-6):
+                logger.warning("电机表功率不匹配: 第 %d 行 %s -> OnFeature %s",
+                               lineno, raw, feat)
         brake = ("刹车" in raw) or ("抱闸" in raw) or (code.endswith("B"))
-        # 扭矩:可选列,取数值(Nm)
         torque = None
         if idx_torque is not None and idx_torque < len(r) and r[idx_torque] not in (None, ""):
             try:
@@ -155,8 +177,8 @@ def build_motor(rows):
         cfg[code] = {
             "name": raw,
             "reducer": str(reducer).strip() if reducer else "",
-            "on": parse_feature_list(r[idx_on]) if idx_on < len(r) else [],
-            "off": parse_feature_list(r[idx_off]) if idx_off < len(r) else [],
+            "on": on_list,
+            "off": off_list,
             "torque": torque,
             "power_kw": power_kw,
             "brake": brake,
