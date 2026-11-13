@@ -35,6 +35,7 @@ from OCC.Core.BRepBndLib import brepbndlib
 
 from core import drawing_engine as DE
 from drawing.hlr_arcfit import fit_circular_features
+from drawing.hlr_poly_fix import get_fixed_shape
 from drawing.hlr_arc_geom import drop_fake_resampled
 from drawing.hlr_brep_circles import (build_view_circles, drop_duplicate_fitted,
                                       strip_bogus_circle_meta)
@@ -95,15 +96,30 @@ def _model_bbox(model_path):
     return box.Get()
 
 
-def _project_discrete_one(shape, view_dir, up_dir, show_hidden, max_extent):
+def _make_poly(shape, ax2):
+    poly = HLRBRep_PolyAlgo()
+    poly.Load(shape)
+    poly.Projector(HLRAlgo_Projector(ax2))
+    return poly
+
+
+def _project_discrete_one(shape, view_dir, up_dir, show_hidden, max_extent,
+                          deflection=0.5):
     """单个视图的 PolyAlgo 离散投影（复用 drawing_engine 的后处理 helper）。"""
     ax2 = _build_ax2(view_dir, up_dir)
     bounds = DE._compute_view_bounds_2d(shape, ax2, margin=1.0)
 
-    poly = HLRBRep_PolyAlgo()
-    poly.Load(shape)
-    poly.Projector(HLRAlgo_Projector(ax2))
-    poly.Update()
+    poly = _make_poly(shape, ax2)
+    try:
+        poly.Update()
+    except (IndexError, RuntimeError) as exc:
+        if "OutOfRange" not in str(exc) and "ChangeValue" not in str(exc):
+            raise
+        fixed = get_fixed_shape(shape, deflection)
+        if fixed is None:
+            raise
+        poly = _make_poly(fixed, ax2)
+        poly.Update()
 
     pts = HLRBRep_PolyHLRToShape()
     pts.Update(poly)
@@ -169,7 +185,7 @@ def project_view_subset(model_path, view_names, deflection=0.5,
             continue
         t0 = time.perf_counter()
         vis, hid = _project_discrete_one(shape, cfg["dir"], cfg["up"],
-                                         show_hidden, max_ext)
+                                         show_hidden, max_ext, deflection)
         fv = _fit_one(vis, deflection, max_r) if do_fit else vis
         fh = (_fit_one(hid, deflection, max_r)
               if (do_fit and show_hidden) else hid)
