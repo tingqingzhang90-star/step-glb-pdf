@@ -15,7 +15,7 @@ conda install -c conda-forge pythonocc-core
 pip install -r requirements.txt
 ```
 
-`requirements.txt` 里是 Flask 3、reportlab、ezdxf、PyMuPDF、pytest、boto3 等；其中 boto3 只在启用对象存储后端时才需要，代码里延迟导入。Linux 上还需要系统的 OpenGL / X11 共享库，参见 `docs/Linux 部署适配清单.md`。
+`requirements.txt` 里是 Flask 3、reportlab、ezdxf、PyMuPDF、trimesh、numpy、openpyxl、svglib、pytest、boto3；其中 boto3 只在启用对象存储后端时才需要，代码里延迟导入。Linux 上还需要系统的 OpenGL / X11 共享库，参见 `docs/Linux 部署适配清单.md`。
 
 ## 启动后端
 

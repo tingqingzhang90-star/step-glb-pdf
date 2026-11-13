@@ -19,14 +19,18 @@
   `output/` 要放在持久盘并定期备份——"同型号复用跳过构建"的命中判断只读本地 `output/`。
 - **依赖分两块**：
   - `pythonocc-core`：只能 `conda install -c conda-forge`，不在 `requirements.txt` 中。
-  - `flask / reportlab / ezdxf / pymupdf / boto3 / pytest`：在 `requirements.txt`，用 pip 装。
+  - 其余（Flask、reportlab、ezdxf、PyMuPDF、trimesh、numpy、openpyxl、svglib、boto3、
+    pytest）都在 `requirements.txt`，用 pip 一次装齐。
+- **运行数据不入库**：`library/`、`data/`、前端 `dist/` 与系列目录下的 xlsx 需随代码
+  单独上传；`output/` 只建空目录，历史产物可按需保留。
 
 ---
 
 ## 1. 宝塔基础准备
 
 1. 安装宝塔面板（LNMP 随意，本服务只需 Nginx 做反向代理）。
-2. 安全 → 防火墙：**放行 5001**（仅本机访问也可不放，但调试时建议先放行）。
+2. 安全 → 防火墙：只放行 80 / 443。gunicorn 按第 7 节绑 `127.0.0.1:5001`，
+   由本机 Nginx 反代，不必对外开放 5001。
 3. 计划任务：给 `output/` 加每日打包备份（可选但建议）。
 
 ---
@@ -125,7 +129,12 @@ vi .env
 ```
 
 默认 `STORAGE_BACKEND=local` 即可运行（纯本地，与改造前一致）。要上 OSS 见第 10 节。
-反代场景下建议加一行 `STEP_HOST=127.0.0.1`，只让本机 Nginx 访问。
+`STEP_HOST` 只在直接跑 `python src/web/server.py` 时生效（`web/app.py` 的 `main()` 读取），
+gunicorn 用 `web.app:app` 不读它，绑定地址完全由 `-b` 决定。生产按第 7 节用
+`-b 127.0.0.1:5001` 即可，不必配 `STEP_HOST`。
+
+`.env.example` 未列出出图与任务池参数，需手动补 `BUILD_POOL_WORKERS`、`DRAWING_ALGO`、
+`DRAWING_POLY_DEFLECTION`、`DRAWING_POLY_DO_FIT`，否则线上出图算法与精度跟本地不一致。
 
 ---
 
@@ -136,7 +145,7 @@ vi .env
 ```bash
 cd /www/wwwroot/step__glb_pdf/src
 python -c "from web.app import app; print('import ok')"
-/root/miniconda3/envs/pdf1/bin/gunicorn -w 2 -k gthread -b 127.0.0.1:5001 --timeout 600 web.app:app
+/root/miniconda3/envs/pdf1/bin/gunicorn -w 1 -k gthread --threads 8 -b 127.0.0.1:5001 --timeout 600 web.app:app
 ```
 
 能访问 `http://127.0.0.1:5001/` 后再交守护。
@@ -150,7 +159,7 @@ python -c "from web.app import app; print('import ok')"
 - **启动命令**（用你自己的 conda gunicorn 绝对路径）：
 
   ```bash
-  /root/miniconda3/envs/pdf1/bin/gunicorn -w 2 -k gthread -b 127.0.0.1:5001 --timeout 600 --graceful-timeout 60 web.app:app
+  /root/miniconda3/envs/pdf1/bin/gunicorn -w 1 -k gthread --threads 8 -b 127.0.0.1:5001 --timeout 600 --graceful-timeout 60 web.app:app
   ```
 
 - **环境变量**（保险，确保 `web` 包可导入）：
@@ -162,8 +171,10 @@ python -c "from web.app import app; print('import ok')"
 - **进程数量：必须设为 1**（见下方"常见故障"）。
 
 要点：
-- `-w 2` 别开太大：每个 gunicorn worker 内部 `task_pool` 还会再开子进程跑 OCC，
-  worker 多了会吃满 CPU / 内存，1~2 个足够。并发交给 gunicorn 的 worker + gthread。
+- **gunicorn 只能 `-w 1`**：`task_pool` 是进程内单例，任务字典不跨 worker 共享。
+  开多个 worker 时 `POST /api/build` 落在 A、轮询 `/api/task/<id>` 落在 B 会查不到任务；
+  且每个 worker 各自再开 OCC 子进程，内存按 worker 数翻倍。并发交给 `--threads`
+  和任务池 `BUILD_POOL_WORKERS`（每个跑过任务的 worker 常驻 290–480 MB，按内存定）。
 - `--timeout 600`：OCC 构建重型型号可能几十秒，防 gunicorn 误杀 worker。
 
 ---
@@ -245,7 +256,7 @@ cd cad-viewer-app && npm install && npm run build && cd ..   # 前端有变时
 
 - **最常见原因：宝塔进程守护"进程数量"设成了 2**。该字段是"启动几条相同命令"，
   设 2 会拉起 2 个 gunicorn master 都绑 5001，第二个失败并被不断重启刷屏。
-  **改成 1**，并发交给 gunicorn 的 `-w` 参数。
+  **改成 1**，并发交给 gunicorn 的 `--threads` 和任务池 `BUILD_POOL_WORKERS`。
 - 也可能是"进程守护已在管一个，你又手动跑了一次 gunicorn"。清理成单一启动源：
 
   ```bash
