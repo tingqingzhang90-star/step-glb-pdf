@@ -35,7 +35,7 @@ from OCC.Core.BRepBndLib import brepbndlib
 
 from core import drawing_engine as DE
 from drawing.hlr_arcfit import fit_circular_features
-from drawing.hlr_poly_fix import get_fixed_shape
+from drawing.hlr_poly_fix import get_fixed_shape, peek_fixed_shape
 from drawing.hlr_arc_geom import drop_fake_resampled
 from drawing.hlr_brep_circles import (build_view_circles, drop_duplicate_fitted,
                                       strip_bogus_circle_meta)
@@ -109,7 +109,9 @@ def _project_discrete_one(shape, view_dir, up_dir, show_hidden, max_extent,
     ax2 = _build_ax2(view_dir, up_dir)
     bounds = DE._compute_view_bounds_2d(shape, ax2, margin=1.0)
 
-    poly = _make_poly(shape, ax2)
+    # 首视图撞到越界并修复后，其余视图直接投影修复副本，不再各自白跑一次
+    fixed = peek_fixed_shape(shape)
+    poly = _make_poly(fixed if fixed is not None else shape, ax2)
     try:
         poly.Update()
     except (IndexError, RuntimeError) as exc:

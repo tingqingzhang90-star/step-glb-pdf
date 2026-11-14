@@ -70,6 +70,12 @@ def _reverse_complex_inners(shape):
     return changed
 
 
+def peek_fixed_shape(shape):
+    """查已缓存的修复副本；未修复过或无需修复返回 None，不触发修复。"""
+    hit = _FIXED.get(id(shape))
+    return hit[1] if hit is not None and hit[0] is shape else None
+
+
 def get_fixed_shape(shape, deflection):
     """返回可用于 PolyAlgo 重试的修复副本；无需修复时返回 None。
 

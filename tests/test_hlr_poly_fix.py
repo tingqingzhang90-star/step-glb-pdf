@@ -154,3 +154,27 @@ def test_no_complex_inner_returns_none(fix_stub):
     shape = object()
     assert hf.get_fixed_shape(shape, 0.1) is None
     assert hf.get_fixed_shape(shape, 0.1) is None
+
+
+def test_cached_fixed_shape_used_without_failed_update(stub):
+    original, fixed = object(), object()
+    hf._FIXED[id(original)] = (original, fixed)
+    calls = []
+
+    def make_poly(shape, ax2):
+        calls.append(shape)
+        return _FakePoly()
+
+    stub.setattr(hp, "_make_poly", make_poly)
+    stub.setattr(hp, "get_fixed_shape",
+                 lambda *a: pytest.fail("已有修复副本不应再触发修复"))
+    try:
+        assert hp._project_discrete_one(
+            original, None, None, False, 1e4, 0.1) == ([], [])
+        assert calls == [fixed]
+    finally:
+        hf._FIXED.pop(id(original), None)
+
+
+def test_peek_returns_none_for_unfixed_shape():
+    assert hf.peek_fixed_shape(object()) is None
