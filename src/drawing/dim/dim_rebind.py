@@ -198,16 +198,16 @@ def _motor_face_lines(target_profile, view_name):
     """电机包络两端面的投影线(mm),供 bind_motor 标注合成边线
 
     Returns:
-        (face_min, face_max, size): 两端面线段(各为 (p1, p2)),无电机或
-        该视图轴向退化时返回 (None, None, None)
+        (face_min, face_max, size, span_mm): 两端面线段(各为 (p1, p2))与外露跨度,
+        无电机或该视图轴向退化时返回四个 None
     """
     from drawing.dim.dim_envelope import envelope_faces
 
     faces = envelope_faces(target_profile["anchors"], view_name)
     if not faces:
-        return None, None, None
+        return None, None, None, None
     motor = _by_id(target_profile).get("motor.body")
-    return faces["face_min"], faces["face_max"], motor["size"]
+    return faces["face_min"], faces["face_max"], motor["size"], faces["span_mm"]
 
 
 def _mm_to_canvas_fn(view_segs, k):
@@ -416,7 +416,7 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
                     "reason": f"视图 {placement['source_view']} 下电机轴向与投影方向垂直,"
                               "两端面重合,无法标注包络尺寸",
                     "segs": [], "views": []}
-        fmin, fmax, _size = faces
+        fmin, fmax, _size, span_mm = faces
         # 与前端 faceToSheet 同源: 优先用调色板 bbox 参数(mm→画布 px),
         # 缺失时才退回从边线 mm 元数据反推
         to_canvas = (_canvas_fn_from_bbox(placement.get("bbox"))
@@ -446,8 +446,12 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
         if ann.get("mode") == "single":
             return {"status": "motor", "reason": "",
                     "segs": [seg_max], "views": [placement]}
-        return {"status": "motor", "reason": "",
-                "segs": [seg_min, seg_max], "views": [placement, placement]}
+        result = {"status": "motor", "reason": "",
+                  "segs": [seg_min, seg_max], "views": [placement, placement]}
+        # 模板里的 spanMm 是放置时的旧包络长度,换型号/裁切后必须由目标包络重算
+        if ann.get("mode") == "motor-envelope":
+            result["span_mm"] = span_mm
+        return result
 
     # 孔组引用(分度圆直径标注):按各孔边线匹配,渲染端再合成 Bolt 圆
     ref_entries = group_refs if ann.get("groupRefs") and group_refs else base_refs

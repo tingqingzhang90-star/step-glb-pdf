@@ -254,14 +254,17 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         r = dim_rebind.rebind_annotation(
             item["dim"], item["refs"], ctx, target_profile,
             placements, match_cache, group_refs=item.get("group_refs"))
-        r["annotation"] = item["dim"]
+        ann = dict(item["dim"])
+        if r.get("span_mm") is not None:
+            ann["spanMm"] = r["span_mm"]
+        r["annotation"] = ann
         rebound.append(r)
 
     # 源文件的标注 refs 要指向本型号边线:用重绑匹配到的目标边下标
     # 替换模板里的基准下边,否则下标对不上,前端导入后标注全部丢失
     source_annotations = []
-    for item, r in zip(base_refs, rebound):
-        ann = dict(item["dim"])
+    for r in rebound:
+        ann = dict(r["annotation"])
         if r.get("ref_map"):
             ann[r.get("ref_map_target") or "refs"] = r["ref_map"]
         source_annotations.append(ann)

@@ -5,7 +5,7 @@ drawing_anchors.json 的静态绝对坐标仅对提取时的基准型号有效,�
 换电机后即失效。本模块按型号实时解析:
 
   - 缸体系: 解析计算(安装平移 + D1 = stroke + C 拉伸),不依赖 OCC 几何
-  - 电机系: 零件 BRep 实测包络,换电机型号自动跟随
+  - 电机系: 零件 BRep 实测包络,轴向裁到与安装件的连接端面,换电机型号自动跟随
   - 位移规则与 rebuild_assembly.build_assembly 一致:
     主轴坐标大于缸体安装位置的零件,随拉伸量同步平移
 
@@ -24,6 +24,10 @@ from core import rebuild_assembly as rb
 
 _KEY_RE = re.compile(r"^(.+)-(\d+)$")
 _BASE_VIEWS = ["front", "left", "top"]
+
+_JOINT_FACE_MIN_AREA = 3000.0  # 连接端面面积下限(mm²),滤掉孔口、小凸台端面
+_JOINT_FACE_TOL = 1.0          # 两个零件端面共面的容差(mm)
+_JOINT_INNER_RATIO = 0.5       # 内嵌段须短于外露段的一半,避免把中部结构误判为接合面
 
 
 def _base_name(key):
@@ -316,6 +320,76 @@ def _resolve_motor_real_faces(data, config, motor, axis_dir):
     return rmin["center"], rmax["center"]
 
 
+def pick_joint_face(candidates, lo, hi):
+    """从"与电机零件共面的安装件端面"里选出连接端面
+
+    Args:
+        candidates: [(轴向坐标, 端面面积), ...]
+        lo, hi: 电机组包络的轴向范围
+
+    Returns:
+        (proj, side): side="min"/"max" 表示哪一端伸进了安装件;无合格候选返回 None
+    """
+    hits = []
+    for proj, area in candidates:
+        if area < _JOINT_FACE_MIN_AREA:
+            continue
+        if not (lo + _JOINT_FACE_TOL < proj < hi - _JOINT_FACE_TOL):
+            continue
+        near, far = min(proj - lo, hi - proj), max(proj - lo, hi - proj)
+        if near > far * _JOINT_INNER_RATIO:
+            continue
+        hits.append((area, proj))
+    if not hits:
+        return None
+    _, proj = max(hits)
+    return proj, "min" if proj - lo < hi - proj else "max"
+
+
+def trim_bbox_to_joint(bbox, axis_idx, joint):
+    """按连接端面裁掉嵌进安装件的轴向段,保留电机实际外露部分"""
+    if not bbox or not joint:
+        return bbox
+    proj, side = joint
+    bmin, bmax = list(bbox[0]), list(bbox[1])
+    (bmin if side == "min" else bmax)[axis_idx] = round(proj, 2)
+    return bmin, bmax
+
+
+def _resolve_motor_joint(data, config, motor, bbox, axis_idx, axis_dir):
+    """实测电机组与安装件的连接端面
+
+    减速机输出段会伸进直连盒/连接板,零件 bbox 因此比外露长度多出一截。
+    只认"非电机零件的外端面 + 落在电机包络内 + 与电机零件端面共面"的候选,
+    内部台阶端面和孔端面都不参与,避免把标注缩到错误的位置。
+    """
+    lo, hi = bbox[0][axis_idx], bbox[1][axis_idx]
+    on_parts = set(config.get("motor", {}).get(motor, {}).get("on", []))
+    motor_projs = []
+    candidates = []
+    for k, info in data.items():
+        if info.get("suppressed"):
+            continue
+        shape = _read_part_shape(info["step_file"])
+        matrix = info["transform_matrix"]
+        if _base_name(k) in on_parts:
+            motor_projs.extend(f["proj"] for f in _part_end_faces(shape, matrix, axis_dir))
+            continue
+        pmin, pmax = _shape_world_bbox(shape, matrix)
+        if not (pmin[axis_idx] < hi and pmax[axis_idx] > lo):
+            continue
+        for f in _part_end_faces(shape, matrix, axis_dir):
+            proj = f["proj"]
+            if f["area"] < _JOINT_FACE_MIN_AREA:
+                continue
+            if min(abs(proj - pmin[axis_idx]), abs(proj - pmax[axis_idx])) > _JOINT_FACE_TOL:
+                continue
+            candidates.append((proj, f["area"]))
+    shared = [(p, a) for p, a in candidates
+              if any(abs(p - m) <= _JOINT_FACE_TOL for m in motor_projs)]
+    return pick_joint_face(shared, lo, hi)
+
+
 def _anchor_entry(anchor_id, atype, label, **extra):
     entry = {"id": anchor_id, "type": atype, "label": label,
              "views": list(_BASE_VIEWS)}
@@ -354,7 +428,8 @@ def _build_profile(model_code, series_name, cyl, motor_bbox, gearbox_bbox, motor
                           point3d=[round(v, 2) for v in face_max]),
         ])
 
-    _add_body_anchors("motor", motor_bbox, "电机/减速机包络", "电机尾端面", "电机接入端面")
+    _add_body_anchors("motor", motor_bbox, "电机/减速机外露包络",
+                      "电机尾端面", "电机减速机连接端面")
     _add_body_anchors("gearbox", gearbox_bbox, "减速机包络", "减速机尾端面", "减速机接入端面")
 
     # 真实端面中心:从平面端面提取,比 bbox 极值更贴合实际端面(避免法兰凸缘影响)
@@ -363,7 +438,7 @@ def _build_profile(model_code, series_name, cyl, motor_bbox, gearbox_bbox, motor
         anchors.extend([
             _anchor_entry("motor.real_axis_min_face", "plane", "电机尾端面(真实端面)",
                           point3d=[round(v, 2) for v in rmin]),
-            _anchor_entry("motor.real_axis_max_face", "plane", "减速机接入端面(真实端面)",
+            _anchor_entry("motor.real_axis_max_face", "plane", "减速机本体端面(真实端面)",
                           point3d=[round(v, 2) for v in rmax]),
         ])
 
@@ -412,6 +487,10 @@ def resolve_anchors(model_code):
     data = displace_parts(parts_data, axis_idx, t_mm[axis_idx], delta_mm)
 
     motor_bbox = _resolve_motor_bbox(data, config, motor)
+    if motor_bbox:
+        joint = _resolve_motor_joint(data, config, motor, motor_bbox,
+                                     axis_idx, cyl["axis_dir"])
+        motor_bbox = trim_bbox_to_joint(motor_bbox, axis_idx, joint)
     gearbox_bbox = _resolve_gearbox_bbox(data, config, motor)
     motor_real_faces = _resolve_motor_real_faces(data, config, motor, cyl["axis_dir"])
     profile = _build_profile(model_code, series_name, cyl, motor_bbox, gearbox_bbox, motor_real_faces, axis_idx)
