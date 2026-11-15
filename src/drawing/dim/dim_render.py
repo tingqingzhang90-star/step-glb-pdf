@@ -51,6 +51,12 @@ def _sheet_point(placement, lx, ly):
             placement["y"] + ly * placement["scale"])
 
 
+def _face_extent_sheet(placement, extent, axis):
+    """端面线原始范围(画布 px)换算到图纸坐标"""
+    base = placement["y"] if axis == "y" else placement["x"]
+    return [base + v * placement["scale"] for v in extent]
+
+
 def _line_mm_length(line):
     m = (line.get("meta") or {}).get("mm_coords")
     if not m or len(m) < 4:
@@ -301,39 +307,33 @@ def _linear_motor_envelope(ann, segs, views):
 
     offset = ann.get("offset") or 50
     slide = ann.get("textSlide") or 0.0
-    # 与前端 buildMotorEnvelopeGeometry 严格对齐:
-    # - 取每条端面线"朝向尺寸线"的端点(同 pickEnvelopeEndpoint);
-    # - 统一取 max y / max x(最下/最右端点),让尺寸线基线依附在包络下方/右方;
-    # - normal 固定 (0,1)/(1,0),offset 带符号直接乘,正负自然决定上/下、左/右。
-    # 之前按 offset 符号分别取 min/max y 会导致负 offset(尺寸线在上方)时
-    # 基线被抬到最高端点,尺寸线紧贴图框甚至超出。
-    if o1 == "vertical":  # 包络水平(端面线竖直)
-        # 尺寸线水平,延伸线竖直
-        unit = (1.0, 0.0)
-        normal = (0.0, 1.0)
-        if offset >= 0:
-            ext1 = p1a if p1a[1] > p1b[1] else p1b  # 下端点
-            ext2 = p2a if p2a[1] > p2b[1] else p2b
-        else:
-            ext1 = p1a if p1a[1] < p1b[1] else p1b  # 上端点
-            ext2 = p2a if p2a[1] < p2b[1] else p2b
-        # 统一为最下端点(max y),offset 为负时加上负值自然向上
-        y = max(ext1[1], ext2[1])
-        ext1 = (ext1[0], y)
-        ext2 = (ext2[0], y)
-    else:  # 包络竖直(端面线水平)
-        unit = (0.0, 1.0)
-        normal = (1.0, 0.0)
-        if offset >= 0:
-            ext1 = p1a if p1a[0] > p1b[0] else p1b  # 右端点
-            ext2 = p2a if p2a[0] > p2b[0] else p2b
-        else:
-            ext1 = p1a if p1a[0] < p1b[0] else p1b  # 左端点
-            ext2 = p2a if p2a[0] < p2b[0] else p2b
-        # 统一为最右端点(max x),offset 为负时加上负值自然向左
-        x = max(ext1[0], ext2[0])
-        ext1 = (x, ext1[1])
-        ext2 = (x, ext2[1])
+    # 与前端 buildMotorEnvelopeGeometry 对齐:尺寸界线以减速机外露包络轮廓为
+    # 硬边界,从尺寸线落到轮廓远侧边缘(整个减速机高度),两条对称等长,
+    # 绝不越过轮廓进入下方气缸;尺寸线钳制在轮廓外侧。
+    horizontal = o1 == "vertical"  # 端面线竖直 → 包络水平,界线竖直
+    unit = (1.0, 0.0) if horizontal else (0.0, 1.0)
+    axis = "y" if horizontal else "x"
+    corners = ([p1a[1], p1b[1], p2a[1], p2b[1]] if horizontal
+               else [p1a[0], p1b[0], p2a[0], p2b[0]])
+    outside = max(corners)
+    extent = (line1.get("meta") or {}).get("face_extent")
+    if extent:
+        lo, hi = _face_extent_sheet(views[0], extent, axis)
+    else:
+        lo, hi = min(corners), max(corners)
+    far_edge = hi if offset < 0 else lo
+    outer = (min(outside + offset, lo - 2.0) if offset < 0
+             else max(outside + offset, hi + 2.0))
+    if horizontal:
+        ext_start1 = (p1a[0], far_edge)
+        ext_start2 = (p2a[0], far_edge)
+        dim_base = (p1a[0], outer)
+        dim_end_base = (p2a[0], outer)
+    else:
+        ext_start1 = (far_edge, p1a[1])
+        ext_start2 = (far_edge, p2a[1])
+        dim_base = (outer, p1a[1])
+        dim_end_base = (outer, p2a[1])
 
     # span_mm 优先取模板中保存的
     mm_val = ann.get("spanMm")
@@ -346,14 +346,14 @@ def _linear_motor_envelope(ann, segs, views):
             return None
     text = format_mm(mm_val)
 
-    dim_base = offset_point(ext1, normal, offset)
-    dim_end = offset_point(ext2, normal, offset)
-
-    arrows = build_linear_arrows(dim_base, dim_end, unit, text, _arrow_mode(ann))
-    dim_start, dim_end = extend_linear_line(dim_base, dim_end, arrows["outward"], unit, *_line_extension(ann))
-    mid = ((dim_base[0] + dim_end[0]) / 2.0, (dim_base[1] + dim_end[1]) / 2.0)
+    arrows = build_linear_arrows(dim_base, dim_end_base, unit, text, _arrow_mode(ann))
+    dim_start, dim_end = extend_linear_line(
+        dim_base, dim_end_base, arrows["outward"], unit, *_line_extension(ann))
+    mid = ((dim_base[0] + dim_end_base[0]) / 2.0,
+           (dim_base[1] + dim_end_base[1]) / 2.0)
     return {
-        "lines": [_ext_line(ext1, dim_base), _ext_line(ext2, dim_end)],
+        "lines": [_ext_line(ext_start1, dim_base),
+                  _ext_line(ext_start2, dim_end_base)],
         "dim_lines": [(dim_start, dim_end)],
         "arrows": [arrows["arrow1"], arrows["arrow2"]],
         "texts": [_linear_text(unit, mid, text, slide)],

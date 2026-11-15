@@ -276,6 +276,10 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
     前端在**图纸坐标**里度量:候选边 sheet x = x1*scale + view.x,
     阈值 30 图纸 px。本函数工作在画布 px,故阈值/线宽判据都要除以
     view_scale 换算,否则视图缩放 ≠ 1 时吸到的是另一条边(尺寸线漂移)。
+
+    连接端面附近既有贯穿多个视图的长轮廓边,也有落在下方视图的碎片边,
+    吸附到它们的远端会把尺寸界线拉到视图下方。故候选边长度、以及吸附
+    端点相对包络轮廓端点的偏移,都不得超过端面线本身(取 1.5 倍余量)。
     """
     if not view_segs:
         return seg
@@ -285,6 +289,8 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
     best = None
     best_dist = float('inf')
     if orientation == "horizontal":
+        limit = abs(seg["y2"] - seg["y1"]) * 1.5
+        pt_y = max(seg["y1"], seg["y2"]) if offset >= 0 else min(seg["y1"], seg["y2"])
         # 端面线竖直,找同 x 附近的竖直边线
         # 距离/落点都用候选边线的首个端点(与前端 Math.abs(x1 - pt.x) 一致):
         # 调色板里有大量 0.1px 级退化碎片,用中点度量会吸到另一条碎片
@@ -292,6 +298,11 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
             if e.get("type") != "line":
                 continue
             if abs(e["x1"] - e["x2"]) > FLAT:
+                continue
+            if abs(e["y2"] - e["y1"]) > limit:
+                continue
+            target_y = max(e["y1"], e["y2"]) if offset >= 0 else min(e["y1"], e["y2"])
+            if abs(target_y - pt_y) > limit:
                 continue
             dist = abs(e["x1"] - seg["x1"])
             if dist < best_dist and dist < SNAP:
@@ -309,11 +320,18 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
         seg_snap["y1"] = seg_snap["y2"] = y
         return seg_snap
     else:
+        limit = abs(seg["x2"] - seg["x1"]) * 1.5
+        pt_x = max(seg["x1"], seg["x2"]) if offset >= 0 else min(seg["x1"], seg["x2"])
         # 端面线水平,找同 y 附近的水平边线
         for e in view_segs:
             if e.get("type") != "line":
                 continue
             if abs(e["y1"] - e["y2"]) > FLAT:
+                continue
+            if abs(e["x2"] - e["x1"]) > limit:
+                continue
+            target_x = max(e["x1"], e["x2"]) if offset >= 0 else min(e["x1"], e["x2"])
+            if abs(target_x - pt_x) > limit:
                 continue
             dist = abs(e["y1"] - seg["y1"])
             if dist < best_dist and dist < SNAP:
@@ -429,6 +447,10 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
         if not seg_min or not seg_max:
             return {"status": "unmatched", "reason": "电机包络线合成失败",
                     "segs": [], "views": []}
+        # 吸附会把端面线退化成点;渲染端仍需减速机轮廓原始范围定位界线终点
+        for seg in (seg_min, seg_max):
+            axis = "y" if seg["meta"]["orientation"] == "vertical" else "x"
+            seg["meta"]["face_extent"] = sorted((seg[axis + "1"], seg[axis + "2"]))
         # 电机包络端面线 y/x 范围来自 bbox 8 角点投影,会远超电机实际边线,
         # 需吸附到视图真实边线端点,让延伸线起点落在视图电机实际边缘。
         # 候选集与前端 snapEndpointToViewEdge 一致:可见边 + 隐藏边。

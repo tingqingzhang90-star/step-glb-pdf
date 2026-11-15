@@ -16,11 +16,22 @@ function pickEnvelopeEndpoint(face, orientation, offset) {
   return { x: offset >= 0 ? Math.max(ax, bx) : Math.min(ax, bx), y: ay }
 }
 
+// 端面边与延伸线端点都不得超出包络轮廓太多,否则贯穿多个视图的长边
+// 或落在下方视图的碎片会把尺寸界线拉到视图另一端
+const FACE_EDGE_LEN_RATIO = 1.5
+
+function faceSpan(face, orientation) {
+  const [a, b] = face
+  return orientation === 'horizontal'
+    ? Math.abs(a.y - b.y) : Math.abs(a.x - b.x)
+}
+
 // 将包络端点吸附到视图中最接近的真实边线端点,同时修正 x(端面位置) 和 y(延伸线端点),
 // 避免 bbox 估算的端点悬空或落在法兰凸缘内部。
-function snapEndpointToViewEdge(view, pt, orientation, offset) {
+function snapEndpointToViewEdge(view, pt, orientation, offset, span = Infinity) {
   const k = view.scale ?? 1
   const threshold = 30  // 图纸像素
+  const limit = span * FACE_EDGE_LEN_RATIO
   const edges = [...(view.edges || []), ...(view.hiddenEdges || [])]
   let best = null
   let bestDist = Infinity
@@ -33,24 +44,24 @@ function snapEndpointToViewEdge(view, pt, orientation, offset) {
     if (orientation === 'horizontal') {
       // 端面线为竖直边线;根据 offset 方向取边线的上/下端点作为延伸线起点
       if (Math.abs(x2 - x1) > 2) continue
+      if (Math.abs(y2 - y1) > limit) continue
+      const targetY = offset >= 0 ? Math.max(y1, y2) : Math.min(y1, y2)
+      if (Math.abs(targetY - pt.y) > limit) continue
       const dist = Math.abs(x1 - pt.x)
       if (dist < bestDist && dist < threshold) {
         bestDist = dist
-        best = {
-          x: x1,
-          y: offset >= 0 ? Math.max(y1, y2) : Math.min(y1, y2)
-        }
+        best = { x: x1, y: targetY }
       }
     } else {
       // 端面线为水平边线;根据 offset 方向取边线的左/右端点
       if (Math.abs(y2 - y1) > 2) continue
+      if (Math.abs(x2 - x1) > limit) continue
+      const targetX = offset >= 0 ? Math.max(x1, x2) : Math.min(x1, x2)
+      if (Math.abs(targetX - pt.x) > limit) continue
       const dist = Math.abs(y1 - pt.y)
       if (dist < bestDist && dist < threshold) {
         bestDist = dist
-        best = {
-          x: offset >= 0 ? Math.max(x1, x2) : Math.min(x1, x2),
-          y: y1
-        }
+        best = { x: targetX, y: y1 }
       }
     }
   }
@@ -75,30 +86,39 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
   let ext1 = pickEnvelopeEndpoint(face1, orientation, offset)
   let ext2 = pickEnvelopeEndpoint(face2, orientation, offset)
   // 把包络端点吸附到视图真实边线端点,修正 x 端面位置并补齐 y 延伸线
-  ext1 = snapEndpointToViewEdge(view, ext1, orientation, offset)
-  ext2 = snapEndpointToViewEdge(view, ext2, orientation, offset)
-  // 吸附后边线端点 y/x 可能不同,必须统一才能保证尺寸线水平/竖直,
-  // 并向下/向右补齐延伸线(取最外侧)。
+  const span = faceSpan(face1, orientation)
+  ext1 = snapEndpointToViewEdge(view, ext1, orientation, offset, span)
+  ext2 = snapEndpointToViewEdge(view, ext2, orientation, offset, span)
+  // 减速机外露包络的四个角点就是尺寸界线的硬边界,不再靠 offset 或吸附猜位置:
+  // 界线从尺寸线一直落到减速机轮廓的远侧边缘(整个减速机高度),到此为止,
+  // 绝不越过轮廓进入下方气缸;尺寸线则钳制在轮廓外侧。
+  const axisOf = p => orientation === 'horizontal' ? p.y : p.x
+  const outside = Math.max(axisOf(ext1), axisOf(ext2))
+  const edgeValues = [...face1, ...face2].map(axisOf)
+  const lo = Math.min(...edgeValues)
+  const hi = Math.max(...edgeValues)
+  const farEdge = offset >= 0 ? lo : hi
+  const gap = 2  // 尺寸线离减速机轮廓的最小间距(图纸 px)
+  const target = outside + offset
+  const outer = offset >= 0 ? Math.max(target, hi + gap) : Math.min(target, lo - gap)
   if (orientation === 'horizontal') {
-    const y = Math.max(ext1.y, ext2.y)
-    ext1 = { x: ext1.x, y }
-    ext2 = { x: ext2.x, y }
+    ext1 = { x: ext1.x, y: farEdge }
+    ext2 = { x: ext2.x, y: farEdge }
   } else {
-    const x = Math.max(ext1.x, ext2.x)
-    ext1 = { x, y: ext1.y }
-    ext2 = { x, y: ext2.y }
+    ext1 = { x: farEdge, y: ext1.y }
+    ext2 = { x: farEdge, y: ext2.y }
   }
 
   const basis = lineBasis(ext1, ext2)
   if (!basis) return null
 
-  // 尺寸线法向统一朝"下/右":与工程图习惯一致,也与后端 envelope_endpoints 约定相同。
-  // horizontal 时 offset 正 → 尺寸线在包络下方;vertical 时 offset 正 → 尺寸线在包络右方。
-  const normal = orientation === 'horizontal'
-    ? { x: 0, y: 1 }
-    : { x: 1, y: 0 }
-  const dimStart = { x: ext1.x + normal.x * offset, y: ext1.y + normal.y * offset }
-  const dimEnd = { x: ext2.x + normal.x * offset, y: ext2.y + normal.y * offset }
+  // offset 为负 → 尺寸线在包络上/左侧,为正 → 在下/右侧
+  const dimStart = orientation === 'horizontal'
+    ? { x: ext1.x, y: outer }
+    : { x: outer, y: ext1.y }
+  const dimEnd = orientation === 'horizontal'
+    ? { x: ext2.x, y: outer }
+    : { x: outer, y: ext2.y }
 
   const text = customText || `${envelope.span_mm}mm`
   const arrows = buildLinearArrows(dimStart, dimEnd, basis.unit, text, arrowMode)
@@ -129,10 +149,11 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
 // offset 为负时尺寸线在包络上/左侧，offset 为正时在下/右侧。
 function envelopeBaseLine(view, face1, face2, orientation, sign) {
   const s = sign >= 0 ? 1 : -1
+  const span = faceSpan(face1, orientation)
   let e1 = pickEnvelopeEndpoint(face1, orientation, s)
   let e2 = pickEnvelopeEndpoint(face2, orientation, s)
-  e1 = snapEndpointToViewEdge(view, e1, orientation, s)
-  e2 = snapEndpointToViewEdge(view, e2, orientation, s)
+  e1 = snapEndpointToViewEdge(view, e1, orientation, s, span)
+  e2 = snapEndpointToViewEdge(view, e2, orientation, s, span)
   return orientation === 'horizontal'
     ? Math.max(e1.y, e2.y)
     : Math.max(e1.x, e2.x)

@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
 
 from drawing.dim import dim_envelope  # noqa: E402
 from drawing.dim import dim_rebind  # noqa: E402
+from drawing.dim import dim_render  # noqa: E402
 
 
 def _motor_anchors(prefix="motor", z_min=100.0, z_max=300.0):
@@ -146,3 +147,70 @@ def test_align_seg_direction_reverses_polyline_points():
     aligned = dim_rebind._align_seg_direction(base, target)
     assert aligned["points"][0] == [1.0, 3.0]
     assert aligned["points"][-1] == [10.0, 3.0]
+
+
+def test_snap_seg_skips_long_view_outline_edge():
+    """连接端面处的贯穿长边不是端面边:吸附它会把尺寸界线拉到视图下方"""
+    seg = {"type": "line", "x1": 100.0, "y1": 0.0, "x2": 100.0, "y2": 40.0,
+           "meta": {"orientation": "vertical"}}
+    view_segs = [
+        {"type": "line", "x1": 100.0, "y1": 0.0, "x2": 100.0, "y2": 300.0},
+        # 落在下方视图的碎片更近(x=100.5),但端点离包络太远,不能被选中
+        {"type": "line", "x1": 100.5, "y1": 200.0, "x2": 100.5, "y2": 210.0},
+        {"type": "line", "x1": 101.0, "y1": 12.0, "x2": 101.0, "y2": 30.0},
+    ]
+    snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "horizontal", 50)
+    assert snapped["x1"] == snapped["x2"] == 101.0
+
+
+def test_snap_seg_vertical_skips_long_view_outline_edge():
+    seg = {"type": "line", "x1": 0.0, "y1": 100.0, "x2": 40.0, "y2": 100.0,
+           "meta": {"orientation": "horizontal"}}
+    view_segs = [
+        {"type": "line", "x1": 0.0, "y1": 100.0, "x2": 300.0, "y2": 100.0},
+        {"type": "line", "x1": 200.0, "y1": 100.5, "x2": 210.0, "y2": 100.5},
+        {"type": "line", "x1": 12.0, "y1": 101.0, "x2": 30.0, "y2": 101.0},
+    ]
+    snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "vertical", 50)
+    assert snapped["y1"] == snapped["y2"] == 101.0
+
+
+def test_rebind_motor_segs_keep_face_extent():
+    """吸附把端面线退化成点后,减速机轮廓范围仍要随 meta 传给渲染端"""
+    ann = {"type": "linear", "mode": "motor-envelope", "bind_motor": True,
+           "refs": [{"viewId": "view_1", "idx": -1, "type": "edges"}],
+           "offset": -20, "spanMm": 200}
+    placement = {"source_view": "left", "segs": [], "hidden": [],
+                 "bbox": {"scale": 1.0, "offset_x": 0.0, "offset_y": 0.0},
+                 "scale": 1.0, "x": 0.0, "y": 0.0, "k": 1.0}
+    anchors = _motor_anchors()
+    anchors[0]["size"] = [50.0, 20.0, 200.0]
+    r = dim_rebind.rebind_annotation(
+        ann, [], {}, {"anchors": anchors}, {"view_1": placement}, {})
+    assert r["status"] == "motor"
+    for seg in r["segs"]:
+        extent = seg["meta"]["face_extent"]
+        assert extent == sorted((seg["y1"], seg["y2"]))
+
+
+def test_pdf_motor_envelope_ext_lines_are_symmetric():
+    """PDF 两条界线都竖直等长,且止于减速机轮廓远侧边缘"""
+    ann = {"type": "linear", "mode": "motor-envelope", "offset": -36.0,
+           "spanMm": 457.5}
+    meta = {"orientation": "vertical", "face_extent": [67.2, 130.68],
+            "mm_coords": [-137.0, -435.0, -137.0, -205.0]}
+    segs = [
+        dict(type="line", x1=100.0, y1=70.54, x2=100.0, y2=70.54, meta=dict(meta)),
+        dict(type="line", x1=200.0, y1=70.54, x2=200.0, y2=70.54, meta=dict(meta)),
+    ]
+    views = [{"x": 0.0, "y": 0.0, "scale": 1.0}] * 2
+    out = dim_render._linear_motor_envelope(ann, segs, views)
+    assert out is not None
+    lines = out["lines"]
+    assert len(lines) == 2
+    assert lines[0][0][1] == pytest.approx(130.68)
+    assert lines[1][0][1] == pytest.approx(130.68)
+    for p1, p2 in lines:
+        assert p1[0] == pytest.approx(p2[0])
+    assert abs(lines[0][0][1] - lines[0][1][1]) == pytest.approx(
+        abs(lines[1][0][1] - lines[1][1][1]), abs=0.01)
