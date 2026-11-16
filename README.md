@@ -279,3 +279,9 @@ conda run -n pdf1 python -m pytest tests/ -v
 ## 文档索引
 
 `docs/目录结构与模板出图流程.md` 记录分层与模板流程，`docs/关键接口说明.md` 说明接口与并发模型，`docs/同系列模板复用规则.md` 定义模板复用的身份判定，`docs/标注样式配置说明.md` 说明前后端共用样式字段。部署相关有 `docs/DEPLOY_BAOTA.md` 与 `docs/Linux 部署适配清单.md`，几何与编辑器设计另有若干方案文档。
+
+## License
+
+项目代码采用 [Apache License 2.0](LICENSE)，可商用、可修改、可分发，附带专利授权；分发时保留 LICENSE 与版权声明。
+
+第三方依赖各按其许可分发：`pythonocc-core` / OpenCASCADE 使用 LGPL 系许可，Vue 3 / Vite 等见各自项目的许可证。`图库项目/` 下的 SolidWorks 原始图纸、`library/` 零件库和 `output/` 生成产物不在仓库中，也不受本授权覆盖；`examples/data/` 里的示例 BREP 是随代码分发的演示数据。
