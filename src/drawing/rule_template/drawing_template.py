@@ -904,23 +904,17 @@ def _calculate_dimension(dim_def, segments, scale, offset, anchor_map=None, para
     return None
 
 
-# 视图投影轴配置(与 drawing_engine.STANDARD_VIEW_CONFIGS 一致)
-# x_dir: 屏幕右方向(模型坐标), up_dir: 屏幕上方向(模型坐标)
-# 计算方式: x_dir = view_dir × up_dir (与 HLR Projector 的 gp_Ax2 一致)
-_VIEW_PROJECTION_AXES = {
-    # front: dir=(0,0,1), up=(0,1,0) → x_dir=(-1,0,0), screen: x=-px, y=py
-    "front":  {"x_dir": (-1, 0, 0), "up_dir": (0, 1, 0)},
-    # back: dir=(0,0,-1), up=(0,1,0) → x_dir=(1,0,0), screen: x=px, y=py
-    "back":   {"x_dir": (1, 0, 0),  "up_dir": (0, 1, 0)},
-    # left: dir=(1,0,0), up=(0,1,0) → x_dir=(0,0,1), screen: x=pz, y=py
-    "left":   {"x_dir": (0, 0, 1),  "up_dir": (0, 1, 0)},
-    # right: dir=(-1,0,0), up=(0,1,0) → x_dir=(0,0,-1), screen: x=-pz, y=py
-    "right":  {"x_dir": (0, 0, -1), "up_dir": (0, 1, 0)},
-    # top: dir=(0,-1,0), up=(0,0,-1) → x_dir=(1,0,0), screen: x=px, y=-pz
-    "top":    {"x_dir": (1, 0, 0),  "up_dir": (0, 0, -1)},
-    # bottom: dir=(0,1,0), up=(0,0,1) → x_dir=(1,0,0), screen: x=px, y=pz
-    "bottom": {"x_dir": (1, 0, 0),  "up_dir": (0, 0, 1)},
-}
+def _view_projection_axes(view_type):
+    """视图屏幕轴(模型坐标),由唯一方向源推导,所有标准视图自动覆盖
+
+    规则式模板传的是视图 id(如 "view_0")而非标准视图名,这种标识没有
+    方向信息,返回 None 由调用方沿用原有的 X-Y 平面投影。
+    """
+    from drawing.view_axes import VIEW_DIRECTIONS, view_screen_axes
+
+    if view_type not in VIEW_DIRECTIONS:
+        return None
+    return view_screen_axes(view_type)
 
 
 def _anchor_to_2d_point(anchor, view_type=None):
@@ -951,16 +945,14 @@ def _anchor_to_2d_point(anchor, view_type=None):
     if view_type is None:
         return [round(px, 2), round(py, 2)]
 
-    axes = _VIEW_PROJECTION_AXES.get(view_type)
+    axes = _view_projection_axes(view_type)
     if not axes:
         return [round(px, 2), round(py, 2)]
 
-    xd = axes["x_dir"]
-    ud = axes["up_dir"]
-    screen_x = px * xd[0] + py * xd[1] + pz * xd[2]
-    # HLR 投影段的 y 轴 = ax2 的 Y = N × Vx = -up(drawing_engine 实测约定),
-    # 锚点必须与边线同空间,故 screen_y 取 -up 方向分量
-    screen_y = -(px * ud[0] + py * ud[1] + pz * ud[2])
+    xd, yd = axes  # ax2 的 X/Y,与 HLR 边线的 mm 坐标同一空间
+    p = (px, py, pz)
+    screen_x = sum(p[i] * xd[i] for i in range(3))
+    screen_y = sum(p[i] * yd[i] for i in range(3))
     return [round(screen_x, 2), round(screen_y, 2)]
 
 

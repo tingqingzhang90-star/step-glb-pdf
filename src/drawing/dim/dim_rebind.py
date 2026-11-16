@@ -13,15 +13,11 @@
 """
 import math
 
-# 各视图投影面坐标轴与模型主轴(Z)的映射(ax2 坐标系,单位 mm)
-# left_top 与 left 同向: STANDARD_VIEW_CONFIGS 里两者的屏幕右方向都是 +Z,
-# 漏登记会导致该视图的标注不做轴向补偿,行程变化后全部吸错边
-AXIAL_MAP = {"left": ("x", 1.0), "right": ("x", -1.0),
-             "top": ("y", 1.0), "bottom": ("y", -1.0),
-             "left_top": ("x", 1.0)}
+from drawing.view_axes import axial_projection
 
 POS_TOL = 5.0   # 位置匹配容差 mm
 LEN_TOL = 2.5   # 长度/半径匹配容差 mm
+DIR_COS_TOL = 0.97  # 匹配前后引用点相对方向的最小夹角余弦(约 14°)
 
 
 def _by_id(profile):
@@ -131,6 +127,26 @@ def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _direction_close(a, b, tol=DIR_COS_TOL):
+    """两向量方向是否一致(端点顺序可相反;退化向量不判)"""
+    na = math.hypot(a[0], a[1])
+    nb = math.hypot(b[0], b[1])
+    if na < 1e-6 or nb < 1e-6:
+        return True
+    return abs(a[0] * b[0] + a[1] * b[1]) / (na * nb) >= tol
+
+
+def _ref_point(seg):
+    """标注引用边的代表点:圆心或线段中点"""
+    key = _target_key(seg)
+    if not key:
+        return None
+    if "center" in key:
+        return key["center"]
+    return [(key["p1"][0] + key["p2"][0]) / 2,
+            (key["p1"][1] + key["p2"][1]) / 2]
+
+
 def _kind_compatible(k1, k2):
     """line 与 polyline(非圆弧)同为"线段类"指纹，允许互匹配。
 
@@ -150,7 +166,10 @@ def match_edge(base_seg, view_name, ctx, target_segs):
     Returns:
         (target_seg, score, target_idx) 匹配成功; (None, 失配原因, None) 失败
     """
-    axis_sign = AXIAL_MAP.get(view_name)
+    try:
+        axis_sign = axial_projection(view_name)
+    except ValueError as e:
+        return None, str(e), None
     axis, sign = axis_sign if axis_sign else (None, 1.0)
     exp = _expected_mm(base_seg, axis, sign, ctx)
     if exp is None:
@@ -171,6 +190,15 @@ def match_edge(base_seg, view_name, ctx, target_segs):
                      (key["p1"][1] + key["p2"][1]) / 2)
             pos = _dist(mid_e, mid_t)
             if pos > POS_TOL:
+                continue
+            # 中点相近但方向不同的边不可能是同一条边:缸体只沿主轴拉伸,
+            # 不会把水平边变成斜边。缺 orientation 的 poly 边保持兼容。
+            if (exp.get("orientation") and key.get("orientation")
+                    and exp["orientation"] != key["orientation"]):
+                continue
+            dv_e = (exp["p2"][0] - exp["p1"][0], exp["p2"][1] - exp["p1"][1])
+            dv_t = (key["p2"][0] - key["p1"][0], key["p2"][1] - key["p1"][1])
+            if not _direction_close(dv_e, dv_t):
                 continue
             len_e = exp.get("length") or math.hypot(
                 exp["p2"][0] - exp["p1"][0], exp["p2"][1] - exp["p1"][1])
@@ -509,6 +537,19 @@ def rebind_annotation(ann, base_refs, ctx, target_profile,
         ref_map.append({"viewId": ref["viewId"], "idx": target_idx,
                         "type": ref.get("type")})
     used_group = bool(ann.get("groupRefs") and group_refs)
+    # 两条引用各自都"匹配成功"仍可能整体错绑:吸到附近同半径杂圆/相邻孔时,
+    # 相对方向会歪掉,前端就渲染成斜穿视图的乱线。基准与目标的引用点
+    # 方向必须一致(缸体沿主轴拉伸只改变距离,不会转成斜向)。
+    if len(ref_entries) == 2 and not used_group:
+        b0, b1 = _ref_point(ref_entries[0]["seg"]), _ref_point(ref_entries[1]["seg"])
+        t0, t1 = _ref_point(segs[0]), _ref_point(segs[1])
+        if b0 and b1 and t0 and t1:
+            bv = (b1[0] - b0[0], b1[1] - b0[1])
+            tv = (t1[0] - t0[0], t1[1] - t0[1])
+            if not _direction_close(bv, tv):
+                return {"status": "unmatched",
+                        "reason": "重绑后引用点相对方向改变(疑似吸到错误边)",
+                        "segs": [], "views": []}
     return {"status": "matched", "reason": "", "segs": segs, "views": views,
             "ref_map": ref_map,
             "ref_map_target": "groupRefs" if used_group else "refs"}

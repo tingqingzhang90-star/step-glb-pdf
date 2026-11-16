@@ -42,6 +42,8 @@ from OCC.Core.GCPnts import GCPnts_QuasiUniformDeflection
 from OCC.Core.TopAbs import TopAbs_VERTEX
 from OCC.Core.BRep import BRep_Tool
 
+from drawing.view_axes import VIEW_DIRECTIONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -1287,38 +1289,26 @@ def _rotate_shape_to_standard(shape):
     return transform.Shape()
 
 
+# dir/up 统一取自 view_axes,重绑与包络投影共用同一份方向定义;
+# 这里只保留展示用的 label/group,不再各写一份方向向量。
+_VIEW_LABELS = {
+    "front":          ("前视", "standard"),
+    "back":           ("后视", "standard"),
+    "left":           ("左视", "standard"),
+    "right":          ("右视", "standard"),
+    "top":            ("上视", "standard"),
+    "bottom":         ("下视", "standard"),
+    "left_top":       ("左视上视", "standard"),
+    "isometric":      ("等轴测", "isometric"),
+    "dimetric_left":  ("左右二等角", "isometric"),
+    "dimetric_right": ("上下二等角", "isometric"),
+}
+
 STANDARD_VIEW_CONFIGS = {
-    # 6 个基本视图 - 直接匹配 viewer.html 的 Z-up 坐标系(不旋转模型)
-    #
-    # STEP/GLB BBox: X=300, Y=338, Z=1626(长轴沿Z), 与 viewer.html 一致
-    # viewer.html 的 eye/up 配置转换为 OCC HLR 的 dir(投影方向):
-    #   dir = 从相机到模型的方向 = -eye_normalized
-    #
-    # viewer.html 配置:
-    #   front:  eye=(0,0,+d), up=(0,1,0)  → dir=(0,0,-1) 看圆形端面(X-Y平面)
-    #   back:   eye=(0,0,-d), up=(0,1,0)  → dir=(0,0,1)
-    #   left:   eye=(-d,0,0), up=(0,1,0)  → dir=(1,0,0)  看侧面(Y-Z平面),长轴水平
-    #   right:  eye=(+d,0,0), up=(0,1,0)  → dir=(-1,0,0)
-    #   top:    eye=(0,+d,0), up=(0,0,-1) → dir=(0,-1,0)
-    #   bottom: eye=(0,-d,0), up=(0,0,1)  → dir=(0,1,0)
-    #
-    # gp_Ax2(origin, N=view_dir, V=up):
-    #   U = V × N (屏幕右方向)
-    #   screen_X = U 方向分量
-    #   screen_Y = V 方向分量(屏幕上方)
-    "front":    {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
-    "back":     {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
-    "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
-    "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, -1), "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
-    # 左视上视：左视图绕屏幕横轴(世界 Z 轴，即缸体长轴)旋转 180° —— 相机从 +Y
-    # 侧绕到 -Y 侧，屏幕右方向仍为 +Z(长轴水平)，屏幕上方由 -X 翻为 +X
-    "left_top": {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(-1, 0, 0), "label": "左视上视", "group": "standard"},
-    # 3 个轴测视图
-    "isometric":      {"dir": gp_Dir(-1, -1, 1),   "up": gp_Dir(0, 0, 1), "label": "等轴测",     "group": "isometric"},
-    "dimetric_left":  {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "左右二等角", "group": "isometric"},
-    "dimetric_right": {"dir": gp_Dir(-1, -1, -0.5),"up": gp_Dir(0, 0, 1), "label": "上下二等角", "group": "isometric"},
+    name: {"dir": gp_Dir(*VIEW_DIRECTIONS[name]["dir"]),
+           "up": gp_Dir(*VIEW_DIRECTIONS[name]["up"]),
+           "label": label, "group": group}
+    for name, (label, group) in _VIEW_LABELS.items()
 }
 
 

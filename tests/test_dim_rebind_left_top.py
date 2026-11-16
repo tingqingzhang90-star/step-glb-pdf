@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""left_top 视图轴向补偿与源文件落盘防御测试
+"""轴向补偿与源文件落盘防御测试
 
-left_top(左视上视)漏登记 AXIAL_MAP 时,该视图标注不做轴向补偿:行程拉伸
+left_top(左视上视)漏登记轴向映射时,该视图标注不做轴向补偿:行程拉伸
 后缸体区孔位偏移超过 POS_TOL,重绑失配;落盘端又把失配标注按模板旧下标
 写出,前端按目标边表渲染成斜穿视图的乱线(实测 492 孔距变 672.6)。
 
@@ -29,8 +29,38 @@ def _circle(cx, cy, r):
             "meta": {"radius": r, "center_mm": [cx, cy]}}
 
 
-def test_axial_map_covers_left_top():
-    assert dim_rebind.AXIAL_MAP.get("left_top") == ("x", 1.0)
+def test_axial_projection_covers_left_top():
+    """从投影方向推导,而不是靠字典里登记视图名"""
+    from drawing.view_axes import axial_projection
+
+    assert axial_projection("left_top") == ("x", 1.0)
+
+
+def test_match_edge_fails_loud_on_unknown_view():
+    """未知视图名不再静默跳过补偿"""
+    seg, reason, idx = dim_rebind.match_edge(
+        _circle(465.0, -150.0, 11.0), "some_new_view",
+        _ctx_l100_to_l120(), [_circle(485.0, -150.0, 11.0)])
+    assert seg is None and idx is None
+    assert "未定义视图投影方向" in reason
+
+
+def test_rebind_rejects_diagonal_ref_pair():
+    """两条 ref 各自匹配成功但整体方向歪掉时,整条标注判失配"""
+    base_refs = [
+        {"ref": {"viewId": "view_1", "idx": 0, "type": "edges"},
+         "seg": _circle(0.0, 0.0, 11.0)},
+        {"ref": {"viewId": "view_1", "idx": 1, "type": "edges"},
+         "seg": _circle(8.0, 0.0, 11.0)},
+    ]
+    target = [_circle(0.0, 0.0, 11.0), _circle(8.0, 4.0, 11.0)]
+    placements = {"view_1": _placement(target)}
+    result = dim_rebind.rebind_annotation(
+        {"id": "a1", "type": "linear", "mode": "center"}, base_refs,
+        {"back": 0.0, "front": 440.0, "scale": 1.0, "delta": 0.0},
+        {"anchors": []}, placements, {})
+    assert result["status"] == "unmatched"
+    assert "相对方向" in result["reason"]
 
 
 def test_match_edge_compensates_left_top_axial_shift():
