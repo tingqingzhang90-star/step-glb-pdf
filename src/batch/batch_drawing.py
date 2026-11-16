@@ -139,6 +139,24 @@ def _content_bbox(segs, hidden):
             "width": max(xs) - min(xs), "height": max(ys) - min(ys)}
 
 
+def _refs_point_into_views(ann, placements):
+    """标注 refs 是否都落在目标边表范围内
+
+    idx=-1 是 bind_motor 合成边的语义值,放行;其余下标越界(模板编辑残留、
+    重绑遗漏)在前端 list[idx] 取不到几何,整条标注静默不渲染,不如不落盘。
+    """
+    for r in list(ann.get("refs") or []) + list(ann.get("groupRefs") or []):
+        p = placements.get(r.get("viewId"))
+        if not p:
+            return False
+        idx = r.get("idx")
+        if idx == -1:
+            continue
+        if not isinstance(idx, int) or idx < 0 or idx >= len(p["segs"]):
+            return False
+    return True
+
+
 def _write_model_source(model_code, template_doc, placements, palette, out_dir,
                         annotations=None):
     """出图同时落盘该型号的可导入源文件
@@ -173,6 +191,7 @@ def _write_model_source(model_code, template_doc, placements, palette, out_dir,
                     else template_doc.get("annotations", []))
         if all(r.get("viewId") in view_ids for r in a.get("refs", []))
         and all(r.get("viewId") in view_ids for r in a.get("groupRefs") or [])
+        and _refs_point_into_views(a, placements)
     ]
     doc = {
         "schema_version": "1.0",
@@ -261,9 +280,13 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         rebound.append(r)
 
     # 源文件的标注 refs 要指向本型号边线:用重绑匹配到的目标边下标
-    # 替换模板里的基准下边,否则下标对不上,前端导入后标注全部丢失
+    # 替换模板里的基准下边,否则下标对不上,前端导入后标注全部丢失。
+    # unmatched 标注必须一并跳过:它保留的是模板旧下标,落在目标边表里
+    # 会指向别的几何,前端渲染成乱线(PDF 端已不渲染,落盘保持一致)
     source_annotations = []
     for r in rebound:
+        if r["status"] == "unmatched":
+            continue
         ann = dict(r["annotation"])
         if r.get("ref_map"):
             ann[r.get("ref_map_target") or "refs"] = r["ref_map"]

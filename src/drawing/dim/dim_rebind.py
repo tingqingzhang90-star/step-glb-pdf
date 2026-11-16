@@ -14,8 +14,11 @@
 import math
 
 # 各视图投影面坐标轴与模型主轴(Z)的映射(ax2 坐标系,单位 mm)
+# left_top 与 left 同向: STANDARD_VIEW_CONFIGS 里两者的屏幕右方向都是 +Z,
+# 漏登记会导致该视图的标注不做轴向补偿,行程变化后全部吸错边
 AXIAL_MAP = {"left": ("x", 1.0), "right": ("x", -1.0),
-             "top": ("y", 1.0), "bottom": ("y", -1.0)}
+             "top": ("y", 1.0), "bottom": ("y", -1.0),
+             "left_top": ("x", 1.0)}
 
 POS_TOL = 5.0   # 位置匹配容差 mm
 LEN_TOL = 2.5   # 长度/半径匹配容差 mm
