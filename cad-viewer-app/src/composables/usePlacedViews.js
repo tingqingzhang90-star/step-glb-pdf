@@ -102,11 +102,6 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
     applyGlobalScale(Math.max(0.1, Math.min(5, newScale)))
   }
 
-  /** 工具栏放大/缩小 */
-  function zoomCanvas(factor) {
-    applyGlobalScale(Math.max(0.1, Math.min(5, (globalScale.value || 1) * factor)))
-  }
-
   /** 工具栏"适应":按所有视图最大长边统一缩放 */
   function resetCanvas() {
     if (placedViews.value.length === 0) return
@@ -119,10 +114,35 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
     applyGlobalScale(Math.max(0.1, Math.min(5, targetLongEdge / maxExtent)))
   }
 
+  /** 从源文件批量载入视图(精确还原位置/比例,免重投影) */
+  function setViews(views) {
+    placedViews.value = (views || []).map(v => ({
+      id: v.id || `view_${++viewIdCounter}`,
+      name: v.name,
+      label: v.label,
+      group: v.group ?? null,
+      edges: (v.edges || []).filter(s => s && s.type),
+      hiddenEdges: (v.hiddenEdges || []).filter(s => s && s.type),
+      bbox: v.bbox || null,
+      contentBBox: v.contentBBox || null,
+      x: v.x,
+      y: v.y,
+      scale: v.scale
+    }))
+    // 导入的 id 可能大于当前计数器,同步避免之后再放视图时 id 撞车
+    for (const v of placedViews.value) {
+      const m = /^view_(\d+)$/.exec(v.id || '')
+      if (m && Number(m[1]) > viewIdCounter) viewIdCounter = Number(m[1])
+    }
+    if (placedViews.value.length) globalScale.value = placedViews.value[0].scale ?? null
+    selectedViewId.value = null
+  }
+
   return {
     placedViews, selectedViewId, globalScale,
     selectedView, placedViewNames,
     placeView, selectView, deleteSelectedView, clearViews, resetScale,
-    onViewScaleChange, zoomCanvas, resetCanvas
+    setViews,
+    onViewScaleChange, resetCanvas
   }
 }

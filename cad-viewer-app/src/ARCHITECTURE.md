@@ -109,3 +109,51 @@ App.vue
 - 目录 kebab-case；组件 PascalCase；函数/变量 camelCase；常量 UPPER_SNAKE_CASE。
 - 前端接口消费遵循 `request` 拦截器解包约定（成功只返回内层 `data`）。
 - 标注/视图相关新增模块统一落在 `dimensions/`、`views/`，通用工具落在 `utils/`，禁止把业务塞进 App.vue。
+
+## 五、标注命中算法设计
+
+标注拾取同时面临两类命中：**DOM 命中**（透明加宽命中带，`elementFromPoint` 取最顶层元素）与**几何命中**（按数学距离判定）。两者分工与配套如下。
+
+### 5.1 几何命中：孔 / 分度圆择近分派
+
+**问题背景**：孔组的分度圆（虚线圆，`pitchCircle`）在标注工具（如 `center-mark`）下，其 DOM 命中带 `.dim-bolt-hit` 刻意让路给孔/边线（避免挡住点孔），而虚线本身仅 1px，几乎点不中。在分度圆附近用「点中心十字」功能极难命中。
+
+**算法骨架**（`dimensions/index.js` 的 `pickCircleNear` 与 `pickBoltCircleNear` 同构）：
+
+- 容差（屏幕 ≈12px，随视图缩放补偿）：`tolerance = max(6, 12 / scale)`，其中 `scale = view.scale`。
+- 坐标统一换算到图纸坐标：`getSheetPoint(view, cx, cy)`（局部 → 图纸）。
+- 判定量：**点到圆周的有符号距离** `d = |dist(鼠标, 圆心) − r|`，`d ≤ tolerance` 即命中；多候选取 `d` 最小者。
+- `pickCircleNear`：遍历视图的 `edges` / `hiddenEdges`，`toCircle(seg)` 还原圆，`r < 3` 跳过噪声小圆，返回命中的 `edgeRef`（携带 `d`）。
+- `pickBoltCircleNear`：遍历 `dimensions` 中 `type==='center-mark' && (group||groupCenter)` 的标注，经 `core.buildBoltCircleRef(refs)`（由孔组引用实时最小二乘还原分度圆，已从 core 导出复用）得到 `{ seg(局部坐标), view }`，换算后判定，返回 `{ dim, circle, d }`。
+
+**择近分派**（避免孔与分度圆相交区域打架）：
+
+> 孔都长在分度圆上，孔心恰在分度圆周上。鼠标同时靠近两者时，取 `d` 更小的：
+> `if (bolt && (!hole || bolt.d <= hole.d))` → 命中分度圆；否则命中孔。
+
+适用工具：`diameter`（直径）与 `center-mark`（中心标记，单孔/孔组两子模式同）。
+
+- **mousedown**（`onSvgMouseDown` 开头、DOM 命中**之前**——否则"预览按分度圆、点击落在孔"行为分裂）：分度圆命中 → 直径工具走 `core.placeDiameterOnBoltCircleDim(bolt.dim.refs, opts)`（贯穿直线用预览角度；引线折线用预览 textLeft，均所见即所得），中心标记走 `core.placeCenterMarkAtGroupCenter(bolt.dim.refs)`（孔组中心打十字）；孔命中 → 按 `centerSubMode` 走单孔十字 / 加入孔组。放置后 `suppressPreviewAfterPlace` 防预览与标注自身重叠。点孔组标注的 DOM 命中副本（`onDimMouseDown`）有对称分支兜底。
+- **hover 预览**（`updateDimPreviewAt` 内同择近判定，`dimPending` 时不干扰选孔预览）：分度圆更近时出**与放置一致的预览**——直径：贯穿线/引线跟随鼠标（`buildDiameterPreview` / `buildDiameterLeaderPreview` 直接吃分度圆合成 edgeRef）；中心标记：`buildCenterMarkGroupGeometry(refs, true)` 孔组中心十字。同时清 `dimHoveredEdge`（避免孔高亮与分度圆预览分裂）、`onSvgMouseMove` 设 `dimHoveredId` 高亮孔组虚线圆（变蓝瞄准反馈）；更靠近孔时让位给孔的既有 DOM hover/预览通道。
+- **圆引用统一收口**：`core.diameterRefOf(dim)`——分度圆标注（数据带 `groupRefs`）由孔组各孔实时还原合成圆（换型号自动跟随），其余取单边线。渲染、拖拽（`updateDimDrag`/`updateDimTextDrag`）、快照（`diameterTextLeftSheetClamped`）全走它，组引用兼容不再散落判断。分度圆直径标注两形态：`diameterMode: 'bolt-circle'`（贯穿直线）与 `'leader' + groupRefs`（引线折线）。
+
+**复用点**：几何命中零 DOM、天然不挡任何东西，契合「标注工具下让路」的设计意图；`hover` 与 `mousedown` 共用同一判定；还原分度圆复用 `buildBoltCircleRef`。若日后直径工具也想去掉 `.dim-bolt-hit` DOM 命中带，可直接复用 `pickBoltCircleNear`。
+
+### 5.2 命中层 z-order 策略（DOM 命中）
+
+标注工具激活时，已放置标注的命中副本（`.dim-hit-dims`，10px 透明命中带）与视图边线命中带同处 `dim-hit-layer`。
+
+- **原则**：副本**永远位于边线命中层之下**（DOM 中先渲染 = 下层）。重叠处 `elementFromPoint` 命中上层边线 → 拾取边线/点孔优先，任何已放置标注（直径贯穿线、引线、十字、线性、角度）都不挡拾取。
+- 鼠标只在纯标注带上（附近无边线）才落到副本 → 仍可悬浮高亮/点选/拖拽已放置标注。
+- 「等第二边」状态（`dimFirstEdge` 已选、待固定态未建立）时副本整体不渲染：点击落到 svg 根，保持「单边标注按当前偏移直接放置」原语义。
+- 十字命中带的孔心处挖空（`Math.min(6, max(2, cm.r−4))`），点孔心可穿透到 `pickCircleNear` 几何兜底，已放置十字不挡对同孔的再次拾取。
+- 角度标注的延长线（`extLines`）补了命中副本，工具激活时真实层 `.dim-hit-stroke` 让路后仍能点中。
+
+### 5.3 直径引线长度限位（关联设计）
+
+直径「引线折线」模式的文字/折点若离圆太远，会拖出横跨半张图的超长折线。统一收口于 `core.js` 的 `clampDiameterLeaderTextLeft`：
+
+- 折点（文字搁置线右端）距圆心超过 `r + LEADER_MAX_LENGTH`（120px）时，沿「折点→圆心」方向把整个标注（文字 + 折点 + 引线）自动拉近圆。
+- 在 `buildDiameterLeaderGeometry` 内先限位、再按「折点→圆心」重算瞄准角（引线方向始终与圆相交），故**预览/放置/拖拽/渲染四个入口自动全部生效**；已放好的超长标注刷新后也会收紧。
+- 拖拽快照取限位后的坐标（`diameterTextLeftSheetClamped`），保证旧数据（限位外远点）与显示一致，避免拖拽卡顿。
+- 引线模式不支持文字单独拖动（文字按下走整体拖拽 `onDimMouseDown`），行为统一。

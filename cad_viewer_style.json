@@ -1,6 +1,4 @@
 {
-  "_comment": "前后端共用样式配置。前端用 px(屏幕像素,SVG non-scaling-stroke),后端按 96dpi 折算成 mm。改一处同步两端。",
-
   "edge": {
     "visible": { "stroke_px": 1.0, "color": "#303133" },
     "hidden":  { "stroke_px": 0.8, "color": "#999999" }
@@ -8,9 +6,23 @@
 
   "dim": {
     "line":  { "stroke_px": 1.0, "color": "#303133" },
-    "ext":   { "stroke_px": 0.8, "color": "#606266" },
-    "text":  { "font_px": 9,     "color": "#303133" },
-    "arrow": { "len_px": 3.5,   "half_px": 0.5 }
+    "ext":   { "stroke_px": 0.8, "color": "#606266", "overshoot_mm": 2.5 },
+    "text":  { "font_px": 18, "color": "#303133", "gap_mm": 1, "label_gap_factor": 0.82 },
+    "arrow": {
+      "len_px": 8,
+      "half_px": 1.1,
+      "extension_px": 12
+    },
+    "linear": {
+      "min_offset_px": 0
+    },
+    "angle": {
+      "text_gap_px": 1,
+      "arc_ext_px": 10
+    },
+    "diameter": {
+      "text_gap_px": 1
+    }
   },
 
   "center_mark": {
@@ -26,6 +38,13 @@
   "title_block": {
     "stroke_px": 1.0,
     "color": "#555555"
+  },
+
+  "table": {
+    "text":   { "font_px": 13,    "color": "#303133" },
+    "border": { "stroke_mm": 0.3, "color": "#303133" },
+    "col_width_mm": 30,
+    "row_height_mm": 8
   },
 
   "_px_to_mm_at_96dpi": 0.2645833

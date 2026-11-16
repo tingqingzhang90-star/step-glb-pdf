@@ -5,8 +5,8 @@
 // 后端 PDF 直接以此尺寸渲染,不再做映射转换。
 import { ref, computed } from 'vue'
 
-const SHEET_ZOOM_MIN = 0.35
-const SHEET_ZOOM_MAX = 4
+const SHEET_ZOOM_MIN = 0.1
+const SHEET_ZOOM_MAX = 100
 const SHEET_ZOOM_STEP = 1.12
 
 // 标准图纸毫米尺寸(横向,长边为 width)
@@ -100,10 +100,27 @@ export function useCanvasTransform() {
     }
   }
 
+  /** 工具栏放大/缩小:以工作区中心为锚点,与滚轮缩放同一条整卡变换链 */
+  function zoomSheet(factor) {
+    const area = sheetAreaRef.value
+    if (!area) return
+    const oldZoom = sheetZoom.value
+    const newZoom = Math.max(SHEET_ZOOM_MIN, Math.min(SHEET_ZOOM_MAX, oldZoom * factor))
+    if (newZoom === oldZoom) return
+    const cx = area.clientWidth / 2
+    const cy = area.clientHeight / 2
+    const ratio = newZoom / oldZoom
+    sheetZoom.value = newZoom
+    sheetPan.value = {
+      x: cx - (cx - sheetPan.value.x) * ratio,
+      y: cy - (cy - sheetPan.value.y) * ratio
+    }
+  }
+
   return {
     sheetAreaRef, sheetSize, sheetWidth, sheetHeight,
     sheetZoom, sheetPan, sheetPanning, sheetCardStyle,
     setSheetSize,
-    centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel
+    centerSheet, startSheetPan, updateSheetPan, endSheetPan, onSheetWheel, zoomSheet
   }
 }

@@ -150,6 +150,8 @@ function resolveOptionalPeerDeps() {
 }
 
 export default defineConfig({
+  // 构建产物挂载到 Flask 的 /editor 子路径(统一由 5001 端口托管)
+  base: '/editor/',
   plugins: [vue(), createPatchDataModelPlugin(), resolveOptionalPeerDeps()],
   resolve: {
     alias: {
@@ -161,7 +163,11 @@ export default defineConfig({
     cssMinify: false
   },
   server: {
-    port: 5173,
+    host: true,
+    port: 5174,
+    // host:true 让 dev server 监听所有网卡,手机通过电脑局域网 IP 才能访问;
+    // allowedHosts 放开为 true,否则手机用 IP 访问会因 Host 头不匹配被 Vite 拦成 403
+    allowedHosts: true,
     // 允许 dev server 读取项目根之外的 cad_viewer_style.json
     // (前后端共用样式配置,见 docs/前后端显示样式一致方案.md)
     fs: {
@@ -171,8 +177,18 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:5001',
         changeOrigin: true
+      },
+      // 顶栏脚本由 Flask 托管,dev 下同样代理过来,保证与生产一致
+      '/static': {
+        target: 'http://127.0.0.1:5001',
+        changeOrigin: true
       }
     }
+  },
+  preview: {
+    host: true,
+    port: 5174,
+    allowedHosts: true
   },
   optimizeDeps: {
     // Vite 8 用 Rolldown 做依赖优化，Vite 插件的 resolveId 不在此阶段生效，

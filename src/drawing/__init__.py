@@ -8,4 +8,6 @@
     drawing_pdf          规则式管线的 reportlab PDF 渲染
     drawing_generator    早期 PyMuPDF + 参考 PDF 模板生成器(遗留)
     dxf_exporter         DXF 导出
+    hlr_poly / hlr_arcfit  B 层可选离散投影链路(PolyAlgo + 圆弧拟合 + 进程池并行),
+                          独立于 core.drawing_engine 的 Algo 路径, 接口可平替
 """

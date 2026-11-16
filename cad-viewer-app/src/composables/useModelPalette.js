@@ -1,11 +1,13 @@
 // 型号选择与视图调色板数据加载
-import { ref, computed } from 'vue'
+import { ref, computed, shallowRef } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchModelList, fetchViewPalette } from '@/api/drawingApi.js'
 
 export function useModelPalette() {
   const models = ref([])
   const selectedModel = ref('')
+  // 出图算法:poly(离散 HLR,快) / algo(精确 HLR,慢)
+  const algo = ref('poly')
   const loadingViews = ref(false)
   const viewsLoaded = ref(false)
   const loadingText = ref('')
@@ -13,6 +15,11 @@ export function useModelPalette() {
   const lastElapsed = ref(null)
   const modelBbox = ref({ width: 0, height: 0, depth: 0 })
   const paletteViews = ref({})
+  const motorEnvelope = ref({})
+  const gearboxEnvelope = ref({})
+  // 选型配置只读且体积大,用 shallowRef 避免上千个键被递归代理
+  const config = shallowRef(null)
+  const modelParams = ref({})
 
   const standardViews = computed(() =>
     Object.entries(paletteViews.value)
@@ -37,6 +44,10 @@ export function useModelPalette() {
   /** 重置调色板数据(切换型号时由上层编排,同步清空已放置视图) */
   function resetPalette() {
     paletteViews.value = {}
+    motorEnvelope.value = {}
+    gearboxEnvelope.value = {}
+    config.value = null
+    modelParams.value = {}
     viewsLoaded.value = false
     error.value = ''
     lastElapsed.value = null
@@ -48,12 +59,16 @@ export function useModelPalette() {
     loadingText.value = '正在生成标准视图...'
     error.value = ''
     try {
-      const data = await fetchViewPalette(selectedModel.value)
+      const data = await fetchViewPalette(selectedModel.value, algo.value)
       if (!data.ok) {
         error.value = data.error || '生成视图失败'
         return
       }
       paletteViews.value = data.views
+      motorEnvelope.value = data.motor_envelope || {}
+      gearboxEnvelope.value = data.gearbox_envelope || {}
+      config.value = data.config || null
+      modelParams.value = data.model_params || {}
       modelBbox.value = data.model_bbox
       viewsLoaded.value = true
       lastElapsed.value = data.elapsed
@@ -67,8 +82,9 @@ export function useModelPalette() {
   }
 
   return {
-    models, selectedModel, loadingViews, viewsLoaded, loadingText, error,
-    lastElapsed, modelBbox,
+    models, selectedModel, algo, loadingViews, viewsLoaded, loadingText, error,
+    lastElapsed, modelBbox, motorEnvelope, gearboxEnvelope,
+    config, modelParams,
     standardViews, isometricViews,
     loadModelList, resetPalette, loadViewPalette
   }

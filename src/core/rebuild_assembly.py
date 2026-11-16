@@ -24,15 +24,23 @@ import time
 import tempfile
 
 # ---------- 配置 ----------
-# 路径相对于项目根目录 e:\分享代码\step__glb_pdf
 # 本文件位于 src/core/,需上溯三级: core → src → 项目根
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))))
-PARTS_DIR = os.path.join(_PROJECT_ROOT, "parts_step")
-MATRIX_JSON = os.path.join(_PROJECT_ROOT, "data", "parts_transform.json")
-CONFIG_DIR = os.path.join(_PROJECT_ROOT, "data", "configs")
-OUT_DIR = os.path.join(_PROJECT_ROOT, "output")
-CYLINDER_STEP = "250缸体.step"  # 缸体零件（用于拉伸验证）
+# 允许以脚本方式直跑(python src/core/rebuild_assembly.py)
+if os.path.join(_PROJECT_ROOT, "src") not in sys.path:
+    sys.path.insert(0, os.path.join(_PROJECT_ROOT, "src"))
+
+from core import paths  # noqa: E402  依赖上面的 sys.path 补齐
+
+DEFAULT_SERIES = "250直连"
+# 以下三项随 set_series() 切换。anchor_resolver 等模块通过 rb.X 取当前值,
+# 因此切换系列必须在任何零件读取之前完成。
+PARTS_DIR = paths.parts_dir(DEFAULT_SERIES)
+MATRIX_JSON = paths.transform_json(DEFAULT_SERIES)
+PART_SEARCH_PATH = paths.part_search_dirs(DEFAULT_SERIES)
+CONFIG_DIR = paths.CONFIG_DIR
+OUT_DIR = paths.OUT_DIR
 
 # 路径回退修复后，4 个电机/刹车件已能从装配体同目录找到并导出，无需跳过
 # 若某个零件确实导出失败，可在此处添加其 step 文件名
@@ -54,6 +62,72 @@ DEFAULT_MOTOR = "11kw电机"
 def log(msg):
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}", flush=True)
+
+
+def progress(percent, stage=None):
+    """进度上报钩子(默认空实现,直接跑脚本时静默)。
+
+    子进程侧 task_pool._worker 会把它替换成"写一行进度标记"的实现,
+    主进程轮询 /api/task/<id> 时读出来给前端画进度条。单独的命令行
+    运行不受影响——这里不做任何 IO,不会拖慢构建。
+    """
+
+
+def set_series(series_name):
+    """切换当前激活系列,刷新零件目录 / 变换矩阵 / 查找路径"""
+    global PARTS_DIR, MATRIX_JSON, PART_SEARCH_PATH
+    PARTS_DIR = paths.parts_dir(series_name)
+    MATRIX_JSON = paths.transform_json(series_name)
+    PART_SEARCH_PATH = paths.part_search_dirs(series_name)
+
+
+def resolve_part_file(step_file):
+    """按 系列零件目录 → 共享件目录 定位 STEP,都没找到则返回系列目录下的路径"""
+    for d in PART_SEARCH_PATH:
+        p = os.path.join(d, step_file)
+        if os.path.exists(p):
+            return p
+    return os.path.join(PARTS_DIR, step_file)
+
+
+def resolve_motor(config, motor):
+    """确定本系列的电机:指定了要校验在可选范围内,未指定取系列默认
+
+    各系列电机表不同(250 是 kw 三相电机,JDG 是汇川伺服),写死默认值
+    会让新系列拿到别的系列电机。motor 既可能是编号(D55),也可能是电机名
+    (5.5KW电机),统一归一为配置里的 key(编号)再查表。
+    """
+    motor_cfg = config.get("motor", {})
+    available = list(motor_cfg.keys())
+    if not available:
+        return motor
+
+    # 名称 → 编号(仅 MOTOR_CODES 覆盖的 250 系列有效)
+    code_by_name = {name: code for code, name in MOTOR_CODES.items()}
+
+    def to_key(m):
+        if m in available:
+            return m
+        if m in code_by_name and code_by_name[m] in available:
+            return code_by_name[m]
+        for k, v in motor_cfg.items():  # 退一步:与配置里存的原始写法匹配
+            if v.get("name") == m:
+                return k
+        return None
+
+    if not motor:
+        if DEFAULT_MOTOR in available:
+            return DEFAULT_MOTOR
+        if code_by_name.get(DEFAULT_MOTOR) in available:
+            return code_by_name[DEFAULT_MOTOR]
+        return available[0]
+
+    key = to_key(motor)
+    if key is None:
+        opts = [f"{k}({motor_cfg[k]['name']})" if motor_cfg[k].get("name") else k
+                for k in available]
+        raise ValueError(f"本系列没有电机「{motor}」,可选: {opts}")
+    return key
 
 
 def check_env():
@@ -315,6 +389,35 @@ def _to_ascii_name(name):
     return result if result else 'PART'
 
 
+# YRJ 品牌前缀:选型界面展示型号统一加前缀,但后端存储/配置可能带也可能不带,
+# 解析与目录匹配都需兼容两种写法(见 normalize_model_code / model_code_candidates)。
+_BRAND_PREFIX = "YRJ"
+_BRAND_RE = re.compile(r"(?i)^yrj")
+
+
+def normalize_model_code(code):
+    """去掉可选的 YRJ 品牌前缀,统一为 系列-类型-... 形式"""
+    if not code:
+        return code
+    return _BRAND_RE.sub("", code.strip())
+
+
+def with_brand(code):
+    """补上 YRJ 前缀(已带则原样返回)"""
+    code = (code or "").strip()
+    return code if _BRAND_RE.match(code) else f"{_BRAND_PREFIX}{code}"
+
+
+def model_code_candidates(code):
+    """目录/身份容错:同时尝试原始、去前缀、加前缀三种写法(去重)"""
+    code = (code or "").strip()
+    cands = []
+    for c in (code, normalize_model_code(code), with_brand(normalize_model_code(code))):
+        if c and c not in cands:
+            cands.append(c)
+    return cands
+
+
 def parse_model_code(code):
     """解析型号编码 → 选型参数
 
@@ -323,6 +426,7 @@ def parse_model_code(code):
     行程可能是 L100 或纯数字(100),统一归一为 L100 形式
     电机编号可选(D11/D55/D55B/D75/D75B),不填则 motor=None(回退 --motor 参数)
     """
+    code = normalize_model_code(code)
     parts = code.split("-")
     if len(parts) < 4:
         raise ValueError(f"型号格式错误(需 系列-类型-H*K*-行程[-电机]): {code}")
@@ -340,11 +444,10 @@ def parse_model_code(code):
         stroke = "L" + stroke_raw
     else:
         stroke = stroke_raw
-    # 电机编号(可选,第5段)
+    # 电机段(可选):既可能是编号(D11),也可能直接写电机名
+    # JDG 系列用汇川伺服,不在 MOTOR_CODES 里,此时原样当电机名,由系列配置校验
     motor_code = parts[4] if len(parts) >= 5 else None
-    motor = MOTOR_CODES.get(motor_code) if motor_code else None
-    if motor_code and not motor:
-        raise ValueError(f"未知电机编号: {motor_code} (可选: {', '.join(MOTOR_CODES)})")
+    motor = MOTOR_CODES.get(motor_code, motor_code) if motor_code else None
     return {"series": series, "type": conn_type, "mount": mount,
             "load": load, "stroke": stroke,
             "motor_code": motor_code, "motor": motor}
@@ -673,18 +776,29 @@ def step1_read_all_parts(parts_data):
     shapes = {}
     t0 = time.time()
     skipped_suppressed = 0
+    # 读取零件是全流程最耗时的一段(几十个零件 × 数百 ms),逐件上报进度,
+    # 否则前端在这一整段时间里只能看到一个静止的百分比
+    _P0, _P1 = 8.0, 46.0
+    todo = [1 for i in parts_data.values() if not i.get("suppressed", False)]
+    n_todo = max(1, len(todo))
+    n_done = 0
     for name, info in parts_data.items():
         # ★ 先检查抑制状态，被抑制的零件不需要读取（省 9s+）
         if info.get("suppressed", False):
             skipped_suppressed += 1
             continue
+        n_done += 1
         step_file = info.get("step_file", "")
         if not step_file or step_file in MISSING_PARTS:
             log(f"  ⏭ 跳过 {name} (缺失或无 step_file)")
+            progress(_P0 + (_P1 - _P0) * n_done / n_todo,
+                     f"读取零件 {n_done}/{n_todo}")
             continue
-        path = os.path.join(PARTS_DIR, step_file)
+        path = resolve_part_file(step_file)
         if not os.path.exists(path):
             log(f"  ✗ 文件不存在: {path}")
+            progress(_P0 + (_P1 - _P0) * n_done / n_todo,
+                     f"读取零件 {n_done}/{n_todo}")
             continue
         t1 = time.time()
         try:
@@ -694,6 +808,8 @@ def step1_read_all_parts(parts_data):
             log(f"  ✓ {name} ← {step_file} ({elapsed*1000:.0f}ms)")
         except Exception as e:
             log(f"  ✗ 读取失败 {name}: {e}")
+        progress(_P0 + (_P1 - _P0) * n_done / n_todo,
+                 f"读取零件 {n_done}/{n_todo}")
     total = time.time() - t0
     log(f"  小计: 读取 {len(shapes)} 个, 跳过抑制 {skipped_suppressed} 个, 总耗时 {total:.2f}s")
     return shapes, total
@@ -705,6 +821,7 @@ def step2_apply_transform_and_merge(shapes, parts_data):
     from OCC.Core.BRep import BRep_Builder
     from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
     log("\n=== Step 2: 应用变换矩阵 + 合并装配体 ===")
+    progress(50.0, "合并装配体")
     t0 = time.time()
     builder = BRep_Builder()
     compound = TopoDS_Compound()
@@ -802,6 +919,7 @@ def step3_export_assembly_step_xcaf(shapes, parts_data, out_path, asm_name="装�
     from OCC.Core.gp import gp_Trsf
 
     log("\n=== Step 3: 导出装配体 STEP (XCAF 模式,保留零件名称) ===")
+    progress(60.0, "导出 STEP")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     t0 = time.time()
 
@@ -938,9 +1056,29 @@ def step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, out_path):
     return new_shape, elapsed
 
 
+def _export_assembly_brep(shape, out_path):
+    """落盘装配体 BREP(内部链路首选格式, 与 read_shape_cached 的缓存同一约定)。
+
+    失败只记日志、不中断构建: 出图侧发现没有 .brep 时会退回解析 STEP。
+    """
+    from OCC.Core.BRepTools import breptools
+    log("\n=== Step 3.5: 装配体 BREP 缓存(供出图/锚点免重复解析 STEP) ===")
+    t0 = time.time()
+    try:
+        breptools.Write(shape, out_path)
+        size_mb = os.path.getsize(out_path) / 1024 / 1024
+    except Exception as e:  # noqa: BLE001 - 缓存写失败不影响构建主流程
+        log(f"  ! BREP 写入失败(出图将退回解析 STEP): {e}")
+        return 0.0
+    dt = time.time() - t0
+    log(f"  ✓ BREP 缓存: {out_path} ({size_mb:.2f} MB, {dt:.2f}s)")
+    return dt
+
+
 def step5_export_glb(compound, out_path):
     """步骤 5: 装配体 GLB 导出 (pythonOCC → STL → trimesh → GLB,out_path 为完整输出路径)"""
     log("\n=== Step 5: 装配体 GLB 导出 ===")
+    progress(82.0, "导出 GLB")
     import trimesh
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     stl_path = os.path.join(tempfile.gettempdir(), "assembly_tmp.stl")
@@ -1057,9 +1195,9 @@ def build_assembly(model_code, motor=None, series=None):
     os.makedirs(OUT_DIR, exist_ok=True)
 
     sel = parse_model_code(model_code)
-    motor = sel.get("motor") or motor or DEFAULT_MOTOR
     log(f"选型解析: 系列={sel['series']} 类型={sel['type']} "
-        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']} 电机={motor}")
+        f"安装={sel['mount']} 负载={sel['load']} 行程={sel['stroke']} "
+        f"电机={sel.get('motor_code') or '(未指定)'}")
 
     # 确定系列目录名
     if series:
@@ -1069,15 +1207,29 @@ def build_assembly(model_code, motor=None, series=None):
     else:
         series_name = f"{sel['series']}折返"
 
+    # 显式 series 找不到配置时(如前端误传 JDG 项目名 YRJ250),
+    # 回退按型号编码推导,避免旧前端包直接报 FileNotFoundError
+    if not os.path.exists(paths.config_path(series_name)):
+        derived = (f"{sel['series']}直连" if sel['type'].upper() == 'E'
+                   else f"{sel['series']}折返")
+        if series and derived != series_name:
+            log(f"指定系列 {series_name} 无配置,回退按型号推导: {derived}")
+            series_name = derived
+
     # 加载配置
-    config_path = os.path.join(CONFIG_DIR, f"{series_name}.json")
+    config_path = paths.config_path(series_name)
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"配置不存在: {config_path},请先运行 build_config.py")
     config = load_config(series_name)
+    motor = resolve_motor(config, sel.get("motor") or motor)
+    log(f"电机选型: {motor}")
+    # 切换激活系列:后续零件读取与 anchor_resolver(rb.PARTS_DIR)都依赖它
+    set_series(series_name)
 
+    progress(5.0, "解析选型配置")
     # 计算选型显隐
     visibility = resolve_visibility(config, sel['mount'], sel['load'], motor)
-    with open(MATRIX_JSON, "r", encoding="utf-8") as f:
+    with open(paths.transform_json(series_name), "r", encoding="utf-8") as f:
         parts_data = json.load(f)
     shown, hidden = apply_selection(parts_data, visibility)
     log(f"零件显隐: 显示 {shown} 个, 抑制 {hidden} 个 (共 {len(parts_data)})")
@@ -1091,11 +1243,13 @@ def build_assembly(model_code, motor=None, series=None):
         stroke_num, d1, scale = None, None, 1.0
 
     # Step 1: 读取零件
+    progress(8.0, "读取零件")
     shapes, t_read = step1_read_all_parts(parts_data)
 
     # 缸体拉伸(主流程) + 配合零件位移补偿(通用数据驱动)
     # cylinder_part 来自配置 JSON, 不硬编码关键词; 主轴方向自动检测
     t_stretch_main = 0.0
+    progress(48.0, "缸体拉伸")
     cyl_part_name = config.get("cylinder_part")
     if cyl and cyl_part_name:
         for key, shape in list(shapes.items()):
@@ -1159,11 +1313,22 @@ def build_assembly(model_code, motor=None, series=None):
     asm_step, t_step, xcaf_doc = step3_export_assembly_step_xcaf(
         shapes, parts_data, asm_path, asm_name=model_code)
 
+    progress(72.0, "缓存 BREP")
+    # Step 3.5: 装配体 BREP 缓存
+    # 出图投影/锚点解析/查看器这些内部消费方读的都是 .brep; 若只留 STEP,
+    # 它们第一次都要重新解析 30MB STEP(实测 5.3s)+ 自行落盘(1.5s) —— 新型号
+    # "首次出图"因此白等约 6.8s。构建到这里 shape 就在内存里, 顺手写一份即可。
+    # 必须写在 GLB 导出之前: 那时 compound 还没被 STL 流程三角化, BREP 不带
+    # 网格数据, 出图侧才能按自己的精度(0.5mm)三角化, 不受 GLB 精度影响。
+    t_brep = _export_assembly_brep(compound, os.path.join(model_dir, "assembly.brep"))
+
     # Step 4: 缸体验证
+    progress(78.0, "缸体验证")
     t_stretch = 0.0
     cyl_out = None
-    cylinder_src = os.path.join(PARTS_DIR, CYLINDER_STEP)
-    if os.path.exists(cylinder_src) and cyl:
+    cyl_part = config.get("cylinder_part")
+    cylinder_src = resolve_part_file(f"{cyl_part}.step") if cyl_part else ""
+    if cyl_part and os.path.exists(cylinder_src) and cyl:
         cylinder_shape = read_step(cylinder_src)
         _, t_stretch = step4_cylinder_stretch(cylinder_shape, stroke_num, d1, scale, cyl_path)
         cyl_out = cyl_path
@@ -1171,7 +1336,7 @@ def build_assembly(model_code, motor=None, series=None):
     # Step 5: GLB
     glb_path, t_glb = step5_export_glb(compound, glb_path)
 
-    total = t_read + t_stretch_main + t_merge + t_step + t_stretch + t_glb
+    total = t_read + t_stretch_main + t_merge + t_step + t_brep + t_stretch + t_glb
     result = {
         "model_code": model_code,
         "motor": motor,
@@ -1189,10 +1354,12 @@ def build_assembly(model_code, motor=None, series=None):
             "stretch": round(t_stretch_main, 3),
             "merge": round(t_merge, 3),
             "step": round(t_step, 2),
+            "brep": round(t_brep, 2),
             "cylinder": round(t_stretch, 3),
             "glb": round(t_glb, 2),
         },
     }
+    progress(96.0, "写入构建信息")
     # 保存构建元数据到 output 子目录,供前端加载历史结果
     def _rel(p):
         return os.path.relpath(p, OUT_DIR).replace("\\", "/") if p else None
@@ -1204,6 +1371,12 @@ def build_assembly(model_code, motor=None, series=None):
     try:
         with open(info_path, "w", encoding="utf-8") as f:
             json.dump(info, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    # 结果产出后同步到对象存储(若 .env 配置 OSS);本地后端为空操作,失败不阻断
+    try:
+        from core import storage
+        storage.publish_model(model_code)
     except Exception:
         pass
     return result
@@ -1235,6 +1408,7 @@ def main():
     log(f"  缸体拉伸(主流程)         : {t['stretch']*1000:.0f}ms")
     log(f"  Step 2 应用变换+合并      : {t['merge']*1000:.0f}ms")
     log(f"  Step 3 导出装配体 STEP   : {t['step']:.2f}s")
+    log(f"  Step 3.5 装配体 BREP 缓存 : {t['brep']:.2f}s")
     log(f"  Step 4 缸体拉伸验证       : {t['cylinder']*1000:.0f}ms")
     log(f"  Step 5 GLB 导出          : {t['glb']:.2f}s")
     log(f"  -----------------------------")

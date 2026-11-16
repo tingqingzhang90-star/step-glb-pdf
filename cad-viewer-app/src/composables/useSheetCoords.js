@@ -14,6 +14,18 @@ export function useSheetCoords({ placedViews }) {
     return { x: pt.x, y: pt.y }
   }
 
+  /** 1 屏幕 px = 多少图纸单位(sheet mm):由 SVG CTM 实时反推。
+   *  供"屏幕 px 语义"的 UI 常量(引线预览偏移 -60px、引线限位 120px 等)
+   *  换算到图纸坐标——这些常量原先直接当 sheet 单位用,在 ~3px/mm 的画布上
+   *  会被放大 3 倍,导致折线直径的文字/引线被甩到几十毫米外。 */
+  function screenPxToSheet() {
+    const svg = svgRef.value
+    if (!svg) return 1
+    const ctm = svg.getScreenCTM()
+    if (!ctm || !ctm.a || !isFinite(ctm.a) || ctm.a <= 0) return 1
+    return 1 / ctm.a
+  }
+
   /** 指针是否落在图纸卡范围内 */
   function isPointerOverSheet(event) {
     const svg = svgRef.value
@@ -21,6 +33,33 @@ export function useSheetCoords({ placedViews }) {
     const rect = svg.getBoundingClientRect()
     return event.clientX >= rect.left && event.clientX <= rect.right
       && event.clientY >= rect.top && event.clientY <= rect.bottom
+  }
+
+  /** 视图内容在图纸坐标下的矩形。
+   *  内容包围盒是视图局部坐标(= mm × bbox.scale),需再乘显示比例 view.scale,
+   *  与视图 <g> 的 transform: translate(view.x, view.y) scale(view.scale) 一致。 */
+  function viewSheetRect(view) {
+    const s = view.scale ?? 1
+    const cb = view.contentBBox
+    const bx = cb ? cb.x : 0
+    const by = cb ? cb.y : 0
+    const bw = cb ? cb.width : (view.bbox?.orig_width ?? view.bbox?.width ?? 0) * (view.bbox?.scale ?? 1)
+    const bh = cb ? cb.height : (view.bbox?.orig_height ?? view.bbox?.height ?? 0) * (view.bbox?.scale ?? 1)
+    return { x: view.x + bx * s, y: view.y + by * s, width: bw * s, height: bh * s }
+  }
+
+  /** 图纸坐标 → 命中的视图(重叠时取最上层)。
+   *  供电机包络等"视图级"工具使用:它们只关心落在哪个视图上,不依赖具体边线命中。 */
+  function findViewAtPoint(point) {
+    if (!point) return null
+    const list = placedViews.value
+    for (let i = list.length - 1; i >= 0; i--) {
+      const r = viewSheetRect(list[i])
+      if (r.width <= 0 || r.height <= 0) continue
+      if (point.x >= r.x && point.x <= r.x + r.width
+        && point.y >= r.y && point.y <= r.y + r.height) return list[i]
+    }
+    return null
   }
 
   /** 根据引用取边线数据 */
@@ -74,8 +113,8 @@ export function useSheetCoords({ placedViews }) {
   }
 
   return {
-    svgRef, eventToSheetPoint, isPointerOverSheet,
+    svgRef, eventToSheetPoint, isPointerOverSheet, findViewAtPoint, viewSheetRect,
     getEdgeByRef, getViewDisplayScale, getSheetPoint, getViewMmScale,
-    edgeRefData, makeEdgeRef, resolveDimRef
+    edgeRefData, makeEdgeRef, resolveDimRef, screenPxToSheet
   }
 }

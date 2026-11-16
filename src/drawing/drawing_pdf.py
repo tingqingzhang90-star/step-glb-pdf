@@ -17,7 +17,6 @@ import os
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 
 _CN_FONT = "STSong-Light"
 _FONT_READY = False
@@ -40,10 +39,10 @@ _C_EXT = (0.4, 0.4, 0.4)
 
 
 def _ensure_font():
-    global _FONT_READY
-    if not _FONT_READY:
-        pdfmetrics.registerFont(UnicodeCIDFont(_CN_FONT))
-        _FONT_READY = True
+    global _CN_FONT, _FONT_READY
+    from drawing.pdf_font import ensure_cn_font
+    _CN_FONT = ensure_cn_font()
+    _FONT_READY = True
 
 
 def _draw_segment(c, seg, scale, ox, oy, fy):

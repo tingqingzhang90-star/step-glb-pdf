@@ -1,0 +1,249 @@
+// 表格几何计算(纯函数,不持有状态)
+// 坐标单位:mm。表格 x/y 是 SVG 左上角,与 views 同坐标系。
+// 合并格只在其左上角声明 colspan/rowspan,被覆盖格由 findCellAt 反查。
+
+import { PX_TO_MM, TABLE_STYLE } from '@/composables/useStyleConfig'
+
+/** 各列左边的 x(长度 = 列数+1,末位是表格右边界) */
+export function tableColLefts(t) {
+  const a = [t.x]
+  for (const w of t.col_widths) a.push(a[a.length - 1] + w)
+  return a
+}
+
+/** 各行顶部的 y(长度 = 行数+1,末位是表格下边界) */
+export function tableRowTops(t) {
+  const a = [t.y]
+  for (const h of t.row_heights) a.push(a[a.length - 1] + h)
+  return a
+}
+
+export function tableW(t) {
+  return t.col_widths.reduce((a, b) => a + b, 0)
+}
+
+export function tableH(t) {
+  return t.row_heights.reduce((a, b) => a + b, 0)
+}
+
+/** (r,c) 所属的左上角 cell;被合并覆盖时返回覆盖它的那个 cell */
+export function findCellAt(table, r, c) {
+  for (const cell of table.cells) {
+    const cs = cell.colspan || 1
+    const rs = cell.rowspan || 1
+    if (r >= cell.r && r < cell.r + rs && c >= cell.c && c < cell.c + cs) {
+      return cell
+    }
+  }
+  return null
+}
+
+/** 渲染用的"逻辑格"列表:每个 (r,c) 一个,被覆盖格也列出(只做命中) */
+export function tableLogicalCells(t) {
+  const out = []
+  for (let r = 0; r < t.row_heights.length; r++) {
+    for (let c = 0; c < t.col_widths.length; c++) {
+      const cell = findCellAt(t, r, c)
+      out.push({
+        r, c, cell,
+        isOrigin: !!(cell && cell.r === r && cell.c === c)
+      })
+    }
+  }
+  return out
+}
+
+/** 四角缩放手柄位置 */
+export function cornerHandles(t) {
+  const w = tableW(t), h = tableH(t)
+  return [
+    { corner: 'nw', x: t.x, y: t.y },
+    { corner: 'ne', x: t.x + w, y: t.y },
+    { corner: 'sw', x: t.x, y: t.y + h },
+    { corner: 'se', x: t.x + w, y: t.y + h }
+  ]
+}
+
+/** 四角 L 形缩放手柄路径(顶点在表格角,臂长 size 向内) */
+export function cornerHandlePath(t, corner, size = 5) {
+  const pts = {
+    nw: { x: t.x, y: t.y },
+    ne: { x: t.x + tableW(t), y: t.y },
+    sw: { x: t.x, y: t.y + tableH(t) },
+    se: { x: t.x + tableW(t), y: t.y + tableH(t) }
+  }
+  const { x, y } = pts[corner]
+  const s = size
+  switch (corner) {
+    case 'nw': return `M ${x} ${y + s} L ${x} ${y} L ${x + s} ${y}`
+    case 'ne': return `M ${x - s} ${y} L ${x} ${y} L ${x} ${y + s}`
+    case 'sw': return `M ${x} ${y - s} L ${x} ${y} L ${x + s} ${y}`
+    case 'se': return `M ${x - s} ${y} L ${x} ${y} L ${x} ${y - s}`
+    default: return ''
+  }
+}
+
+/** 列宽手柄所在的列索引(竖网格线,1..cols,包含表格右边界) */
+export function colResizeHandles(t) {
+  return Array.from({ length: t.col_widths.length }, (_, i) => i + 1)
+}
+
+/** 行高手柄所在的行索引(水平网格线,1..rows,包含表格下边界) */
+export function rowResizeHandles(t) {
+  return Array.from({ length: t.row_heights.length }, (_, i) => i + 1)
+}
+
+/** 合并格的实际矩形(按 colspan/rowspan 累加) */
+export function cellRect(t, cell) {
+  const lefts = tableColLefts(t)
+  const tops = tableRowTops(t)
+  const cs = cell.colspan || 1
+  const rs = cell.rowspan || 1
+  return {
+    x: lefts[cell.c],
+    y: tops[cell.r],
+    w: lefts[cell.c + cs] - lefts[cell.c],
+    h: tops[cell.r + rs] - tops[cell.r]
+  }
+}
+
+/** (r,c) 所在格的矩形(供 inline 编辑定位) */
+export function cellRectAt(t, r, c) {
+  const cell = findCellAt(t, r, c)
+  if (!cell) return { r, c, x: 0, y: 0, w: 0, h: 0, text: '' }
+  const rect = cellRect(t, cell)
+  return { r, c, ...rect, text: cell.text || '' }
+}
+
+/** 单元格"格内子分割"后的子格矩形:在自身范围内等分为 N 份。
+ *  split_dir='h' 左右等分(N 列);'v' 上下等分(N 行)。未拆分返回 []。 */
+export function cellPartRects(t, cell) {
+  if (!cell || !cell.split_dir) return []
+  const n = cell.split_count || 0
+  if (n < 2) return []
+  const r = cellRect(t, cell)
+  const out = []
+  for (let i = 0; i < n; i++) {
+    out.push(cell.split_dir === 'h'
+      ? { i, x: r.x + (r.w * i) / n, y: r.y, w: r.w / n, h: r.h }
+      : { i, x: r.x, y: r.y + (r.h * i) / n, w: r.w, h: r.h / n })
+  }
+  return out
+}
+
+/** 子格内文字锚点(对齐方式沿用所属单元格) */
+export function textAnchorXInRect(rect, cell) {
+  const a = hAlign(cell)
+  if (a === 'h-center') return rect.x + rect.w / 2
+  if (a === 'h-right') return rect.x + rect.w - 1
+  return rect.x + 1
+}
+
+export function textAnchorYInRect(rect, cell) {
+  const fs = cellFontSize(cell)
+  const v = vAlign(cell)
+  if (v === 'v-top') return rect.y + fs * 0.8 + 1
+  if (v === 'v-bottom') return rect.y + rect.h - fs * 0.2 - 1
+  return rect.y + rect.h / 2
+}
+
+/** 单元格/子格文字按换行符拆成多行 */
+export function textLines(text) {
+  return String(text == null ? '' : text).split('\n')
+}
+
+/** sheet 坐标点落在哪个子格(需已拆分);未命中返回 -1 */
+export function partIndexAtPoint(t, cell, pt) {
+  for (const r of cellPartRects(t, cell)) {
+    if (pt.x >= r.x && pt.x <= r.x + r.w && pt.y >= r.y && pt.y <= r.y + r.h) {
+      return r.i
+    }
+  }
+  return -1
+}
+
+/** 多行文字各行的 central-baseline y(仅 n>1 使用;n=1 走原 cellTextY/单行路径)。
+ *  按垂直对齐把整块文字摆进矩形。 */
+export function multiLineYs(rect, cell, n) {
+  const fs = cellFontSize(cell)
+  const lh = fs * 1.25
+  const blockH = n * lh
+  const v = vAlign(cell)
+  let top = rect.y + rect.h / 2 - blockH / 2
+  if (v === 'v-top') top = rect.y + 1
+  else if (v === 'v-bottom') top = rect.y + rect.h - blockH - 1
+  return Array.from({ length: n }, (_, i) => top + lh * (i + 0.5))
+}
+
+
+
+/** 单元格文字水平对齐 → SVG text-anchor */
+export function cellTextAnchor(cell) {
+  const a = hAlign(cell)
+  if (a === 'h-center') return 'middle'
+  if (a === 'h-right') return 'end'
+  return 'start'
+}
+
+/** 单元格文字 x(合并格按其完整矩形算) */
+export function cellTextX(t, cell) {
+  const r = cellRect(t, cell)
+  const a = hAlign(cell)
+  if (a === 'h-center') return r.x + r.w / 2
+  if (a === 'h-right') return r.x + r.w - 1
+  return r.x + 1
+}
+
+/** 单元格文字 y(baseline,按垂直对齐计算) */
+export function cellTextY(t, cell) {
+  const r = cellRect(t, cell)
+  const fs = cellFontSize(cell)
+  const v = vAlign(cell)
+  if (v === 'v-top') return r.y + fs * 0.8 + 1
+  if (v === 'v-bottom') return r.y + r.h - fs * 0.2 - 1
+  // 垂直居中:用 central baseline,y 直接放在格中心,与编辑态 input 的 flex 居中对齐
+  return r.y + r.h / 2
+}
+
+/** 单元格文字 SVG dominant-baseline */
+export function cellTextBaseline(cell) {
+  const v = vAlign(cell)
+  if (v === 'v-top') return 'hanging'
+  if (v === 'v-bottom') return 'auto'
+  // central 把文字视觉中心放在 y 处,middle 对中文会略偏下
+  return 'central'
+}
+
+/** 单元格文字字号(mm)。cell 未指定 font_size 时取 cad_viewer_style.json 的 table.text.font_px */
+export function cellFontSize(cell) {
+  return (cell.font_size || TABLE_STYLE.fontPx) * PX_TO_MM
+}
+
+/** 单元格文字颜色:优先单元格 text_color,回退表级 text_color,最后用样式默认 */
+export function cellTextColor(cell, table) {
+  return cell.text_color || (table && table.text_color) || TABLE_STYLE.textColor
+}
+
+function hAlign(cell) {
+  return (cell.align || 'h-center').split(/\s+/).find(s => s.startsWith('h-')) || 'h-center'
+}
+
+function vAlign(cell) {
+  return (cell.align || '').split(/\s+/).find(s => s.startsWith('v-')) || 'v-center'
+}
+
+/** sheet 坐标点 → 最近格 (r,c)(合并格归到其左上角所在行列) */
+export function cellRCAtPoint(t, pt) {
+  const lefts = tableColLefts(t)
+  const tops = tableRowTops(t)
+  let c = -1
+  for (let i = 0; i < t.col_widths.length; i++) {
+    if (pt.x >= lefts[i] && pt.x < lefts[i + 1]) { c = i; break }
+  }
+  let r = -1
+  for (let i = 0; i < t.row_heights.length; i++) {
+    if (pt.y >= tops[i] && pt.y < tops[i + 1]) { r = i; break }
+  }
+  if (r < 0 || c < 0) return null
+  return { r, c }
+}

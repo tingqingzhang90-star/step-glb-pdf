@@ -8,35 +8,39 @@
   前端用 px(屏幕像素,SVG non-scaling-stroke),
   后端按 96dpi 折算成 mm,确保前后端视觉一致(等比缩放)。
 """
-import json
 import math
 import os
 
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 
-# 加载共享样式配置(项目根 cad_viewer_style.json,前后端共用)
-# 本文件位于 src/drawing/dim/,需上溯四级: dim → drawing → src → 项目根
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__)))))
-_STYLE_PATH = os.path.join(_PROJECT_ROOT, "cad_viewer_style.json")
-with open(_STYLE_PATH, "r", encoding="utf-8") as _f:
-    _CFG = json.load(_f)
-
-_PX2MM = _CFG["_px_to_mm_at_96dpi"]   # 0.2645833 mm/px (96dpi)
+from drawing.dim.dim_style import CFG as _CFG, PX2MM as _PX2MM
+from drawing.table_split import (
+    LINE_SPACING, cell_text_rects, draw_split_dividers, line_baselines,
+    parse_align,
+)
 # 后端常量(从 px 换算成 mm)
 _W_VISIBLE = _CFG["edge"]["visible"]["stroke_px"] * _PX2MM   # 0.265
 _W_HIDDEN = _CFG["edge"]["hidden"]["stroke_px"] * _PX2MM     # 0.212
 _W_DIM = _CFG["dim"]["line"]["stroke_px"] * _PX2MM          # 0.265
 _W_EXT = _CFG["dim"]["ext"]["stroke_px"] * _PX2MM            # 0.212
 _W_MARK = _CFG["center_mark"]["stroke_px"] * _PX2MM          # 0.212
-# 字号 px → pt(1pt=1.333px @ 96dpi)
-_FS_TEXT_PT = _CFG["dim"]["text"]["font_px"] * (72.0 / 96.0)  # 9px → 6.75pt
-# 箭头 px → mm
-_ARROW_LEN_MM = _CFG["dim"]["arrow"]["len_px"] * _PX2MM
-_ARROW_HALF_MM = _CFG["dim"]["arrow"]["half_px"] * _PX2MM
+# 字号 px → mm。注意画布已 c.scale(mm,mm),setFont 的数值单位是 mm
+# 而不是 pt:若传 pt 值会被坐标系再放大 2.834 倍(pt→mm 因子),
+# 导致 PDF 文字比前端预览大 3.8 倍
+_FS_TEXT_MM = _CFG["dim"]["text"]["font_px"] * _PX2MM  # 7px → 1.85mm
 _C_EDGE = (0.1, 0.1, 0.1)
 _C_HIDDEN = (0.45, 0.45, 0.45)
+# 表格默认值:表格画在 SVG viewBox 内,长度单位即 mm,不经 _PX2MM 折算;
+# 只有字号沿用 96dpi 折算(与 dim.text 一致)
+_TBL_FONT_PX = _CFG["table"]["text"]["font_px"]
+_TBL_TEXT_COLOR = _CFG["table"]["text"]["color"]
+_TBL_BORDER_W = _CFG["table"]["border"]["stroke_mm"]
+_TBL_BORDER_COLOR = _CFG["table"]["border"]["color"]
+# 自定义 SVG 符号库目录(与 web/common.SYMBOLS_DIR 同源,后端自行解析避免跨层耦合)
+_SYMBOLS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))), "data", "symbols")
 
 
 def _hex_rgb(color):
@@ -57,6 +61,7 @@ class SheetMapper:
 
     def __init__(self, sheet_w, sheet_h):
         self.k = 1.0
+        self.sheet_w = sheet_w
         self.sheet_h = sheet_h
 
     def pt(self, x, y):
@@ -64,12 +69,38 @@ class SheetMapper:
 
 
 def _draw_view_edges(c, placement, mapper):
+    """可见/隐藏边各按一条 Path 批量描边。
+
+    ReportLab 的 canvas.line() 每次都要做一遍状态+路径操作, 一个视图几百上千
+    条直线段时开销可观(实测 3 视图 ~0.4s); 直线段合并成单条 Path 后每视图
+    只需一次 drawPath, 圆/折线数量少, 仍逐条画。
+    """
     k = mapper.k
-    for seg in placement["segs"]:
-        _draw_seg(c, seg, placement, mapper, _C_EDGE, _W_VISIBLE * k, None)
-    for seg in placement.get("hidden", []):
-        _draw_seg(c, seg, placement, mapper, _C_HIDDEN, _W_HIDDEN * k,
-                  (2.5, 1.5))
+    s = placement["scale"]
+    ox, oy = placement["x"], placement["y"]
+
+    def pt(x, y):
+        return mapper.pt(x * s + ox, y * s + oy)
+
+    for segs, color, width, dash in (
+            (placement["segs"], _C_EDGE, _W_VISIBLE * k, None),
+            (placement.get("hidden", []), _C_HIDDEN, _W_HIDDEN * k, (2.5, 1.5))):
+        lines = [seg for seg in segs if seg.get("type") == "line"]
+        if lines:
+            c.setStrokeColorRGB(*color)
+            c.setLineWidth(width)
+            if dash:
+                c.setDash(*dash)
+            path = c.beginPath()
+            for seg in lines:
+                path.moveTo(*pt(seg["x1"], seg["y1"]))
+                path.lineTo(*pt(seg["x2"], seg["y2"]))
+            c.drawPath(path, stroke=1, fill=0)
+            if dash:
+                c.setDash()
+        for seg in segs:
+            if seg.get("type") != "line":
+                _draw_seg(c, seg, placement, mapper, color, width, dash)
 
 
 def _draw_seg(c, seg, placement, mapper, color, width, dash):
@@ -105,6 +136,146 @@ def _draw_seg(c, seg, placement, mapper, color, width, dash):
         c.setDash()
 
 
+def _draw_table_placement(c, table, mapper):
+    """画一个表格:网格 + 合并单元格 + 文字
+
+    坐标约定与视图放置一致:table.x/y 是 SVG 左上角(mm,SVG y 向下),
+    mapper.pt 把 SVG-y 翻成 PDF-y(y 向上)。colspan/rowspan 只在左上角
+    格子声明,被覆盖的格子不出现在 cells 数组里,自然不重复画。
+
+    cell 字段: r, c, colspan(默认1), rowspan(默认1), text, align
+    (如 "h-left v-center"), font_size(px), bold
+    """
+    ox, oy = table["x"], table["y"]
+    col_w = table["col_widths"]
+    row_h = table["row_heights"]
+
+    # 保证表格整体不超出右内框线(margin=20);超限时整体左移
+    total_w = sum(col_w)
+    margin = 20
+    right_limit = getattr(mapper, "sheet_w", 420) - margin
+    if ox + total_w > right_limit:
+        ox = max(margin, right_limit - total_w)
+        table = dict(table)
+        table["x"] = ox
+
+    # 列左边 x / 行顶部 y:前缀和
+    col_left = [ox]
+    for w in col_w:
+        col_left.append(col_left[-1] + w)
+    row_top = [oy]
+    for h in row_h:
+        row_top.append(row_top[-1] + h)
+
+    border = table.get("border", {})
+    bw = border.get("width", _TBL_BORDER_W)
+    bc = _hex_rgb(border.get("color", _TBL_BORDER_COLOR))
+
+    try:
+        from drawing.dim.dim_render import _CN_FONT
+    except Exception:                       # 测试/无 OCC 环境回退
+        _CN_FONT = "Helvetica"
+
+    for cell in table.get("cells", []):
+        r, col = cell["r"], cell["c"]
+        cs = cell.get("colspan", 1)
+        rs = cell.get("rowspan", 1)
+        # SVG 坐标矩形(左上、右下)
+        sx1, sy1 = col_left[col], row_top[r]
+        sx2, sy2 = col_left[col + cs], row_top[r + rs]
+        # PDF 坐标:y 翻转后,矩形左下/右上
+        px1, py_top = mapper.pt(sx1, sy1)
+        px2, py_bot = mapper.pt(sx2, sy2)
+        rx, ry = min(px1, px2), min(py_top, py_bot)
+        rw, rh = abs(px2 - px1), abs(py_top - py_bot)
+        c.setStrokeColorRGB(*bc)
+        c.setLineWidth(bw)
+        c.rect(rx, ry, rw, rh, stroke=1, fill=0)
+
+        # 单元格符号(SVG):居中适配于格内(优先于文字绘制,但都在网格上方)
+        sym = cell.get("symbol")
+        if sym:
+            _draw_cell_symbol(c, sym, rx, ry, rw, rh)
+
+        # 拆分单元格内部分隔线
+        if cell.get("split_dir") and (cell.get("split_count") or 0) >= 2:
+            draw_split_dividers(c, cell, mapper.pt, sx1, sy1, sx2, sy2, bc, bw)
+
+        # 文字:拆分格按子格逐块绘制,未拆分画整格
+        tc = _hex_rgb(cell.get("text_color") or table.get("text_color", _TBL_TEXT_COLOR))
+        for rect in cell_text_rects(sx1, sy1, sx2, sy2, cell):
+            _draw_cell_text(c, mapper, rect, cell, tc, _CN_FONT)
+
+
+def _draw_cell_text(c, mapper, rect, cell, tc, cn_font):
+    """在 SVG 子矩形 rect=(x1,y1,x2,y2,text) 内按单元格对齐绘制文字,支持 \\n 多行。"""
+    sx1, sy1, sx2, sy2, text = rect
+    if not text:
+        return
+    px1, py_top = mapper.pt(sx1, sy1)
+    px2, py_bot = mapper.pt(sx2, sy2)
+    lines = str(text).split("\n")
+    fs_mm = cell.get("font_size", _TBL_FONT_PX) * _PX2MM
+    # 多行时按可用高度限一行距,避免超出格高(单行沿用原字号,零回归)
+    if len(lines) > 1:
+        fs_mm = min(fs_mm, abs(py_top - py_bot) / (len(lines) * LINE_SPACING))
+    c.setFont(cn_font, fs_mm)
+    c.setFillColorRGB(*tc)
+    ha, va = parse_align(cell.get("align", "h-left v-center"))
+    if ha == "h-center":
+        tx = (px1 + px2) / 2
+        draw = c.drawCentredString
+    elif ha == "h-right":
+        tx = max(px1, px2) - 1
+        draw = c.drawRightString
+    else:
+        tx = min(px1, px2) + 1
+        draw = c.drawString
+    ys = line_baselines(fs_mm, len(lines), fs_mm * LINE_SPACING,
+                        py_top, py_bot, va)
+    for cy, line in zip(ys, lines):
+        draw(tx, cy, line)
+
+
+def _draw_cell_symbol(c, rel_file, rx, ry, rw, rh):
+    """在单元格矩形(rx,ry 为 PDF 左下角,宽 rw 高 rh)内居中适配绘制一个 SVG 符号。
+
+    rel_file 为相对 data/symbols 的文件名(前端只存这个)。任意异常静默跳过,
+    绝不阻塞整张工程图出图。
+    """
+    try:
+        from svglib.svglib import svg2rlg
+    except Exception:
+        return
+    path = os.path.join(_SYMBOLS_DIR, os.path.basename(rel_file))
+    if not os.path.isfile(path):
+        return
+    try:
+        drawing = svg2rlg(path)
+    except Exception:
+        return
+    if drawing is None:
+        return
+    sw = float(getattr(drawing, "width", 0) or 0)
+    sh = float(getattr(drawing, "height", 0) or 0)
+    if sw <= 0 or sh <= 0:
+        return
+    pad = 1.0  # mm 内边距
+    avail_w = max(rw - 2 * pad, 0.5)
+    avail_h = max(rh - 2 * pad, 0.5)
+    scale = min(avail_w / sw, avail_h / sh)
+    drawing.width = sw * scale
+    drawing.height = sh * scale
+    drawing.scale(scale, scale)
+    # PDF 坐标 y 向上:ry 是格下边界,符号整体居中
+    x = rx + (rw - drawing.width) / 2
+    y = ry + (rh - drawing.height) / 2
+    try:
+        drawing.drawOn(c, x, y)
+    except Exception:
+        return
+
+
 def _draw_primitives(c, prims, color, mapper):
     rgb = _hex_rgb(color)
     k = mapper.k
@@ -134,6 +305,11 @@ def _draw_primitives(c, prims, color, mapper):
         for p in arc[1:]:
             path.lineTo(*mapper.pt(*p))
         c.drawPath(path, stroke=1, fill=0)
+    for circ in prims.get("dashed_circles", []):
+        # 孔组分度圆:虚线圆。划长按图纸比例给,画完立刻复位,避免影响后续实线
+        c.setDash(4.0 * k, 3.0 * k)
+        c.circle(*mapper.pt(circ["x"], circ["y"]), circ["r"] * k, stroke=1, fill=0)
+        c.setDash()
     c.setLineWidth(_W_MARK * k)
     for mark in prims.get("center_marks", []):
         x, y = mark["pos"]
@@ -150,21 +326,26 @@ def _draw_primitives(c, prims, color, mapper):
                    *mapper.pt(x - r * sa, y + r * ca))
     from drawing.dim.dim_render import _CN_FONT
     # 字号 10.5pt ≈ GB 5号字(3.7mm),不随图纸缩放
-    c.setFont(_CN_FONT, _FS_TEXT_PT)
+    c.setFont(_CN_FONT, _FS_TEXT_MM)
     for t in prims.get("texts", []):
         x, y = mapper.pt(*t["pos"])
         angle_deg = math.degrees(t.get("angle") or 0.0)
+        anchor = t.get("anchor", "middle")
         if abs(angle_deg) < 0.5:
-            if t.get("anchor") == "start":
+            if anchor == "start":
                 c.drawString(x, y, t["text"])
+            elif anchor == "end":
+                c.drawRightString(x, y, t["text"])
             else:
                 c.drawCentredString(x, y, t["text"])
         else:
             c.saveState()
             c.translate(x, y)
             c.rotate(angle_deg)
-            if t.get("anchor") == "start":
+            if anchor == "start":
                 c.drawString(0, 0, t["text"])
+            elif anchor == "end":
+                c.drawRightString(0, 0, t["text"])
             else:
                 c.drawCentredString(0, 0, t["text"])
             c.restoreState()
@@ -200,8 +381,9 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
     c.setTitle(f"{model_code} ({sheet_size})")
     c.scale(mm, mm)
 
-    # 图框(图纸边缘内缩 15 mm)
-    m = 15
+    # 图框:内缩 20mm,与前端 SVG 图框(App.vue x=20)一致,
+    # 否则同一坐标的表格在 PDF 里会显得离图框有缝
+    m = 20
     c.setStrokeColorRGB(*_C_EDGE)
     c.setLineWidth(0.8)
     c.rect(m, m, sheet_w - 2 * m, sheet_h - 2 * m, stroke=1, fill=0)
@@ -209,9 +391,13 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
     for placement in placements.values():
         _draw_view_edges(c, placement, mapper)
 
+    # 表格:整批只读 template_doc["tables"],逐个画
+    for table in template_doc.get("tables", []):
+        _draw_table_placement(c, table, mapper)
+
     unmatched = 0
     for item in rebound:
-        if item.get("status") == "unmatched":
+        if item.get("status") == "unmatched" or not item.get("segs"):
             unmatched += 1
             continue
         ann = item["annotation"]
@@ -221,7 +407,7 @@ def render_frontend_pdf(rebound, placements, template_doc, model_code, out_pdf):
 
     # 角标:型号 + 失配提示
     from drawing.dim.dim_render import _CN_FONT
-    c.setFont(_CN_FONT, _FS_TEXT_PT)
+    c.setFont(_CN_FONT, _FS_TEXT_MM)
     c.setFillColorRGB(0.1, 0.1, 0.1)
     c.drawRightString(sheet_w - m, m + 3, model_code)
     if unmatched:

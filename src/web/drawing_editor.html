@@ -7,7 +7,7 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f0f0f0;overflow:hidden;height:100vh;}
-.toolbar{position:fixed;top:0;left:0;right:0;height:44px;background:#2b2b2b;color:#fff;display:flex;align-items:center;padding:0 12px;gap:8px;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.3);}
+.toolbar{position:fixed;top:var(--panel-nav-h,44px);left:0;right:0;height:44px;background:#2b2b2b;color:#fff;display:flex;align-items:center;padding:0 12px;gap:8px;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.3);}
 .toolbar button{background:#3c3c3c;color:#fff;border:1px solid #555;padding:5px 12px;border-radius:3px;cursor:pointer;font-size:13px;transition:background .15s;}
 .toolbar button:hover{background:#505050;}
 .toolbar button.active{background:#007acc;border-color:#007acc;}
@@ -15,7 +15,7 @@ body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f0f0f0;over
 .toolbar label{font-size:13px;color:#aaa;}
 .toolbar .sep{width:1px;height:24px;background:#555;margin:0 4px;}
 .toolbar .info{margin-left:auto;font-size:12px;color:#aaa;}
-.canvas-container{position:fixed;top:44px;left:0;right:0;bottom:0;overflow:auto;background:#e8e8e8;}
+.canvas-container{position:fixed;top:calc(var(--panel-nav-h,44px) + 44px);left:0;right:0;bottom:0;overflow:auto;background:#e8e8e8;}
 #drawingSvg{background:#fff;display:block;}
 .view-group{cursor:move;}
 .view-group:hover .view-border{stroke:#007acc;stroke-width:1.5;}
@@ -43,6 +43,7 @@ body{font-family:"Microsoft YaHei","Segoe UI",sans-serif;background:#f0f0f0;over
 .ctx-menu .sep{height:1px;background:#ddd;margin:2px 0;}
 .status-overlay{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.7);color:#fff;padding:20px 40px;border-radius:8px;font-size:14px;z-index:300;display:none;}
 </style>
+<script src="/static/panel_nav.js" defer></script>
 </head>
 <body>
 

@@ -1,6 +1,8 @@
 // 标注几何与边线识别工具（纯函数，无 Vue 依赖）
 // 从 App.vue 抽离：toLineSeg / toCircle / 圆拟合 / 平行判断 / 点线运算 / 圆弧 path 等。
 
+import styleConfig from '../../../cad_viewer_style.json'
+
 /**
  * 将 line/polyline 规整为可标注的两点线段。
  * 后端对 BSpline 面的 HLR 剪影线会离散为 polyline(气缸等模型占大多数),
@@ -142,6 +144,54 @@ export function toCircle(seg) {
   return null
 }
 
+/** 把角度差归一化到 [-π, π] */
+function normAngleDelta(d) {
+  while (d > Math.PI) d -= Math.PI * 2
+  while (d < -Math.PI) d += Math.PI * 2
+  return d
+}
+
+// 补齐弧越过箭头接触角的出头量(弧度,约 8°)
+export const ARC_PATCH_OVERSHOOT = 0.14
+
+/**
+ * 计算圆边线在给定角度处的补齐弧范围(仅对后端标记的部分弧生效)。
+ *   - 整圆(circle)/已有弧覆盖该角度/无弧元数据的拟合圆 → null(不补)
+ *   - 部分弧且该角度缺失:补弧从"离箭头最近的已有弧端点"无缝接出,
+ *     沿缺失段拉到箭头接触角,再向前出头 ARC_PATCH_OVERSHOOT
+ * 返回 { start, span, dir }:start=起始角,span=弧长(弧度,含出头),
+ * dir=拉伸方向(±1),终角 = start + dir*span;无需补时返回 null。
+ */
+export function arcPatchRange(seg, circ, angle) {
+  if (!seg || !circ) return null
+  if (seg.type === 'circle') return null
+  if (seg.type !== 'polyline' || !Array.isArray(seg.points)) return null
+  const meta = seg.meta
+  if (!meta || meta.curve !== 'circle') return null
+  if (typeof meta.arc_span === 'number' && meta.arc_span >= Math.PI * 2 - 0.15) return null
+  const pts = seg.points
+  if (pts.length < 2) return null
+  const angles = pts.map(p => Math.atan2(p[1] - circ.cy, p[0] - circ.cx))
+  let maxStep = 0
+  for (let i = 1; i < angles.length; i++) {
+    const d = Math.abs(normAngleDelta(angles[i] - angles[i - 1]))
+    if (d > maxStep) maxStep = d
+  }
+  const tol = maxStep / 2 + 0.02
+  for (const a of angles) {
+    if (Math.abs(normAngleDelta(angle - a)) <= tol) return null
+  }
+  // 从较近的弧端点出发,朝箭头方向拉弧
+  const a0 = angles[0]
+  const a1 = angles[angles.length - 1]
+  const d0 = Math.abs(normAngleDelta(angle - a0))
+  const d1 = Math.abs(normAngleDelta(angle - a1))
+  const start = d0 <= d1 ? a0 : a1
+  const dir = normAngleDelta(angle - start) >= 0 ? 1 : -1
+  const span = Math.abs(normAngleDelta(angle - start)) + ARC_PATCH_OVERSHOOT
+  return { start, span, dir }
+}
+
 /** 判断两条线段是否平行（角度差 < 5°），line/polyline 视为直线 */
 export function isParallel(seg1, seg2) {
   const l1 = toLineSeg(seg1)
@@ -219,7 +269,67 @@ export function buildArcPath(cx, cy, r, startAngle, endAngle) {
   return `M${pts[0]} L${pts.slice(1).join(' L')}`
 }
 
+/**
+ * 角度标注弧 path：两端各接一段直线延长线（tail1/tail2 为延长向量）。
+ *
+ * 延长段必须沿切线走直线，而不能继续沿圆弧延伸：箭头轴线就是弧端点的切线，
+ * 只有直线延长才与之严格共线，才能从箭头尾部底中心穿出；继续沿圆弧会因
+ * 曲率在尾部附近偏离箭头轴线（放大后看就是从尾部底一角冒出来）。
+ */
+export function buildAngleArcPath(cx, cy, r, startAngle, endAngle, tail1, tail2) {
+  const steps = 20
+  const x0 = cx + Math.cos(startAngle) * r
+  const y0 = cy + Math.sin(startAngle) * r
+  const xn = cx + Math.cos(endAngle) * r
+  const yn = cy + Math.sin(endAngle) * r
+  const pts = [`${x0 + tail1.x},${y0 + tail1.y}`, `${x0},${y0}`]
+  for (let i = 1; i <= steps; i++) {
+    const t = startAngle + (endAngle - startAngle) * (i / steps)
+    pts.push(`${cx + Math.cos(t) * r},${cy + Math.sin(t) * r}`)
+  }
+  pts.push(`${xn + tail2.x},${yn + tail2.y}`)
+  return `M${pts[0]} L${pts.slice(1).join(' L')}`
+}
+
 /** polyline 点数组 → SVG points 字符串 */
 export function polylinePoints(points) {
   return points.map(p => `${p[0]},${p[1]}`).join(' ')
+}
+
+// ===== 尺寸标注外观(与后端 drawing/dim/dim_render.py 保持一致) =====
+
+/** 尺寸界线越过尺寸线的长度(图纸 mm,取自共用样式配置) */
+export const EXT_OVERSHOOT = styleConfig.dim.ext.overshoot_mm ?? 2.5
+
+/** 延伸线终点越过尺寸线一小段 */
+export function extendExtEnd(p, e) {
+  const dx = e.x - p.x
+  const dy = e.y - p.y
+  const len = Math.hypot(dx, dy)
+  if (len < 1e-6) return { ...e }
+  return { x: e.x + (dx / len) * EXT_OVERSHOOT, y: e.y + (dy / len) * EXT_OVERSHOOT }
+}
+
+/** linear 文字旋转角(SVG 屏幕坐标):跟随尺寸线方向且不倒置,竖直统一字头朝左 */
+export function linearTextAngle(unit) {
+  let a = Math.atan2(unit.y, unit.x)
+  if (Math.cos(a) < -1e-9) a += Math.PI
+  if (Math.abs(Math.abs(a) - Math.PI / 2) < 1e-9) a = -Math.PI / 2
+  return a
+}
+
+/** 文字与尺寸线的间距(图纸 mm,取自共用样式配置) */
+export const DIM_TEXT_GAP = styleConfig.dim.text.gap_mm ?? 4
+
+/** 线性标注尺寸线离被测要素的最小距离(图纸 px)。0 = 完全自由拖动。
+ *  旧版本在 core.js 里硬编码为 2px(单边)/20px(孔间中心距),拖近时被弹住,
+ *  现改为共用样式配置,按需设值即可恢复限位。 */
+export const LINEAR_MIN_OFFSET = styleConfig.dim.linear?.min_offset_px ?? 0
+
+/** linear 文字位置:沿线滑动 slide,法向偏移 gap;水平在线上方,竖直在左侧 */
+export function linearTextPos(unit, mid, gap = DIM_TEXT_GAP, slide = 0) {
+  let nx = -unit.y, ny = unit.x
+  if (Math.abs(unit.x) < 1e-9) { nx = -1; ny = 0 }
+  else if (ny > 0) { nx = -nx; ny = -ny }
+  return { x: mid.x + unit.x * slide + nx * gap, y: mid.y + unit.y * slide + ny * gap }
 }

@@ -21,6 +21,7 @@ import os
 import json
 import time
 import math
+import logging
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 from OCC.Core.STEPControl import STEPControl_Reader
@@ -41,6 +42,10 @@ from OCC.Core.GCPnts import GCPnts_QuasiUniformDeflection
 from OCC.Core.TopAbs import TopAbs_VERTEX
 from OCC.Core.BRep import BRep_Tool
 
+from drawing.view_axes import VIEW_DIRECTIONS
+
+logger = logging.getLogger(__name__)
+
 
 def read_step_to_shape(step_path):
     """读取 STEP 文件为 TopoDS_Shape"""
@@ -52,11 +57,26 @@ def read_step_to_shape(step_path):
     return reader.OneShape()
 
 
+# 进程内 shape 记忆: 同一进程里出图/多视图/锚点解析共用一份反序列化结果。
+# assembly.brep(5900 面)读一次约 0.35s, 一轮出图原先要读 3-4 次。
+# key 带文件 mtime+size, 模型重建后自动失效。
+# 约定: 调用方可以给 shape 补三角化(网格数据), 但不得改写几何。
+_SHAPE_MEMO = {}
+
+
+def _memo_key(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (os.path.abspath(path), st.st_mtime_ns, st.st_size)
+
+
 def read_shape_cached(step_path):
-    """读取 shape(带 BRep 缓存,比 STEP 快 14 倍)
+    """读取 shape(带 BRep 磁盘缓存 + 进程内记忆)
 
     首次读取 STEP 并缓存为 .brep 二进制文件,后续直接读取 .brep。
-    BRep 读取 ~0.4s vs STEP 读取 ~5.5s。
+    BRep 读取 ~0.4s vs STEP 读取 ~5.5s; 同进程内重复调用直接命中记忆。
 
     Args:
         step_path: STEP 文件路径
@@ -64,11 +84,23 @@ def read_shape_cached(step_path):
     Returns:
         TopoDS_Shape
     """
+    brep_path = step_path.rsplit('.', 1)[0] + '.brep'
+    key = _memo_key(brep_path if os.path.exists(brep_path) else step_path)
+    if key is not None:
+        hit = _SHAPE_MEMO.get(key)
+        if hit is not None:
+            return hit
+    shape = _read_shape_uncached(step_path, brep_path)
+    if key is not None and not shape.IsNull():
+        _SHAPE_MEMO[key] = shape
+    return shape
+
+
+def _read_shape_uncached(step_path, brep_path):
     from OCC.Core.BRepTools import breptools
     from OCC.Core.BRep import BRep_Builder
     from OCC.Core.TopoDS import TopoDS_Shape
 
-    brep_path = step_path.rsplit('.', 1)[0] + '.brep'
     step_exists = os.path.exists(step_path)
 
     # 如果 STEP 不存在但 BRep 缓存存在,直接读 BRep(BREP-only 模式)
@@ -856,7 +888,11 @@ def _normalize_view(segments, hidden_segments, target_width=400, target_height=3
         "x": 0, "y": 0,
         "width": target_width, "height": target_height,
         "scale": round(scale, 4),
-        "orig_width": round(width, 2), "orig_height": round(height, 2)
+        "orig_width": round(width, 2), "orig_height": round(height, 2),
+        # 视图内容从模型投影坐标(mm)变换到 400x300 框内的平移量,
+        # 供前端电机包络等需要把后端 mm 坐标对齐到同一局部坐标系的场景使用
+        "offset_x": round(offset_x, 4),
+        "offset_y": round(offset_y, 4),
     }
 
     return norm_segments, norm_hidden, bbox
@@ -1253,39 +1289,26 @@ def _rotate_shape_to_standard(shape):
     return transform.Shape()
 
 
+# dir/up 统一取自 view_axes,重绑与包络投影共用同一份方向定义;
+# 这里只保留展示用的 label/group,不再各写一份方向向量。
+_VIEW_LABELS = {
+    "front":          ("前视", "standard"),
+    "back":           ("后视", "standard"),
+    "left":           ("左视", "standard"),
+    "right":          ("右视", "standard"),
+    "top":            ("上视", "standard"),
+    "bottom":         ("下视", "standard"),
+    "left_top":       ("左视上视", "standard"),
+    "isometric":      ("等轴测", "isometric"),
+    "dimetric_left":  ("左右二等角", "isometric"),
+    "dimetric_right": ("上下二等角", "isometric"),
+}
+
 STANDARD_VIEW_CONFIGS = {
-    # 6 个基本视图 - 直接匹配 viewer.html 的 Z-up 坐标系(不旋转模型)
-    #
-    # STEP/GLB BBox: X=300, Y=338, Z=1626(长轴沿Z), 与 viewer.html 一致
-    # viewer.html 的 eye/up 配置转换为 OCC HLR 的 dir(投影方向):
-    #   dir = 从相机到模型的方向 = -eye_normalized
-    #
-    # viewer.html 配置:
-    #   front:  eye=(0,0,+d), up=(0,1,0)  → dir=(0,0,-1) 看圆形端面(X-Y平面)
-    #   back:   eye=(0,0,-d), up=(0,1,0)  → dir=(0,0,1)
-    #   left:   eye=(-d,0,0), up=(0,1,0)  → dir=(1,0,0)  看侧面(Y-Z平面),长轴水平
-    #   right:  eye=(+d,0,0), up=(0,1,0)  → dir=(-1,0,0)
-    #   top:    eye=(0,+d,0), up=(0,0,-1) → dir=(0,-1,0)
-    #   bottom: eye=(0,-d,0), up=(0,0,1)  → dir=(0,1,0)
-    #
-    # gp_Ax2(origin, N=view_dir, V=up):
-    #   U = V × N (屏幕右方向)
-    #   screen_X = U 方向分量
-    #   screen_Y = V 方向分量(屏幕上方)
-    "front":    {"dir": gp_Dir(0, 0, 1),   "up": gp_Dir(0, 1, 0),  "label": "前视",  "group": "standard"},
-    "back":     {"dir": gp_Dir(0, 0, -1),  "up": gp_Dir(0, 1, 0),  "label": "后视",  "group": "standard"},
-    "left":     {"dir": gp_Dir(1, 0, 0),   "up": gp_Dir(0, 1, 0),  "label": "左视",  "group": "standard"},
-    "right":    {"dir": gp_Dir(-1, 0, 0),  "up": gp_Dir(0, 1, 0),  "label": "右视",  "group": "standard"},
-    "top":      {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(0, 0, -1), "label": "上视",  "group": "standard"},
-    "bottom":   {"dir": gp_Dir(0, 1, 0),   "up": gp_Dir(0, 0, 1),  "label": "下视",  "group": "standard"},
-    # 左视基础上的上视图：以左视图为正视方向，从上往下看
-    # dir=(0,-1,0) 沿-Y方向投影，up=(1,0,0) X轴向上
-    # 屏幕右方向 U = up × dir = (1,0,0) × (0,-1,0) = (0,0,-1) → -Z世界坐标（缸体长轴水平）
-    "left_top": {"dir": gp_Dir(0, -1, 0),  "up": gp_Dir(1, 0, 0),  "label": "左视上视", "group": "standard"},
-    # 3 个轴测视图
-    "isometric":      {"dir": gp_Dir(-1, -1, 1),   "up": gp_Dir(0, 0, 1), "label": "等轴测",     "group": "isometric"},
-    "dimetric_left":  {"dir": gp_Dir(1, -1, 0.5),  "up": gp_Dir(0, 0, 1), "label": "左右二等角", "group": "isometric"},
-    "dimetric_right": {"dir": gp_Dir(-1, -1, -0.5),"up": gp_Dir(0, 0, 1), "label": "上下二等角", "group": "isometric"},
+    name: {"dir": gp_Dir(*VIEW_DIRECTIONS[name]["dir"]),
+           "up": gp_Dir(*VIEW_DIRECTIONS[name]["up"]),
+           "label": label, "group": group}
+    for name, (label, group) in _VIEW_LABELS.items()
 }
 
 
@@ -1375,10 +1398,68 @@ def _project_standard_view_worker(args):
     }
 
 
+# 少于这个视图数就串行投影:进程池 spawn 的固定开销(每个 worker 都要
+# 导入 pythonOCC,约 2s)与单视图投影耗时(约 2s)相当。1 个视图时串行
+# (0 spawn)比并行(2s spawn)快一倍;2 个及以上并行更划算。10 视图全集
+# 也走进程池。
+_MIN_PARALLEL_VIEWS = 2
+
+
+# ============ 出图算法切换(由 .env 的 DRAWING_ALGO 配置) ============
+# algo : 精确 HLRBRep_Algo(默认, 保留原生圆/弧语义)
+# poly : HLRBRep_PolyAlgo 离散 + 圆弧拟合恢复语义, 速度更快
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _read_env_value(key):
+    """从项目根 .env 读取键值(仅当 os.environ 未设时),用于本地未走 web 加载的场景。"""
+    try:
+        with open(os.path.join(_PROJECT_ROOT, ".env"), "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                if k.strip() == key:
+                    return v.strip().strip("'\"")
+    except OSError:
+        return None
+    return None
+
+
+def _resolve_drawing_algo(algo=None):
+    if algo in ("algo", "poly"):
+        return algo
+    val = os.environ.get("DRAWING_ALGO") or _read_env_value("DRAWING_ALGO")
+    return "poly" if val == "poly" else "algo"
+
+
+def _resolve_poly_opts():
+    def num(name, default):
+        v = os.environ.get(name) or _read_env_value(name)
+        if v is None:
+            return default
+        try:
+            return float(v)
+        except ValueError:
+            return default
+
+    def flag(name, default):
+        v = os.environ.get(name) or _read_env_value(name)
+        if v is None:
+            return default
+        return v.strip().lower() in ("1", "true", "yes", "on")
+
+    return {"deflection": num("DRAWING_POLY_DEFLECTION", 0.5),
+            "do_fit": flag("DRAWING_POLY_DO_FIT", True)}
+
+
 def generate_all_standard_views(step_path, include_hidden=False,
                                 thumb_width=200, thumb_height=150,
-                                canvas_width=400, canvas_height=300):
-    """生成所有 9 个标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
+                                canvas_width=400, canvas_height=300,
+                                view_names=None, parallel=True,
+                                max_workers=None, algo=None):
+    """生成标准视图(边线数据 + SVG 缩略图,基于 HLRBRep_Algo)
 
     使用 HLRBRep_Algo 精确算法 + OutLineVCompound 只提取外轮廓边。
     边线数据保留元数据(方向、位置等),用于关联式标注:
@@ -1392,6 +1473,23 @@ def generate_all_standard_views(step_path, include_hidden=False,
         thumb_height: 缩略图高度(px)
         canvas_width: 画布边线归一化宽度(px)
         canvas_height: 画布边线归一化高度(px)
+        view_names: 只生成这些视图(list),None 表示全部 9+3 个。
+            按模板出图时传模板实际用到的视图即可(通常 1~3 个),
+            HLR 投影是主要耗时,能省掉 70% 以上。
+        parallel: 视图间是否用进程池并行投影。默认自动。已在 OCC 任务池
+            子进程内时,高频任务(出图)传 False 防嵌套;低频任务(调色板)
+            可保留并行但收紧 max_workers,避免并发用户×worker 爆炸。
+        max_workers: 并行投影的内部进程数上限;None 表示自动
+            (min(9, 视图数, CPU 核数))。池内并行时给一个较小的值,
+            防止嵌套池在多用户并发时进程数失控。
+
+    ★ view_names 与 uniform_scale 的耦合(重要):
+      本函数按"已生成视图里的最大投影尺寸"算统一缩放 uniform_scale,
+      因此生成子集与生成全集的 uniform_scale 可能不同,出图大小随之变化。
+      只要同一份模板的基准型号与目标型号传同一个 view_names,两者比例就
+      一致(实测现有模板都含长轴视图 left,子集与全集倍率 = 1.0000)。
+      若某模板只用了短轴视图(如 front/back),出图会比编辑器预览更大 ——
+      这是预期行为,因为缩放基准就是这么定义的。
 
     Returns:
         {
@@ -1414,6 +1512,23 @@ def generate_all_standard_views(step_path, include_hidden=False,
             "timing": {"read": float, "project": float, "total": float}
         }
     """
+    if _resolve_drawing_algo(algo) == "poly":
+        from drawing.hlr_poly import generate_all_standard_views_poly
+        opts = _resolve_poly_opts()
+        try:
+            return generate_all_standard_views_poly(
+                step_path, include_hidden=include_hidden,
+                thumb_width=thumb_width, thumb_height=thumb_height,
+                canvas_width=canvas_width, canvas_height=canvas_height,
+                view_names=view_names, parallel=parallel,
+                max_workers=max_workers,
+                deflection=opts["deflection"], do_fit=opts["do_fit"])
+        except (IndexError, RuntimeError) as exc:
+            # 个别装配体的三角网格会让 HLRBRep_PolyAlgo::Update 数组越界,
+            # OCC 的 Standard_OutOfRange 经 SWIG 映射成 IndexError,改用精确 HLR
+            if "OutOfRange" not in str(exc) and "ChangeValue" not in str(exc):
+                raise
+            logger.warning("poly 投影越界,降级精确 HLR: %s (%s)", step_path, exc)
     t0 = time.time()
 
     # 读取 shape(使用 BRep 缓存)
@@ -1443,52 +1558,75 @@ def generate_all_standard_views(step_path, include_hidden=False,
     # 第一遍: 并行投影所有视图,收集原始2D坐标
     t1 = time.time()
 
-    view_names = list(STANDARD_VIEW_CONFIGS.keys())
+    if view_names is None:
+        view_names = list(STANDARD_VIEW_CONFIGS.keys())
+    else:
+        unknown = [n for n in view_names if n not in STANDARD_VIEW_CONFIGS]
+        if unknown:
+            raise ValueError("未知视图名: %s,可选: %s"
+                             % (unknown, list(STANDARD_VIEW_CONFIGS)))
+        view_names = list(dict.fromkeys(view_names))  # 去重且保序
+    if not view_names:
+        raise ValueError("view_names 不能为空")
     raw_views = {}
     parallel_error = None
     parallel_mode = "process"
-    max_workers = min(9, len(view_names), max(1, (os.cpu_count() or 4)))
-    worker_args = [(step_path, view_name, include_hidden, max_extent) for view_name in view_names]
+    if max_workers is not None:
+        max_workers = max(1, int(max_workers))
+    else:
+        max_workers = min(9, len(view_names), max(1, (os.cpu_count() or 4)))
 
-    try:
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(_project_standard_view_worker, args) for args in worker_args]
-            for future in as_completed(futures):
-                view_name, view_data = future.result()
-                raw_views[view_name] = view_data
-    except Exception as exc:
-        parallel_error = f"process: {exc}"
-        raw_views = {}
-        parallel_mode = "thread"
+    def project_one_view(view_name):
+        cfg = STANDARD_VIEW_CONFIGS[view_name]
+        t2 = time.time()
+        visible, hidden = _project_shape(
+            shape, cfg["dir"], cfg["up"],
+            show_hidden=include_hidden, max_extent=max_extent
+        )
+        return view_name, {
+            "visible": visible,
+            "hidden": hidden,
+            "label": cfg["label"],
+            "group": cfg["group"],
+            "project_time": round(time.time() - t2, 3)
+        }
 
-        def project_one_view(view_name):
-            cfg = STANDARD_VIEW_CONFIGS[view_name]
-            t2 = time.time()
-            visible, hidden = _project_shape(
-                shape, cfg["dir"], cfg["up"],
-                show_hidden=include_hidden, max_extent=max_extent
-            )
-            return view_name, {
-                "visible": visible,
-                "hidden": hidden,
-                "label": cfg["label"],
-                "group": cfg["group"],
-                "project_time": round(time.time() - t2, 3)
-            }
-
+    if not parallel or len(view_names) < _MIN_PARALLEL_VIEWS:
+        # 视图很少或调用方已在任务池子进程内:进程池 spawn 的固定开销
+        # (每个 worker 都要导入 pythonOCC)大于并行收益,直接串行投影更快
+        parallel_mode = "serial"
+        max_workers = 1
+        for view_name in view_names:
+            _, view_data = project_one_view(view_name)
+            raw_views[view_name] = view_data
+    else:
+        worker_args = [(step_path, view_name, include_hidden, max_extent)
+                       for view_name in view_names]
         try:
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [executor.submit(project_one_view, view_name) for view_name in view_names]
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(_project_standard_view_worker, args)
+                           for args in worker_args]
                 for future in as_completed(futures):
                     view_name, view_data = future.result()
                     raw_views[view_name] = view_data
-        except Exception as thread_exc:
-            parallel_error = f"{parallel_error}; thread: {thread_exc}"
+        except Exception as exc:
+            parallel_error = f"process: {exc}"
             raw_views = {}
-            parallel_mode = "serial"
-            for view_name in view_names:
-                view_name, view_data = project_one_view(view_name)
-                raw_views[view_name] = view_data
+            parallel_mode = "thread"
+            try:
+                with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                    futures = [executor.submit(project_one_view, view_name)
+                               for view_name in view_names]
+                    for future in as_completed(futures):
+                        view_name, view_data = future.result()
+                        raw_views[view_name] = view_data
+            except Exception as thread_exc:
+                parallel_error = f"{parallel_error}; thread: {thread_exc}"
+                raw_views = {}
+                parallel_mode = "serial"
+                for view_name in view_names:
+                    _, view_data = project_one_view(view_name)
+                    raw_views[view_name] = view_data
 
     # 保持输出顺序稳定
     raw_views = {name: raw_views[name] for name in STANDARD_VIEW_CONFIGS if name in raw_views}
