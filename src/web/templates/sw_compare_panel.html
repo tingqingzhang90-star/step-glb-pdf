@@ -134,13 +134,15 @@ function updatePreview(){
   let code = `${series.split('直连')[0]}-${conn}-${mount}${load}-${stroke}`;
   if(mc) code += `-${mc}`;
 
-  // D1 预览: stroke 数字 + 340
+  // D1 预览: stroke + 系列缸体基础值 C(来自系列配置,各系列不同)
+  const o = OPTS.find(x=>x.series===series);
+  const c = (o && o.cylinder && o.cylinder.C) || 340;
   const sm = stroke.match(/L?(\d+)/);
-  const d1 = sm ? (parseInt(sm[1]) + 340) : null;
+  const d1 = sm ? (parseInt(sm[1]) + c) : null;
 
   document.getElementById('preview').innerHTML =
     `型号: <span class="mc">${code}</span>` +
-    (d1 ? `<span class="d1">D1 = ${d1} mm (stroke+340)</span>` : '');
+    (d1 ? `<span class="d1">D1 = ${d1} mm (stroke+${c})</span>` : '');
 }
 
 async function doApply(){

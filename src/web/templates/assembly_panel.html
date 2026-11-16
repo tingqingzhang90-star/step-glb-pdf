@@ -132,7 +132,7 @@
     <div class="field">
       <label>行程 (mm)</label>
       <input id="strokeNum" type="number" min="100" max="2000" step="1" value="100">
-      <div class="hint">行程范围 100~714，D1 = 行程 + <b id="cVal">340</b> = <b id="d1Val">440</b> mm</div>
+      <div class="hint">行程范围 <span id="strokeMin">100</span>~<span id="strokeMax">714</span>，D1 = 行程 + <b id="cVal">340</b> = <b id="d1Val">440</b> mm</div>
     </div>
     <div class="code-box">
       <div class="lbl">型号编码</div>
@@ -193,6 +193,12 @@ function onSeriesChange(){
     inp.max = Math.max(...nums);
     if(parseInt(inp.value) < inp.min) inp.value = inp.min;
     if(parseInt(inp.value) > inp.max) inp.value = inp.max;
+    document.getElementById('strokeMin').textContent = inp.min;
+    document.getElementById('strokeMax').textContent = inp.max;
+  }
+  // C 与 base_D1 来自该系列的缸体长度表,各系列不同(190→330, 250→340, 380→569)
+  if(s.cylinder && s.cylinder.C != null){
+    document.getElementById('cVal').textContent = s.cylinder.C;
   }
   updateCode();
 }

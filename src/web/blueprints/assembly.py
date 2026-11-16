@@ -62,6 +62,10 @@ def api_options():
                 cfg = json.load(f)
         except Exception:
             continue
+        # C/base_D1 来自系列配置的缸体长度表(缸体长度.xlsx),各系列不同,
+        # 供面板按系列显示 D1 = 行程 + C,不再写死 340
+        cyl = cfg.get("cylinder", {})
+        cylinder = {"C": cyl.get("C"), "base_D1": cyl.get("base_D1")}
         series_list.append({
             "name": name,
             "mount": sorted(cfg.get("mount", {}).keys()),
@@ -69,6 +73,7 @@ def api_options():
             "motor": list(cfg.get("motor", {}).keys()),
             "strokes": sorted(cfg.get("cylinder", {}).get("table", {}).keys(),
                               key=lambda s: int(s.replace("L", "")) if s.replace("L", "").isdigit() else 0),
+            "cylinder": cylinder,
         })
         options.append({
             "series": name,
@@ -76,6 +81,7 @@ def api_options():
             "loads": _code_name_list(cfg.get("load", {})),
             "motors": list(cfg.get("motor", {}).keys()),
             "strokes": list(cfg.get("cylinder", {}).get("table", {}).keys()),
+            "cylinder": cylinder,
         })
     motor_codes = [{"code": k, "name": v} for k, v in rb.MOTOR_CODES.items()]
     return jsonify({"series": series_list, "motor_codes": motor_codes, "options": options})
