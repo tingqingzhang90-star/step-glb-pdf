@@ -94,6 +94,28 @@ def test_snap_threshold_is_measured_in_sheet_coords():
     assert snapped["y1"] == snapped["y2"] == 160.0
 
 
+def test_snap_stays_on_joint_face_not_inner_gearbox_edge():
+    """接壤面 -137 的贯穿长边被长度判据排除后,减速机内部 -122 的短边
+    不得因"更近"被当成端面吸附目标,端线必须留在接壤面。"""
+    seg = {"type": "line", "x1": 118.53, "y1": 57.60,
+           "x2": 118.53, "y2": 128.44,
+           "meta": {"orientation": "vertical",
+                    "mm_coords": [-137.0, -435.0, -137.0, -205.0]}}
+    view_segs = [
+        {"type": "line", "x1": 118.53, "y1": 20.0, "x2": 118.53, "y2": 200.0,
+         "meta": {"mm_coords": [-137.0, -558.0, -137.0, 27.0]}},
+        {"type": "line", "x1": 123.15, "y1": 72.4, "x2": 123.15, "y2": 127.8,
+         "meta": {"mm_coords": [-122.0, -387.0, -122.0, -207.0]}},
+    ]
+    snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "horizontal", -28.0)
+    assert snapped["x1"] == snapped["x2"] == 118.53
+
+    # 同一端面内的毫米级微调仍允许
+    view_segs[1]["meta"]["mm_coords"] = [-135.5, -387.0, -135.5, -207.0]
+    snapped = dim_rebind._snap_seg_to_view(seg, view_segs, "horizontal", -28.0)
+    assert snapped["x1"] == 123.15
+
+
 def test_snap_distance_and_target_use_first_endpoint():
     """距离与落点都取候选边首个端点(前端 Math.abs(x1 - pt.x)):
     调色板里大量 0.1px 级退化碎片,用中点度量会吸到另一条碎片,基线随之漂移。"""

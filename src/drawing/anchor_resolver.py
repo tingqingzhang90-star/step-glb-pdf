@@ -357,11 +357,13 @@ def trim_bbox_to_joint(bbox, axis_idx, joint):
 
 
 def _resolve_motor_joint(data, config, motor, bbox, axis_idx, axis_dir):
-    """实测电机组与安装件的连接端面
+    """实测减速机与安装件的接壤端面
 
-    减速机输出段会伸进直连盒/连接板,零件 bbox 因此比外露长度多出一截。
-    只认"非电机零件的外端面 + 落在电机包络内 + 与电机零件端面共面"的候选,
-    内部台阶端面和孔端面都不参与,避免把标注缩到错误的位置。
+    判据是安装件外端面与某个电机零件的平面端面共面,这才是两件真正贴合
+    的位置。折返连接板 z=[-177,-137]:-137 与减速机法兰、轴承座三者共面,
+    是接壤面;-177 只与盒盖相接,输出段是圆柱侧面穿板而过,该面上没有电机
+    端面,拿它裁切会多算一整块板厚。端面还须是零件自身外端面且落在包络
+    内,内部台阶和孔端面不参与。
     """
     lo, hi = bbox[0][axis_idx], bbox[1][axis_idx]
     on_parts = set(config.get("motor", {}).get(motor, {}).get("on", []))
@@ -372,15 +374,18 @@ def _resolve_motor_joint(data, config, motor, bbox, axis_idx, axis_dir):
             continue
         shape = _read_part_shape(info["step_file"])
         matrix = info["transform_matrix"]
+        faces = _part_end_faces(shape, matrix, axis_dir)
         if _base_name(k) in on_parts:
-            motor_projs.extend(f["proj"] for f in _part_end_faces(shape, matrix, axis_dir))
+            motor_projs.extend(f["proj"] for f in faces)
             continue
         pmin, pmax = _shape_world_bbox(shape, matrix)
         if not (pmin[axis_idx] < hi and pmax[axis_idx] > lo):
             continue
-        for f in _part_end_faces(shape, matrix, axis_dir):
+        for f in faces:
             proj = f["proj"]
             if f["area"] < _JOINT_FACE_MIN_AREA:
+                continue
+            if not (lo + _JOINT_FACE_TOL < proj < hi - _JOINT_FACE_TOL):
                 continue
             if min(abs(proj - pmin[axis_idx]), abs(proj - pmax[axis_idx])) > _JOINT_FACE_TOL:
                 continue

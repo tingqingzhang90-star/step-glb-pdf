@@ -60,11 +60,15 @@ def test_resolved_motor_bbox_ends_at_joint_face():
 
 
 def test_resolved_motor_bbox_trims_min_side_on_foldback():
+    # 连接板两端面 -177/-137 都在电机包络内,但只有 -137 与减速机法兰、
+    # 轴承座端面共面,才是减速机与安装件的接壤面。-177 只接盒盖,取它会
+    # 把整块板厚多算进电机减速机尺寸。
     profile = ar.resolve_anchors("250-F-H2K1-L100-5.5KW电机")
     by_id = {a["id"]: a for a in profile["anchors"]}
     body = by_id["motor.body"]
     assert body["bbox_min"][2] == pytest.approx(-137.0, abs=0.01)
     assert body["size"][2] == pytest.approx(457.5, abs=0.01)
+    assert by_id["motor.axis_min_face"]["point3d"][2] == pytest.approx(-137.0, abs=0.01)
 
 
 def test_envelope_faces_span_matches_exposed_length():

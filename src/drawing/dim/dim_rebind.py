@@ -18,6 +18,7 @@ from drawing.view_axes import axial_projection
 POS_TOL = 5.0   # 位置匹配容差 mm
 LEN_TOL = 2.5   # 长度/半径匹配容差 mm
 DIR_COS_TOL = 0.97  # 匹配前后引用点相对方向的最小夹角余弦(约 14°)
+SNAP_AXIS_MM = 3.0  # 端面吸附允许的轴向偏移 mm,超过即视为相邻零件的面
 
 
 def _by_id(profile):
@@ -296,6 +297,16 @@ def _synthetic_seg(p1_mm, p2_mm, to_canvas):
     }
 
 
+def _snap_axis_ok(seg, cand, orientation):
+    """吸附不得把端面挪到相邻零件的轴向面(如减速机内部短边)"""
+    a = (seg.get("meta") or {}).get("mm_coords")
+    b = (cand.get("meta") or {}).get("mm_coords")
+    if not a or not b or len(a) < 4 or len(b) < 4:
+        return True
+    i = 0 if orientation == "horizontal" else 1
+    return abs(a[i] - b[i]) <= SNAP_AXIS_MM
+
+
 def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
     """把合成的端面线吸附到视图中最接近的真实边线端点
 
@@ -311,6 +322,10 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
     连接端面附近既有贯穿多个视图的长轮廓边,也有落在下方视图的碎片边,
     吸附到它们的远端会把尺寸界线拉到视图下方。故候选边长度、以及吸附
     端点相对包络轮廓端点的偏移,都不得超过端面线本身(取 1.5 倍余量)。
+
+    30 图纸 px 的像素阈值在这个视图比例下近百 mm,接壤面上的长边被长度
+    判据排除后,减速机内部一条短边会因"更近"被选中,端线就跑到减速机上。
+    故再按 mm_coords 卡一道轴向容差:吸附只能在同一端面内微调,不得换面。
     """
     if not view_segs:
         return seg
@@ -329,6 +344,8 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
             if e.get("type") != "line":
                 continue
             if abs(e["x1"] - e["x2"]) > FLAT:
+                continue
+            if not _snap_axis_ok(seg, e, orientation):
                 continue
             if abs(e["y2"] - e["y1"]) > limit:
                 continue
@@ -358,6 +375,8 @@ def _snap_seg_to_view(seg, view_segs, orientation, offset, view_scale=1.0):
             if e.get("type") != "line":
                 continue
             if abs(e["y1"] - e["y2"]) > FLAT:
+                continue
+            if not _snap_axis_ok(seg, e, orientation):
                 continue
             if abs(e["x2"] - e["x1"]) > limit:
                 continue

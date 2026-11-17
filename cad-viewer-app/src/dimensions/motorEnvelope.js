@@ -19,6 +19,9 @@ function pickEnvelopeEndpoint(face, orientation, offset) {
 // 端面边与延伸线端点都不得超出包络轮廓太多,否则贯穿多个视图的长边
 // 或落在下方视图的碎片会把尺寸界线拉到视图另一端
 const FACE_EDGE_LEN_RATIO = 1.5
+// 吸附只允许在同一轴向面内微调(mm):30 图纸 px 的阈值足以吸到减速机
+// 内部短边,把端面线从接壤面挪走
+const SNAP_AXIS_MM = 3
 
 function faceSpan(face, orientation) {
   const [a, b] = face
@@ -28,15 +31,20 @@ function faceSpan(face, orientation) {
 
 // 将包络端点吸附到视图中最接近的真实边线端点,同时修正 x(端面位置) 和 y(延伸线端点),
 // 避免 bbox 估算的端点悬空或落在法兰凸缘内部。
-function snapEndpointToViewEdge(view, pt, orientation, offset, span = Infinity) {
+function snapEndpointToViewEdge(view, pt, orientation, offset, span = Infinity, axisMm = null) {
   const k = view.scale ?? 1
   const threshold = 30  // 图纸像素
   const limit = span * FACE_EDGE_LEN_RATIO
   const edges = [...(view.edges || []), ...(view.hiddenEdges || [])]
+  const axisIdx = orientation === 'horizontal' ? 0 : 1
   let best = null
   let bestDist = Infinity
   for (const seg of edges) {
     if (seg.type !== 'line') continue
+    if (axisMm != null) {
+      const m = seg.meta?.mm_coords
+      if (m && m.length >= 4 && Math.abs(m[axisIdx] - axisMm) > SNAP_AXIS_MM) continue
+    }
     const x1 = seg.x1 * k + view.x
     const y1 = seg.y1 * k + view.y
     const x2 = seg.x2 * k + view.x
@@ -87,8 +95,11 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
   let ext2 = pickEnvelopeEndpoint(face2, orientation, offset)
   // 把包络端点吸附到视图真实边线端点,修正 x 端面位置并补齐 y 延伸线
   const span = faceSpan(face1, orientation)
-  ext1 = snapEndpointToViewEdge(view, ext1, orientation, offset, span)
-  ext2 = snapEndpointToViewEdge(view, ext2, orientation, offset, span)
+  const axisIdx = orientation === 'horizontal' ? 0 : 1
+  const axisMm1 = envelope.face_min[0][axisIdx]
+  const axisMm2 = envelope.face_max[0][axisIdx]
+  ext1 = snapEndpointToViewEdge(view, ext1, orientation, offset, span, axisMm1)
+  ext2 = snapEndpointToViewEdge(view, ext2, orientation, offset, span, axisMm2)
   // 减速机外露包络的四个角点就是尺寸界线的硬边界,不再靠 offset 或吸附猜位置:
   // 界线从尺寸线一直落到减速机轮廓的远侧边缘(整个减速机高度),到此为止,
   // 绝不越过轮廓进入下方气缸;尺寸线则钳制在轮廓外侧。
@@ -147,13 +158,13 @@ export function buildMotorEnvelopeGeometry(view, envelope, getSheetPoint, offset
 
 // 计算渲染时尺寸线所依附的包络外侧边：
 // offset 为负时尺寸线在包络上/左侧，offset 为正时在下/右侧。
-function envelopeBaseLine(view, face1, face2, orientation, sign) {
+function envelopeBaseLine(view, face1, face2, orientation, sign, axisMm) {
   const s = sign >= 0 ? 1 : -1
   const span = faceSpan(face1, orientation)
   let e1 = pickEnvelopeEndpoint(face1, orientation, s)
   let e2 = pickEnvelopeEndpoint(face2, orientation, s)
-  e1 = snapEndpointToViewEdge(view, e1, orientation, s, span)
-  e2 = snapEndpointToViewEdge(view, e2, orientation, s, span)
+  e1 = snapEndpointToViewEdge(view, e1, orientation, s, span, axisMm?.[0])
+  e2 = snapEndpointToViewEdge(view, e2, orientation, s, span, axisMm?.[1])
   return orientation === 'horizontal'
     ? Math.max(e1.y, e2.y)
     : Math.max(e1.x, e2.x)
@@ -168,8 +179,10 @@ export function getMotorEnvelopeOffsetFromMouse(view, envelope, getSheetPoint, m
   // horizontal 为负 → 依附顶边，为正 → 依附底边；
   // vertical   为负 → 依附左边，为正 → 依附右边。
   // 拖拽按鼠标位于包络中线的哪一侧决定符号，保证尺寸线精确跟随鼠标。
-  const baseNear = envelopeBaseLine(view, face1, face2, orientation, -1)
-  const baseFar = envelopeBaseLine(view, face1, face2, orientation, 1)
+  const axisIdx = orientation === 'horizontal' ? 0 : 1
+  const axisMm = [envelope.face_min[0][axisIdx], envelope.face_max[0][axisIdx]]
+  const baseNear = envelopeBaseLine(view, face1, face2, orientation, -1, axisMm)
+  const baseFar = envelopeBaseLine(view, face1, face2, orientation, 1, axisMm)
 
   if (orientation === 'horizontal') {
     const mid = (baseNear + baseFar) / 2
