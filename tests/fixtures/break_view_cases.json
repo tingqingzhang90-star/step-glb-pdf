@@ -1,0 +1,53 @@
+{
+  "specs": [
+    {
+      "axis": "x", "cutA": 100.0, "cutB": 160.0, "pxPerMm": 0.2,
+      "waveAmp": 3, "waveCycles": 3, "visualGap": 6
+    },
+    {
+      "axis": "y", "cutA": 40.0, "cutB": 90.0, "pxPerMm": 0.5,
+      "waveAmp": 2, "waveCycles": 2, "visualGap": 5
+    }
+  ],
+  "project": [
+    {"spec": 0, "value": 50.0, "projected": 50.0, "clamped": 50.0},
+    {"spec": 0, "value": 100.0, "projected": 100.0, "clamped": 100.0},
+    {"spec": 0, "value": 120.0, "projected": null, "clamped": 100.0},
+    {"spec": 0, "value": 140.0, "projected": null, "clamped": 106.0},
+    {"spec": 0, "value": 160.0, "projected": 106.0, "clamped": 106.0},
+    {"spec": 0, "value": 220.0, "projected": 166.0, "clamped": 166.0},
+    {"spec": 1, "value": 30.0, "projected": 30.0, "clamped": 30.0},
+    {"spec": 1, "value": 60.0, "projected": null, "clamped": 40.0},
+    {"spec": 1, "value": 90.0, "projected": 45.0, "clamped": 45.0}
+  ],
+  "points": [
+    {"spec": 0, "point": [50, 20], "expected": [50, 20]},
+    {"spec": 0, "point": [120, 20], "expected": [100, 20]},
+    {"spec": 0, "point": [220, 20], "expected": [166, 20]},
+    {"spec": 1, "point": [30, 100], "expected": [30, 55]},
+    {"spec": 1, "point": [30, 60], "expected": [30, 40]}
+  ],
+  "clip": [
+    {"spec": 0, "canvas": 400, "expected": [[0, 100, 0], [160, 400, -54]]},
+    {"spec": 1, "canvas": 300, "expected": [[0, 40, 0], [90, 300, -45]]}
+  ],
+  "waves": [
+    {
+      "spec": 0, "crossLo": 10, "crossHi": 20, "sample": [0, 9, 18, 36],
+      "left": [[100, 10], [97, 12.5], [100, 15], [100, 20]],
+      "right": [[106, 10], [103, 12.5], [106, 15], [106, 20]]
+    },
+    {
+      "spec": 1, "crossLo": 0, "crossHi": 10, "sample": [0, 3, 9, 24],
+      "left": [[0, 40], [1.25, 42], [3.75, 38], [10, 40]],
+      "right": [[0, 45], [1.25, 47], [3.75, 43], [10, 45]]
+    }
+  ],
+  "build": [
+    {
+      "axis": "x", "lo": 20.0, "hi": 380.0, "omitMm": 300.0, "k": 0.2,
+      "waveAmp": 3, "waveCycles": 3, "visualGap": 6,
+      "cutA": 170.0, "cutB": 230.0
+    }
+  ]
+}

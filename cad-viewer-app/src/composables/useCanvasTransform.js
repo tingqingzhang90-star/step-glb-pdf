@@ -18,6 +18,19 @@ export const SHEET_SIZES = {
   A4: { size: 'A4', width: 297, height: 210 }
 }
 
+export const SHEET_MARGIN = 20
+export const SHEET_TITLE_BLOCK_MM = 55
+
+/** 图纸可用区:避开图框与底部标题栏,与后端 sheet_layout 同一口径 */
+export function sheetContentBounds(width, height) {
+  return {
+    x: SHEET_MARGIN,
+    y: SHEET_MARGIN,
+    width: Math.max(10, width - 2 * SHEET_MARGIN),
+    height: Math.max(10, height - 2 * SHEET_MARGIN - SHEET_TITLE_BLOCK_MM)
+  }
+}
+
 export function useCanvasTransform() {
   const sheetAreaRef = ref(null)
   const sheetSize = ref('A3')  // 默认 A3(与后端 PDF 输出尺寸一致)

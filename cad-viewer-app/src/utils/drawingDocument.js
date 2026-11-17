@@ -24,6 +24,7 @@ export function buildDrawingDocument({ sheetSize, sheetWidth, sheetHeight, model
       x: Math.round(v.x),
       y: Math.round(v.y),
       scale: Number(v.scale.toFixed(2)),
+      break: v.break ?? null,
       px_per_mm: v.bbox?.scale ?? null,
       // 视图投影几何自包含:解析时直接还原渲染,无需后端重新投影
       bbox: v.bbox,

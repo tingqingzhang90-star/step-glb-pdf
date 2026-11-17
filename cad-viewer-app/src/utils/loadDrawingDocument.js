@@ -23,7 +23,8 @@ export function parseDrawingDocument(raw) {
     contentBBox: v.contentBBox || null,
     x: v.x,
     y: v.y,
-    scale: v.scale
+    scale: v.scale,
+    break: v.break ?? null
   }))
 
   // 标注:字段名与 composable 的 dim 对象一致,直接展开。

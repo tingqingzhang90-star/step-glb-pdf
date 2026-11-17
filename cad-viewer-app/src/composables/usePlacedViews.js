@@ -4,8 +4,10 @@ import { ElMessage } from 'element-plus'
 import {
   normalizeViewBBox,
   computeContentBBox,
-  getInitialViewScale
+  getInitialViewScale,
+  viewSheetRect
 } from '@/views/viewGeometry.js'
+import { sheetContentBounds } from './useCanvasTransform.js'
 
 export function usePlacedViews({ sheetWidth, sheetHeight }) {
   const placedViews = ref([])
@@ -50,7 +52,8 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
       contentBBox,
       x,
       y,
-      scale
+      scale,
+      break: view.break ?? null
     })
     selectedViewId.value = placedViews.value[placedViews.value.length - 1].id
   }
@@ -102,16 +105,32 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
     applyGlobalScale(Math.max(0.1, Math.min(5, newScale)))
   }
 
-  /** 工具栏"适应":按所有视图最大长边统一缩放 */
-  function resetCanvas() {
-    if (placedViews.value.length === 0) return
-    let maxExtent = 0
-    for (const v of placedViews.value) {
-      maxExtent = Math.max(maxExtent, v.contentBBox.width, v.contentBBox.height)
+  /** 整组视图等比缩放并居中,间距随同一比例变化,不单独改某个视图 */
+  function fitToSheet(width, height) {
+    const list = placedViews.value
+    if (!list.length) return
+    const rects = list.map(viewSheetRect)
+    const minX = Math.min(...rects.map(r => r.x))
+    const minY = Math.min(...rects.map(r => r.y))
+    const maxX = Math.max(...rects.map(r => r.x + r.width))
+    const maxY = Math.max(...rects.map(r => r.y + r.height))
+    const spanX = maxX - minX
+    const spanY = maxY - minY
+    if (spanX < 0.01 || spanY < 0.01) return
+    const bounds = sheetContentBounds(width, height)
+    const factor = Math.max(0.1, Math.min(
+      5, bounds.width / spanX, bounds.height / spanY))
+    for (const v of list) {
+      v.scale *= factor
+      v.x = bounds.x + (v.x - minX) * factor
+      v.y = bounds.y + (v.y - minY) * factor
     }
-    if (maxExtent < 0.01) return
-    const targetLongEdge = Math.min(sheetWidth.value * 0.6, sheetHeight.value * 0.6)
-    applyGlobalScale(Math.max(0.1, Math.min(5, targetLongEdge / maxExtent)))
+    if (globalScale.value != null) globalScale.value *= factor
+  }
+
+  /** 工具栏"适应":整组适配当前图纸,断裂配置沿用求解结果 */
+  function resetCanvas() {
+    fitToSheet(sheetWidth.value, sheetHeight.value)
   }
 
   /** 从源文件批量载入视图(精确还原位置/比例,免重投影) */
@@ -127,7 +146,8 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
       contentBBox: v.contentBBox || null,
       x: v.x,
       y: v.y,
-      scale: v.scale
+      scale: v.scale,
+      break: v.break ?? null
     }))
     // 导入的 id 可能大于当前计数器,同步避免之后再放视图时 id 撞车
     for (const v of placedViews.value) {
@@ -143,6 +163,6 @@ export function usePlacedViews({ sheetWidth, sheetHeight }) {
     selectedView, placedViewNames,
     placeView, selectView, deleteSelectedView, clearViews, resetScale,
     setViews,
-    onViewScaleChange, resetCanvas
+    onViewScaleChange, resetCanvas, fitToSheet
   }
 }

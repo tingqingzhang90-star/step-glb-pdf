@@ -31,7 +31,9 @@ from core import rebuild_assembly as rb
 from core import drawing_engine
 from drawing.rule_template import drawing_template
 from drawing import anchor_resolver
+from drawing import break_view
 from drawing import frontend_template
+from drawing import sheet_layout
 from drawing.dim import dim_rebind
 from drawing.dim import dim_pdf_sheet
 from drawing.drawing_pdf import render_drawing_pdf
@@ -170,20 +172,25 @@ def _write_model_source(model_code, template_doc, placements, palette, out_dir,
     for v in template_doc["views"]:
         p = placements[v["id"]]
         src = p["source_view"]
-        views.append({
+        item = {
             "id": v["id"],
             "source_view": src,
             "label": v.get("label"),
             "group": v.get("group"),
-            "x": v["x"],
-            "y": v["y"],
-            "scale": v.get("scale"),
+            # 位置/比例/断裂一律取求解后的 placement:模板里的 x/y/scale
+            # 是基准型号的旧值,照抄会让长行程视图越出图框
+            "x": p["x"],
+            "y": p["y"],
+            "scale": p["scale"],
             "px_per_mm": p["k"],
             "bbox": palette["views"].get(src, {}).get("bbox"),
-            "contentBBox": _content_bbox(p["segs"], p["hidden"]),
+            "contentBBox": p.get("contentBBox") or _content_bbox(p["segs"], p["hidden"]),
             "edges": p["segs"],
             "hidden_edges": p["hidden"],
-        })
+        }
+        if p.get("break"):
+            item["break"] = p["break"]
+        views.append(item)
     # 只保留引用完整的标注:悬空引用渲染不出,落盘只会制造脏数据
     view_ids = {v["id"] for v in template_doc["views"]}
     annotations = [
@@ -209,6 +216,37 @@ def _write_model_source(model_code, template_doc, placements, palette, out_dir,
     with open(path, "w", encoding="utf-8") as f:
         f.write(json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
     return path
+
+
+def _apply_sheet_layout(template_doc, placements):
+    """按图纸可用区统一缩放并网格重排,必要时给轴向长视图启用断裂
+
+    只覆盖 placement 的 x/y/scale 与 break;segs/hidden 数组及 meta.mm_coords
+    保持原样,标注 refs.idx 与尺寸数值真值因此不受影响。
+    """
+    layout_views = []
+    for v in template_doc["views"]:
+        p = placements[v["id"]]
+        cb = _content_bbox(p["segs"], p["hidden"])
+        p["contentBBox"] = cb
+        layout_views.append({
+            "id": v["id"],
+            "source_view": v["source_view"],
+            "x": v["x"], "y": v["y"],
+            "contentBBox": cb,
+            "bbox": p["bbox"],
+            "px_per_mm": p["k"],
+        })
+    solved = sheet_layout.solve_layout(template_doc.get("sheet") or {},
+                                        layout_views)
+    for vid, res in solved.items():
+        p = placements[vid]
+        p["x"], p["y"], p["scale"] = res["x"], res["y"], res["scale"]
+        p["break"] = res["break"]
+    return {
+        "scale": next(iter(solved.values()))["scale"] if solved else None,
+        "broken_views": [vid for vid, r in solved.items() if r["break"]],
+    }
 
 
 def generate_one_frontend(model_code, template_doc, base_views, base_refs,
@@ -267,6 +305,8 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
             "bbox": pv.get("bbox", {}),
         }
 
+    layout_info = _apply_sheet_layout(template_doc, placements)
+
     rebound = []
     match_cache = {}
     for item in base_refs:
@@ -308,6 +348,7 @@ def generate_one_frontend(model_code, template_doc, base_views, base_refs,
         "svg": None,
         "unmatched": unmatched,
         "dims": _frontend_dim_summary(rebound),
+        "layout": layout_info,
         "elapsed": round(time.time() - t0, 2),
     }
 

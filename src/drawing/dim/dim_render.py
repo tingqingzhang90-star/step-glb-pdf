@@ -11,6 +11,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
+from drawing import break_view
 from drawing.dim.dim_geometry import (to_line_seg, to_circle, line_basis, offset_point,
                           signed_distance_to_line, closest_point_on_line,
                           project_point_to_line, line_intersection,
@@ -47,14 +48,35 @@ def _hex_rgb(color):
 
 
 def _sheet_point(placement, lx, ly):
-    return (placement["x"] + lx * placement["scale"],
-            placement["y"] + ly * placement["scale"])
+    """视图局部画布 px → 图纸 mm,断裂时把点贴到切口"""
+    spec = break_view.from_dict(placement.get("break"))
+    x, y = break_view.project_point(lx, ly, spec)
+    return (placement["x"] + x * placement["scale"],
+            placement["y"] + y * placement["scale"])
 
 
 def _face_extent_sheet(placement, extent, axis):
-    """端面线原始范围(画布 px)换算到图纸坐标"""
+    """端面线原始范围(画布 px)换算到图纸坐标;仅同轴时才投影"""
+    spec = break_view.from_dict(placement.get("break"))
+    if spec is not None and spec.axis != axis:
+        spec = None
     base = placement["y"] if axis == "y" else placement["x"]
-    return [base + v * placement["scale"] for v in extent]
+    return [base + break_view.clamp_coord(v, spec) * placement["scale"]
+            for v in extent]
+
+
+def _fallback_mm(sheet_len, view, unit):
+    """缺 mm 元数据时由图上长度反算,补回断裂省略的轴向分量
+
+    断裂只缩短沿断裂轴的分量,所以按 unit 在该轴上的投影比例加回 shift,
+    尺寸数值才不会被算短。有 mm_coords/spanMm 时各标注仍优先取真值。
+    """
+    spec = break_view.from_dict(view.get("break"))
+    extra = 0.0
+    if spec is not None:
+        u = unit[0] if spec.axis == "x" else unit[1]
+        extra = spec.shift * view["scale"] * abs(u)
+    return (sheet_len + extra) / (view["scale"] * (view["k"] or 1.0))
 
 
 def _line_mm_length(line):
@@ -268,7 +290,7 @@ def _linear_single(ann, segs, views):
     unit = basis["unit"]
     mm_val = _line_mm_length(line)
     if mm_val is None:
-        mm_val = basis["len"] / (view["scale"] * (view["k"] or 1.0))
+        mm_val = _fallback_mm(basis["len"], view, basis["unit"])
     text = format_mm(mm_val)
     arrows = build_linear_arrows(e1, e2, unit, text, _arrow_mode(ann))
     dim_start, dim_end = extend_linear_line(e1, e2, arrows["outward"], unit, *_line_extension(ann))
@@ -388,7 +410,7 @@ def _linear_parallel(ann, segs, views):
     dim_end = offset_point(dim_base, normal, distance)
     mm_val = _parallel_mm_distance(line1, line2)
     if mm_val is None:
-        mm_val = distance / (v1["scale"] * (v1["k"] or 1.0))
+        mm_val = _fallback_mm(distance, v1, normal)
     text = format_mm(mm_val)
     arrows = build_linear_arrows(dim_base, dim_end, normal, text, _arrow_mode(ann))
     dim_start, dim_end = extend_linear_line(dim_base, dim_end, arrows["outward"], normal, *_line_extension(ann))
@@ -422,7 +444,7 @@ def _linear_center(ann, segs, views):
     if m1 and m2:
         mm_val = math.hypot(m1[0] - m2[0], m1[1] - m2[1])
     else:
-        mm_val = basis["len"] / (v1["scale"] * (v1["k"] or 1.0))
+        mm_val = _fallback_mm(basis["len"], v1, basis["unit"])
     text = format_mm(mm_val)
     arrows = build_linear_arrows(e1, e2, basis["unit"], text, _arrow_mode(ann))
     dim_start, dim_end = extend_linear_line(e1, e2, arrows["outward"], basis["unit"], *_line_extension(ann))
@@ -465,7 +487,7 @@ def _linear_circle_edge(ann, segs, views):
         mm_val = _point_to_line_mm(mm_c, [mm_line[0:2], mm_line[2:4]])
     else:
         d = abs(signed_distance_to_line(c, q1, basis["perp"]))
-        mm_val = d / (vc["scale"] * (vc["k"] or 1.0))
+        mm_val = _fallback_mm(d, vc, basis["perp"])
     text = format_mm(mm_val)
     arrows = build_linear_arrows(foot_c, foot_f, basis["perp"], text, _arrow_mode(ann))
     dim_start, dim_end = extend_linear_line(foot_c, foot_f, arrows["outward"], basis["perp"], *_line_extension(ann))
