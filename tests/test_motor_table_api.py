@@ -42,6 +42,10 @@ def test_motor_table_returns_power_and_torque(client):
     powers = {m["power_kw"] for m in body["motors"]}
     # 250直连 电机表含 5.5/7.5/11KW
     assert 5.5 in powers and 7.5 in powers and 11 in powers
+    # 编号格式:功率保留小数点 + 减速机后缀,前端 combo 直接取 code 传后端
+    codes = {m["code"] for m in body["motors"]}
+    assert "D5.5_AB182" in codes and "D11_AB182" in codes
+    assert "D5.5B_AB182" in codes  # 刹车电机带 B
 
 
 def test_motor_table_missing_series_param(client):

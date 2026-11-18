@@ -51,7 +51,7 @@ def test_trim_bbox_to_joint_only_moves_embedded_axis():
 
 
 def test_resolved_motor_bbox_ends_at_joint_face():
-    profile = ar.resolve_anchors("250-E-H2K1-L100-D11")
+    profile = ar.resolve_anchors("250-E-H2K1-L100-D11_AB182")
     by_id = {a["id"]: a for a in profile["anchors"]}
     body = by_id["motor.body"]
     assert body["bbox_max"][2] == pytest.approx(-341.24, abs=0.01)
@@ -63,7 +63,7 @@ def test_resolved_motor_bbox_trims_min_side_on_foldback():
     # 连接板两端面 -177/-137 都在电机包络内,但只有 -137 与减速机法兰、
     # 轴承座端面共面,才是减速机与安装件的接壤面。-177 只接盒盖,取它会
     # 把整块板厚多算进电机减速机尺寸。
-    profile = ar.resolve_anchors("250-F-H2K1-L100-5.5KW电机")
+    profile = ar.resolve_anchors("250-F-H2K1-L100-D5.5_AB182")
     by_id = {a["id"]: a for a in profile["anchors"]}
     body = by_id["motor.body"]
     assert body["bbox_min"][2] == pytest.approx(-137.0, abs=0.01)
@@ -72,7 +72,7 @@ def test_resolved_motor_bbox_trims_min_side_on_foldback():
 
 
 def test_envelope_faces_span_matches_exposed_length():
-    anchors = ar.resolve_anchors("250-E-H2K1-L100-D11")["anchors"]
+    anchors = ar.resolve_anchors("250-E-H2K1-L100-D11_AB182")["anchors"]
     left = dim_envelope.envelope_faces(anchors, "left")
     assert left["orientation"] == "horizontal"
     assert left["face_max"][0][0] == pytest.approx(-341.24, abs=0.01)
@@ -85,9 +85,9 @@ def test_envelope_faces_span_matches_exposed_length():
 
 
 @pytest.mark.parametrize("code,joint_z,span,side", [
-    ("250-E-H2K1-L100-D11", -341.24, 557.0, "max"),
-    ("250-E-H2K1-L100-D55", -341.24, 457.5, "max"),
-    ("250-F-H2K1-L100-5.5KW电机", -137.0, 457.5, "min"),
+    ("250-E-H2K1-L100-D11_AB182", -341.24, 557.0, "max"),
+    ("250-E-H2K1-L100-D5.5_AB182", -341.24, 457.5, "max"),
+    ("250-F-H2K1-L100-D5.5_AB182", -137.0, 457.5, "min"),
 ])
 def test_left_envelope_ends_at_joint_for_each_mount(code, joint_z, span, side):
     anchors = ar.resolve_anchors(code)["anchors"]
@@ -100,7 +100,7 @@ def test_left_envelope_ends_at_joint_for_each_mount(code, joint_z, span, side):
 def test_rule_template_envelope_value_matches_exposed_length():
     from drawing.rule_template import drawing_template as dt
 
-    profile = ar.resolve_anchors("250-E-H2K1-L100-D11")
+    profile = ar.resolve_anchors("250-E-H2K1-L100-D11_AB182")
     anchor_map = {a["id"]: a for a in profile["anchors"]}
     dim_def = {"id": "dim_motor_length_top", "type": "linear_envelope",
                "view": "top", "text": "电机减速机尺寸", "show_value": True,
@@ -125,7 +125,7 @@ def _placement():
 def test_rebind_motor_envelope_returns_exposed_span():
     from drawing.dim import dim_rebind
 
-    profile = ar.resolve_anchors("250-E-H2K1-L100-D11")
+    profile = ar.resolve_anchors("250-E-H2K1-L100-D11_AB182")
     r = dim_rebind.rebind_annotation(
         _motor_ann(), [], {}, profile, {"view_1": _placement()}, {})
     assert r["status"] == "motor"
@@ -136,7 +136,7 @@ def test_rebind_motor_envelope_returns_exposed_span():
 def test_rebind_single_mode_keeps_its_own_value():
     from drawing.dim import dim_rebind
 
-    profile = ar.resolve_anchors("250-E-H2K1-L100-D11")
+    profile = ar.resolve_anchors("250-E-H2K1-L100-D11_AB182")
     r = dim_rebind.rebind_annotation(
         _motor_ann("single"), [], {}, profile, {"view_1": _placement()}, {})
     assert r["status"] == "motor"
@@ -149,8 +149,8 @@ def test_foldback_motor_bbox_same_for_l100_and_l200():
         return next(a for a in ar.resolve_anchors(code)["anchors"]
                     if a["id"] == "motor.body")
 
-    short = body("250-F-H2K1-L100-5.5KW电机")
-    long = body("250-F-H2K1-L200-5.5KW电机")
+    short = body("250-F-H2K1-L100-D5.5_AB182")
+    long = body("250-F-H2K1-L200-D5.5_AB182")
     for field in ("bbox_min", "bbox_max", "size"):
         assert long[field] == pytest.approx(short[field], abs=0.01)
     assert long["bbox_min"][2] == pytest.approx(-137.0, abs=0.01)
@@ -164,7 +164,7 @@ def test_displace_parts_exempts_motor_side():
     from core import paths, rebuild_assembly as rb
 
     config = rb.load_config("250折返")
-    exempt = rb.motor_side_bases(config, "D55")
+    exempt = rb.motor_side_bases(config, "D5.5_AB182")
     assert exempt == {"AB180", "5.5kw"}
     with open(paths.transform_json("250折返"), encoding="utf-8") as f:
         original = json.load(f)

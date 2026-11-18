@@ -19,17 +19,17 @@ def test_warn_on_power_mismatch(caplog):
     with caplog.at_level(logging.WARNING, logger="core.build_config"):
         cfg = bc.build_motor(rows)
     assert "功率不匹配" in caplog.text
-    assert cfg["4.4kw电机"]["on"] == ["160减速机", "汇川5.5kw"]
+    assert cfg["D4.4_160"]["on"] == ["160减速机", "汇川5.5kw"]
 
 
 def test_warn_on_duplicate_code_and_keep_last_row(caplog):
     rows = [HEADER,
-            ["4.4kw电机(配115减速机)", "115减速机", "汇川4.4kw<1>", ""],
+            ["4.4kw电机(配160减速机)", "160减速机", "160减速机<1>", ""],
             ["4.4kw电机(配160减速机)", "160减速机", "汇川4.4kw<3>", ""]]
     with caplog.at_level(logging.WARNING, logger="core.build_config"):
         cfg = bc.build_motor(rows)
-    assert "代号重复" in caplog.text
-    assert cfg["4.4kw电机"]["name"] == "4.4kw电机(配160减速机)"
+    assert "组合编号重复" in caplog.text
+    assert cfg["D4.4_160"]["on"] == ["汇川4.4kw"]
 
 
 def test_no_warning_on_valid_table(caplog):
@@ -41,9 +41,9 @@ def test_no_warning_on_valid_table(caplog):
     with caplog.at_level(logging.WARNING, logger="core.build_config"):
         cfg = bc.build_motor(rows)
     assert "功率不匹配" not in caplog.text
-    assert "代号重复" not in caplog.text
-    assert cfg["4.4kw电机"]["power_kw"] == 4.4
-    assert cfg["5.5kw电机"]["power_kw"] == 5.5
+    assert "组合编号重复" not in caplog.text
+    assert cfg["D4.4_160"]["power_kw"] == 4.4
+    assert cfg["D5.5_160"]["power_kw"] == 5.5
 
 
 def test_parse_power_kw_handles_watt():

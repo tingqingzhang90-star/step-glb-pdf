@@ -82,6 +82,54 @@ def parse_power_kw(text):
     return value / 1000 if m.group(2).lower() == "w" else value
 
 
+def normalize_reducer(reducer):
+    """减速机列 → 编号后缀,统一去掉'减速机'与分隔符,空/无返回空串
+
+    '115减速机'/'AB-182'/'AB182'/'AB220减速机' → '115'/'AB182'/'AB182'/'AB220'
+    '无'/'' → ''。JDG65 的 '60减速机法兰80' 去掉中文后取 '6080';现有表无此写法。
+    """
+    s = str(reducer or "").strip()
+    if not s or s == "无":
+        return ""
+    s = re.split(r"[（(]", s)[0]
+    s = s.replace("减速机", "")
+    return re.sub(r"[^0-9A-Za-z]", "", s)
+
+
+def reducer_from_name(name):
+    """无独立减速机列时从名称兜底提取:'400W电机（60框）+60减速机（60框）' → '60'"""
+    m = re.search(r"(\d+)\s*减速机", str(name))
+    return m.group(1) if m else ""
+
+
+def build_motor_code(name, reducer, power_kw, brake):
+    """'5.5kw电机刹车(配160减速机)' → 'D5.5B_160'
+
+    功率保留小数点(g 格式去尾零),刹车加 B,减速机后缀用下划线分隔。
+    功率解析不出时退回名称里的数字串,仍是解析不出则用 'X' 占位,保证
+    每行都拿到唯一 key,不会像旧 strip_code 那样互相覆盖。
+    """
+    if power_kw is None:
+        m = re.search(r"([\d.]+)", str(name))
+        power = m.group(1) if m else "X"
+    else:
+        power = format(power_kw, "g")
+    code = f"D{power}{'B' if brake else ''}"
+    suffix = normalize_reducer(reducer) or reducer_from_name(name)
+    if suffix:
+        code += f"_{suffix}"
+    return code
+
+
+def _motor_has_brake_part(on_list):
+    """OnFeature 里的电机零件是否带刹车;列表里没有电机零件时返回 None"""
+    motor_parts = [f for f in on_list
+                   if "电机" in f or "汇川" in f or re.search(r"\d+(kw|w)", f, re.I)]
+    if not motor_parts:
+        return None
+    return any(("刹车" in f) or ("抱闸" in f) for f in motor_parts)
+
+
 def read_xlsx_rows(path):
     """读取 xlsx 第一个 sheet 的全部行(去全空行)"""
     from openpyxl import load_workbook
@@ -115,22 +163,22 @@ def build_mount_or_load(rows, label):
 
 
 def build_motor(rows):
-    """电机表 → {电机编号: {name, reducer, on, off, torque, power_kw, brake}}
+    """电机表 → {组合编号: {name, reducer, on, off, torque, power_kw, brake}}
+
+    编号由 build_motor_code 按「功率+刹车+减速机」生成,同一功率配不同减速机
+    会得到不同 key,不再像旧 strip_code 那样同名覆盖导致减速机选项丢失。
 
     支持两种表头:
       1) [电机, 减速机, OnFeature, OffFeature]   # 250:电机列写法"D55(5.5KW电机）"
       2) [电机减速机, OnFeature, OffFeature]      # JDG 等无减速机/编号列
-    电机列既可是"D55(5.5KW电机）"合并写法,也可是纯名称/纯编号。按表头定位列,
-    不按下标硬取,否则少一列的系列(JDG 等)会 IndexError。
-
-    配置 key 统一用 strip_code 抽出的编号(便于型号拼接),原始写法存回 name,
-    供 UI 展示与按名称反查。
+    按表头定位列,不按下标硬取,否则少一列的系列(JDG 等)会 IndexError。
 
     扭矩列(如「扭矩(Nm)」)为可选:存在则一并读取,供选型界面按电机直接取额定扭矩,
     缺失时前端回退 T=P*9550/n 估算。功率从电机名列解析(kW/KW 或 W,汇川1500w 等),
     统一为 kW;刹车由名称含"刹车/抱闸"或编号以 B 结尾判断。
-    重复代号与 OnFeature 功率错配会写 warning 日志但不阻断生成:多个系列存在
-    同名多行(不同减速机),硬报错会让面板无法生成任何配置。
+
+    功率错配、刹车与 OnFeature 不一致会写 warning 但不阻断生成:源表个别行有错
+    不应让整个系列配置无法产出,但需要留痕供修正。
     """
     header = [str(c).strip().lower() if c else "" for c in rows[0]]
     if "onfeature" in header and "offfeature" in header:
@@ -147,18 +195,18 @@ def build_motor(rows):
         if not r or not r[0]:
             continue
         raw = str(r[0]).strip()
-        code = strip_code(raw)
-        if not code:
-            continue
-        # 同名多行(不同减速机)互相覆盖,保留既有行为但要留痕
-        if code in seen:
-            logger.warning("电机表代号重复: %s 第 %d 行覆盖第 %d 行(%s),前面的减速机选项会丢失",
-                           code, lineno, seen[code], raw)
-        seen[code] = lineno
-        reducer = r[idx_reducer] if idx_reducer is not None and idx_reducer < len(r) else ""
+        reducer = str(r[idx_reducer]).strip() if (
+            idx_reducer is not None and idx_reducer < len(r) and r[idx_reducer]) else ""
         power_kw = parse_power_kw(raw)
         on_list = parse_feature_list(r[idx_on]) if idx_on < len(r) else []
         off_list = parse_feature_list(r[idx_off]) if idx_off < len(r) else []
+        brake = (("刹车" in raw) or ("抱闸" in raw)
+                 or strip_code(raw).endswith("B"))
+        code = build_motor_code(raw, reducer, power_kw, brake)
+        if code in seen:
+            logger.warning("电机表组合编号重复: %s 第 %d 行覆盖第 %d 行(%s)",
+                           code, lineno, seen[code], raw)
+        seen[code] = lineno
         # OnFeature 里电机零件的功率必须与行名一致,否则装错电机而配置不报错
         for feat in on_list:
             feat_kw = parse_power_kw(feat)
@@ -167,7 +215,11 @@ def build_motor(rows):
                     and abs(feat_kw - power_kw) > 1e-6):
                 logger.warning("电机表功率不匹配: 第 %d 行 %s -> OnFeature %s",
                                lineno, raw, feat)
-        brake = ("刹车" in raw) or ("抱闸" in raw) or (code.endswith("B"))
+        # 名称含刹车但 OnFeature 的电机零件不带刹车(或反之),会装错电机
+        part_brake = _motor_has_brake_part(on_list)
+        if part_brake is not None and part_brake != brake:
+            logger.warning("电机表刹车不一致: 第 %d 行 %s -> OnFeature %s (名称 brake=%s)",
+                           lineno, raw, on_list, brake)
         torque = None
         if idx_torque is not None and idx_torque < len(r) and r[idx_torque] not in (None, ""):
             try:

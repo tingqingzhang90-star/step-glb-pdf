@@ -35,9 +35,9 @@ def test_build_motor_reads_four_column_table():
     rows = [["电机", "减速机", "OnFeature", "OffFeature"],
             ["11kw电机", "AB182", "AB220-L1<1>,11kw<1>", "7.5kw<1>"]]
     cfg = bc.build_motor(rows)
-    assert cfg["11kw电机"]["reducer"] == "AB182"
-    assert cfg["11kw电机"]["on"] == ["AB220-L1", "11kw"]
-    assert cfg["11kw电机"]["off"] == ["7.5kw"]
+    assert cfg["D11_AB182"]["reducer"] == "AB182"
+    assert cfg["D11_AB182"]["on"] == ["AB220-L1", "11kw"]
+    assert cfg["D11_AB182"]["off"] == ["7.5kw"]
 
 
 def test_build_motor_reads_three_column_table():
@@ -45,9 +45,9 @@ def test_build_motor_reads_three_column_table():
     rows = [["电机减速机", "OnFeature", "OffFeature"],
             ["汇川100w", "汇川100w<1>", "汇川100w刹车<1>"]]
     cfg = bc.build_motor(rows)
-    assert cfg["汇川100w"]["on"] == ["汇川100w"]
-    assert cfg["汇川100w"]["off"] == ["汇川100w刹车"]
-    assert cfg["汇川100w"]["reducer"] == ""
+    assert cfg["D0.1"]["on"] == ["汇川100w"]
+    assert cfg["D0.1"]["off"] == ["汇川100w刹车"]
+    assert cfg["D0.1"]["reducer"] == ""
 
 
 def test_build_series_config_end_to_end(monkeypatch, tmp_path):
@@ -77,7 +77,7 @@ def test_build_series_config_end_to_end(monkeypatch, tmp_path):
 
     assert config["series"] == "测试系列"
     assert config["cylinder_part"] == "测试缸体"
-    assert list(config["motor"]) == ["汇川100w"]
+    assert list(config["motor"]) == ["D0.1"]
     assert config["mount"]["H2"]["on"] == ["测试前盖"]
     assert config["mount"]["H2"]["off"] == ["测试前法兰"]
     # 首列"代号(文字说明)"拆开:代号作 key 拼型号,原文留在 name 供面板展示

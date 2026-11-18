@@ -101,8 +101,8 @@ def test_load_model_parts_switches_active_series():
     """
     if not os.path.exists(paths.config_path("270直连")):
         pytest.skip("缺少 270直连 系列配置")
-    _, series_name, _, motor, _ = ar._load_model_parts("270-E-H3K2-L100-D11")
+    _, series_name, _, motor, _ = ar._load_model_parts("270-E-H3K2-L100-D11_AB182")
     assert series_name == "270直连"
-    assert motor == "11kw电机"
+    assert motor == "D11_AB182"
     assert rb.PARTS_DIR == paths.parts_dir("270直连")
     assert rb.PART_SEARCH_PATH[0] == paths.parts_dir("270直连")
