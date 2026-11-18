@@ -17,8 +17,6 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.pdfbase import pdfmetrics
 
-from drawing import break_view
-from drawing.dim import dim_pdf_break
 from drawing.table_split import (
     LINE_SPACING, cell_text_rects, draw_split_dividers, line_baselines,
     parse_align,
@@ -64,19 +62,7 @@ def _hex_rgb(hex_color, default):
 
 
 def _view_scale(view):
-    # 主链路统一用 view.scale(画布 px → 图纸 mm);bbox.scale 是模型 mm →
-    # 画布 px,两回事,混用会把视图缩小近 6 倍
-    return view.get("scale") or 1.0
-
-
-class _PdfPt:
-    """sheet mm(y 向下) → PDF mm(y 向上),供断裂裁剪矩形复用"""
-
-    def __init__(self, sheet_h):
-        self.sheet_h = sheet_h
-
-    def pt(self, x, y):
-        return (x, self.sheet_h - y)
+    return view.get("bbox", {}).get("scale") or view.get("scale") or 1.0
 
 
 def render_drawing_source_pdf(doc, output_pdf):
@@ -94,14 +80,12 @@ def render_drawing_source_pdf(doc, output_pdf):
     c.setTitle(doc.get("model_id") or "工程图")
     c.scale(mm, mm)  # 之后所有坐标均为 sheet mm
 
-    # 图框:内缩 20mm,与前端 SVG 及 dim_pdf_sheet 一致。
-    # 旧写法把 fy(10)(顶部坐标)当成 rect 的左下角,图框实际跑出了页面
-    m = 20
+    # 图框
     c.setStrokeColorRGB(*_C_EDGE)
     c.setLineWidth(0.8)
-    c.rect(m, m, sw - 2 * m, sh - 2 * m, stroke=1, fill=0)
+    c.rect(10, fy(10), sw - 20, sh - 20, stroke=1, fill=0)
 
-    _draw_views(c, doc.get("views", []), fy, _PdfPt(sh))
+    _draw_views(c, doc.get("views", []), fy)
     _draw_annotations(c, doc, fy)
     for t in doc.get("tables", []):
         _draw_table(c, t, fy)
@@ -114,24 +98,7 @@ def render_drawing_source_pdf(doc, output_pdf):
 # --------------------------------------------------------------------------
 # 视图几何
 # --------------------------------------------------------------------------
-def _stroke_source_edges(c, placement, dx, dy, fy):
-    """分段描边:平移量换算成视图原点偏移,edges 数组与下标保持不动"""
-    s = placement["scale"]
-    ox = placement["x"] + dx * s
-    oy = placement["y"] + dy * s
-    c.setLineWidth(_W_VISIBLE)
-    c.setStrokeColorRGB(*_C_EDGE)
-    for seg in placement.get("edges", []):
-        _draw_seg(c, seg, s, ox, oy, fy)
-    c.setLineWidth(_W_HIDDEN)
-    c.setStrokeColorRGB(*_C_HIDDEN)
-    c.setDash(1, 1)
-    for seg in placement.get("hidden", []):
-        _draw_seg(c, seg, s, ox, oy, fy)
-    c.setDash()
-
-
-def _draw_views(c, views, fy, mapper):
+def _draw_views(c, views, fy):
     for view in views:
         s = _view_scale(view)
         ox, oy = view.get("x", 0), view.get("y", 0)
@@ -140,20 +107,17 @@ def _draw_views(c, views, fy, mapper):
         c.setFont(_CN_FONT, 3.5)
         c.drawString(ox + 2, fy(oy - 2), label)
 
-        placement = {
-            "x": ox, "y": oy, "scale": s,
-            "contentBBox": view.get("contentBBox"),
-            "edges": view.get("edges", []),
-            "hidden": view.get("hidden_edges") or [],
-        }
-        spec = break_view.from_dict(view.get("break"))
-        if spec is not None:
-            dim_pdf_break.draw_broken(
-                c, placement, mapper, spec,
-                lambda cc, p, m, dx, dy: _stroke_source_edges(cc, p, dx, dy, fy),
-                _C_EDGE, _W_VISIBLE)
-            continue
-        _stroke_source_edges(c, placement, 0.0, 0.0, fy)
+        c.setLineWidth(_W_VISIBLE)
+        c.setStrokeColorRGB(*_C_EDGE)
+        for seg in view.get("edges", []):
+            _draw_seg(c, seg, s, ox, oy, fy)
+
+        c.setLineWidth(_W_HIDDEN)
+        c.setStrokeColorRGB(*_C_HIDDEN)
+        c.setDash(1, 1)
+        for seg in view.get("hidden_edges", []) or []:
+            _draw_seg(c, seg, s, ox, oy, fy)
+        c.setDash()
 
 
 def _draw_seg(c, seg, s, ox, oy, fy):
@@ -189,11 +153,9 @@ def _edge_endpoints(view, idx, hidden=False):
     seg = segs[idx]
     s = _view_scale(view)
     ox, oy = view.get("x", 0), view.get("y", 0)
-    spec = break_view.from_dict(view.get("break"))
 
     def P(p):
-        x, y = break_view.project_point(p[0], p[1], spec)
-        return (ox + s * x, oy + s * y)
+        return (ox + s * p[0], oy + s * p[1])
 
     if seg.get("type") == "line":
         return P((seg["x1"], seg["y1"])), P((seg["x2"], seg["y2"]))

@@ -6,7 +6,6 @@ import {
   lineBasis, extendExtEnd, linearTextAngle, linearTextPos, LINEAR_MIN_OFFSET
 } from './geometry.js'
 import { buildLinearArrows, extendLinearLine } from './arrow.js'
-import { parseBreakSpec, projectPoint } from '@/views/breakView.js'
 
 function pickEnvelopeEndpoint(face, orientation, offset) {
   const [a, b] = face
@@ -38,7 +37,6 @@ function snapEndpointToViewEdge(view, pt, orientation, offset, span = Infinity, 
   const limit = span * FACE_EDGE_LEN_RATIO
   const edges = [...(view.edges || []), ...(view.hiddenEdges || [])]
   const axisIdx = orientation === 'horizontal' ? 0 : 1
-  const spec = parseBreakSpec(view?.break)
   let best = null
   let bestDist = Infinity
   for (const seg of edges) {
@@ -47,13 +45,10 @@ function snapEndpointToViewEdge(view, pt, orientation, offset, span = Infinity, 
       const m = seg.meta?.mm_coords
       if (m && m.length >= 4 && Math.abs(m[axisIdx] - axisMm) > SNAP_AXIS_MM) continue
     }
-    // 候选边与 faceToSheet 得到的 pt 必须处在同一投影空间
-    const c1 = projectPoint(seg.x1, seg.y1, spec)
-    const c2 = projectPoint(seg.x2, seg.y2, spec)
-    const x1 = c1.x * k + view.x
-    const y1 = c1.y * k + view.y
-    const x2 = c2.x * k + view.x
-    const y2 = c2.y * k + view.y
+    const x1 = seg.x1 * k + view.x
+    const y1 = seg.y1 * k + view.y
+    const x2 = seg.x2 * k + view.x
+    const y2 = seg.y2 * k + view.y
     if (orientation === 'horizontal') {
       // 端面线为竖直边线;根据 offset 方向取边线的上/下端点作为延伸线起点
       if (Math.abs(x2 - x1) > 2) continue

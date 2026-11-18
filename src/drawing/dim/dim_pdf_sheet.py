@@ -14,8 +14,6 @@ import os
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdf_canvas
 
-from drawing import break_view
-from drawing.dim import dim_pdf_break
 from drawing.dim.dim_style import CFG as _CFG, PX2MM as _PX2MM
 from drawing.table_split import (
     LINE_SPACING, cell_text_rects, draw_split_dividers, line_baselines,
@@ -76,25 +74,13 @@ def _draw_view_edges(c, placement, mapper):
     ReportLab 的 canvas.line() 每次都要做一遍状态+路径操作, 一个视图几百上千
     条直线段时开销可观(实测 3 视图 ~0.4s); 直线段合并成单条 Path 后每视图
     只需一次 drawPath, 圆/折线数量少, 仍逐条画。
-
-    断裂视图不改边线数组:按 clip_ranges 分两段裁剪,右段整体平移省略长度,
-    切口处再补两条波浪线。clip 与平移都作用在视图局部画布坐标上。
     """
-    spec = break_view.from_dict(placement.get("break"))
-    if spec is not None:
-        dim_pdf_break.draw_broken(c, placement, mapper, spec, _stroke_edges,
-                                  _C_EDGE, _W_VISIBLE * mapper.k)
-        return
-    _stroke_edges(c, placement, mapper, 0.0, 0.0)
-
-
-def _stroke_edges(c, placement, mapper, dx, dy):
     k = mapper.k
     s = placement["scale"]
     ox, oy = placement["x"], placement["y"]
 
     def pt(x, y):
-        return mapper.pt((x + dx) * s + ox, (y + dy) * s + oy)
+        return mapper.pt(x * s + ox, y * s + oy)
 
     for segs, color, width, dash in (
             (placement["segs"], _C_EDGE, _W_VISIBLE * k, None),
@@ -114,18 +100,18 @@ def _stroke_edges(c, placement, mapper, dx, dy):
                 c.setDash()
         for seg in segs:
             if seg.get("type") != "line":
-                _draw_seg(c, seg, placement, mapper, color, width, dash, dx, dy)
+                _draw_seg(c, seg, placement, mapper, color, width, dash)
 
 
-def _draw_seg(c, seg, placement, mapper, color, width, dash, dx=0.0, dy=0.0):
+def _draw_seg(c, seg, placement, mapper, color, width, dash):
     s = placement["scale"]
     ox, oy = placement["x"], placement["y"]
 
     def px(v):
-        return (v + dx) * s + ox
+        return v * s + ox
 
     def py(v):
-        return (v + dy) * s + oy
+        return v * s + oy
 
     st = seg.get("type")
     c.setStrokeColorRGB(*color)

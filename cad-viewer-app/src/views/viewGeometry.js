@@ -1,8 +1,6 @@
 // 视图几何与对齐纯函数（无 Vue 依赖，从 App.vue 抽离）
 // 仅处理视图包围盒、初始比例、放置定位、中心点与投影对齐检测。
 
-import { parseBreakSpec, effectiveContentBox } from './breakView.js'
-
 const ALIGN_SNAP_THRESHOLD = 8 // 吸附阈值（SVG 坐标 px）
 
 // 垂直对齐组：水平轴平行于 X 轴 → 拖拽时 X 中心对齐
@@ -79,10 +77,9 @@ export function getCenteredViewPlacement(view, point, scale) {
 
 /** 视图中心在图纸中的坐标（含显示比例） */
 export function getViewCenterInSheet(pv, displayScale) {
-  const cb = viewContentBox(pv)
   return {
-    x: pv.x + (cb.x + cb.width / 2) * displayScale,
-    y: pv.y + (cb.y + cb.height / 2) * displayScale
+    x: pv.x + (pv.contentBBox.x + pv.contentBBox.width / 2) * displayScale,
+    y: pv.y + (pv.contentBBox.y + pv.contentBBox.height / 2) * displayScale
   }
 }
 
@@ -125,32 +122,4 @@ export function detectAlignment(centerX, centerY, skipId, placedViews, getScale)
   }
 
   return { guides, snapDx, snapDy }
-}
-
-/** 视图内容包围盒:断裂后按有效占位缩短,边线数组本身不变 */
-export function viewContentBox(pv) {
-  const spec = parseBreakSpec(pv?.break)
-  let cb = pv?.contentBBox
-  if (!cb) {
-    const b = pv?.bbox || {}
-    const k = b.scale ?? 1
-    cb = {
-      x: b.x ?? 0, y: b.y ?? 0,
-      width: (b.orig_width ?? b.width ?? 400) * k,
-      height: (b.orig_height ?? b.height ?? 300) * k
-    }
-  }
-  return effectiveContentBox(cb, spec)
-}
-
-/** 视图内容在图纸上的矩形(含断裂后的有效占位) */
-export function viewSheetRect(pv) {
-  const scale = pv?.scale ?? 1
-  const cb = viewContentBox(pv)
-  return {
-    x: pv.x + cb.x * scale,
-    y: pv.y + cb.y * scale,
-    width: cb.width * scale,
-    height: cb.height * scale
-  }
 }

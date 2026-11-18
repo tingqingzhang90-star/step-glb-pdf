@@ -1,7 +1,5 @@
 // 图纸坐标换算与边线引用(依赖 svgRef 与已放置视图)
 import { ref } from 'vue'
-import { viewSheetRect as calcViewSheetRect } from '@/views/viewGeometry.js'
-import { parseBreakSpec, projectPoint } from '@/views/breakView.js'
 
 export function useSheetCoords({ placedViews }) {
   const svgRef = ref(null)
@@ -37,9 +35,17 @@ export function useSheetCoords({ placedViews }) {
       && event.clientY >= rect.top && event.clientY <= rect.bottom
   }
 
-  /** 视图内容在图纸坐标下的矩形(断裂后按有效占位计算) */
+  /** 视图内容在图纸坐标下的矩形。
+   *  内容包围盒是视图局部坐标(= mm × bbox.scale),需再乘显示比例 view.scale,
+   *  与视图 <g> 的 transform: translate(view.x, view.y) scale(view.scale) 一致。 */
   function viewSheetRect(view) {
-    return calcViewSheetRect(view)
+    const s = view.scale ?? 1
+    const cb = view.contentBBox
+    const bx = cb ? cb.x : 0
+    const by = cb ? cb.y : 0
+    const bw = cb ? cb.width : (view.bbox?.orig_width ?? view.bbox?.width ?? 0) * (view.bbox?.scale ?? 1)
+    const bh = cb ? cb.height : (view.bbox?.orig_height ?? view.bbox?.height ?? 0) * (view.bbox?.scale ?? 1)
+    return { x: view.x + bx * s, y: view.y + by * s, width: bw * s, height: bh * s }
   }
 
   /** 图纸坐标 → 命中的视图(重叠时取最上层)。
@@ -69,11 +75,10 @@ export function useSheetCoords({ placedViews }) {
     return view.scale
   }
 
-  /** 视图局部坐标 → 图纸坐标;断裂时带内点贴到切口,标注几何自动跟随 */
+  /** 视图局部坐标 → 图纸坐标 */
   function getSheetPoint(view, lx, ly) {
     const displayScale = getViewDisplayScale(view)
-    const p = projectPoint(lx, ly, parseBreakSpec(view?.break))
-    return { x: view.x + p.x * displayScale, y: view.y + p.y * displayScale }
+    return { x: view.x + lx * displayScale, y: view.y + ly * displayScale }
   }
 
   /** 视图 px → mm 换算比例 */

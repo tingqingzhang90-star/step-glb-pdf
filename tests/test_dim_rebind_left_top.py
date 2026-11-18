@@ -132,26 +132,3 @@ def test_write_model_source_drops_missing_view_refs(tmp_path):
     saved = _write_source("m", _minimal_doc(),
                           {"view_1": _placement(edges)}, str(tmp_path), anns)
     assert [a["id"] for a in saved["annotations"]] == ["ok"]
-
-
-def test_write_model_source_keeps_refs_and_mm_with_break(tmp_path):
-    """断裂只写 view.break:边线数组、refs.idx 与 spanMm 真值都不得被改"""
-    spec = {"axis": "x", "cutA": 100.0, "cutB": 160.0, "pxPerMm": 0.2,
-            "waveAmp": 3, "waveCycles": 3, "visualGap": 6}
-    edges = [_line(50, 120, 220, 120), _line(60, 130, 80, 130)]
-    edges[0]["meta"] = {"mm_coords": [-137.0, 10.0, 320.5, 10.0]}
-    before = json.loads(json.dumps(edges))
-    anns = [{"id": "a1", "type": "linear", "mode": "single", "spanMm": 457.5,
-             "refs": [{"viewId": "view_1", "idx": 0, "type": "edges"}]}]
-    placement = _placement(edges)
-    placement["break"] = spec
-    saved = _write_source("m", _minimal_doc(),
-                          {"view_1": placement}, str(tmp_path), anns)
-    view = saved["views"][0]
-    assert view["break"] == spec
-    assert view["edges"] == before
-    assert len(view["edges"]) == 2
-    ann = saved["annotations"][0]
-    assert ann["refs"][0]["idx"] == 0
-    assert ann["spanMm"] == 457.5
-    assert view["edges"][0]["meta"]["mm_coords"] == [-137.0, 10.0, 320.5, 10.0]

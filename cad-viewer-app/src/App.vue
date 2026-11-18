@@ -269,39 +269,13 @@
             @mousemove="onSvgMouseMove"
             @mouseleave="onSvgMouseLeave"
           >
-            <defs>
-              <template v-for="pv in placedViews" :key="`break-def-${pv.id}`">
-                <g v-if="breakOf(pv)" :id="`edge-def-${pv.id}`">
-                  <g class="visible-edges" vector-effect="non-scaling-stroke" stroke-width="1">
-                    <template v-for="(seg, i) in pv.edges" :key="`bv${i}`">
-                      <line v-if="seg && seg.type === 'line'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" stroke="#333" vector-effect="non-scaling-stroke" />
-                      <circle v-else-if="seg && seg.type === 'circle'" :cx="seg.cx" :cy="seg.cy" :r="seg.r" stroke="#333" fill="none" vector-effect="non-scaling-stroke" />
-                      <polyline v-else-if="seg && seg.type === 'polyline'" :points="polylinePoints(seg.points)" stroke="#333" fill="none" vector-effect="non-scaling-stroke" />
-                    </template>
-                  </g>
-                  <g class="hidden-edges" vector-effect="non-scaling-stroke">
-                    <template v-for="(seg, i) in pv.hiddenEdges" :key="`bh${i}`">
-                      <line v-if="seg && seg.type === 'line'" :x1="seg.x1" :y1="seg.y1" :x2="seg.x2" :y2="seg.y2" stroke="#999" stroke-width="0.8" stroke-dasharray="3,2" vector-effect="non-scaling-stroke" />
-                    </template>
-                  </g>
-                </g>
-                <clipPath v-if="breakOf(pv)" :id="`clip-a-${pv.id}`">
-                  <rect v-if="breakOf(pv).axis === 'x'" x="0" y="0" :width="breakOf(pv).cutA" height="300" />
-                  <rect v-else x="0" y="0" width="400" :height="breakOf(pv).cutA" />
-                </clipPath>
-                <clipPath v-if="breakOf(pv)" :id="`clip-b-${pv.id}`">
-                  <rect v-if="breakOf(pv).axis === 'x'" :x="breakOf(pv).cutB" y="0" :width="400 - breakOf(pv).cutB" height="300" />
-                  <rect v-else x="0" :y="breakOf(pv).cutB" width="400" :height="300 - breakOf(pv).cutB" />
-                </clipPath>
-              </template>
-            </defs>
             <rect x="20" y="20" :width="sheetWidth - 40" :height="sheetHeight - 40" fill="#ffffff" stroke="#999" stroke-width="1" />
-            <rect :x="sheetWidth - 260" :y="sheetHeight - 140" width="240" height="120" fill="none" stroke="#555" stroke-width="1" />
-            <line :x1="sheetWidth - 260" :y1="sheetHeight - 100" :x2="sheetWidth - 20" :y2="sheetHeight - 100" stroke="#555" stroke-width="1" />
-            <line :x1="sheetWidth - 180" :y1="sheetHeight - 140" :x2="sheetWidth - 180" :y2="sheetHeight - 20" stroke="#555" stroke-width="1" />
-            <text :x="sheetWidth - 140" :y="sheetHeight - 115" font-size="18" fill="#303133">产品工程图</text>
-            <text :x="sheetWidth - 244" :y="sheetHeight - 75" font-size="12" fill="#606266">型号</text>
-            <text :x="sheetWidth - 164" :y="sheetHeight - 75" font-size="12" fill="#303133">{{ selectedModel || '-' }}</text>
+            <rect x="920" y="690" width="240" height="120" fill="none" stroke="#555" stroke-width="1" />
+            <line x1="920" y1="730" x2="1160" y2="730" stroke="#555" stroke-width="1" />
+            <line x1="1000" y1="690" x2="1000" y2="810" stroke="#555" stroke-width="1" />
+            <text x="1040" y="715" font-size="18" fill="#303133">产品工程图</text>
+            <text x="936" y="755" font-size="12" fill="#606266">型号</text>
+            <text x="1016" y="755" font-size="12" fill="#303133">{{ selectedModel || '-' }}</text>
 
             <!-- 对齐引导线（仅拖拽时显示） -->
             <g v-if="alignmentGuides.length > 0" class="alignment-guides" pointer-events="none">
@@ -352,71 +326,49 @@
                 stroke-dasharray="4,2"
                 vector-effect="non-scaling-stroke"
               />
-              <g v-if="breakOf(pv)">
-                <g :clip-path="`url(#clip-a-${pv.id})`">
-                  <use :href="`#edge-def-${pv.id}`" />
-                </g>
-                <g :transform="breakOf(pv).axis === 'x' ? `translate(${-breakShift(breakOf(pv))}, 0)` : `translate(0, ${-breakShift(breakOf(pv))})`">
-                  <g :clip-path="`url(#clip-b-${pv.id})`">
-                    <use :href="`#edge-def-${pv.id}`" />
-                  </g>
-                </g>
-                <path
-                  v-for="(d, i) in wavePaths(pv)"
-                  :key="`wave-${i}`"
-                  :d="d"
-                  fill="none"
-                  stroke="#333"
-                  stroke-width="1"
-                  vector-effect="non-scaling-stroke"
-                  pointer-events="none"
-                />
+              <g class="visible-edges" vector-effect="non-scaling-stroke" stroke-width="1">
+                <template v-for="(seg, i) in pv.edges" :key="`v${i}`">
+                  <line
+                    v-if="seg && seg.type === 'line'"
+                    :x1="seg.x1"
+                    :y1="seg.y1"
+                    :x2="seg.x2"
+                    :y2="seg.y2"
+                    stroke="#333"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <circle
+                    v-else-if="seg && seg.type === 'circle'"
+                    :cx="seg.cx"
+                    :cy="seg.cy"
+                    :r="seg.r"
+                    stroke="#333"
+                    fill="none"
+                    vector-effect="non-scaling-stroke"
+                  />
+                  <polyline
+                    v-else-if="seg && seg.type === 'polyline'"
+                    :points="polylinePoints(seg.points)"
+                    stroke="#333"
+                    fill="none"
+                    vector-effect="non-scaling-stroke"
+                  />
+                </template>
               </g>
-              <g v-else>
-                <g class="visible-edges" vector-effect="non-scaling-stroke" stroke-width="1">
-                  <template v-for="(seg, i) in pv.edges" :key="`v${i}`">
-                    <line
-                      v-if="seg && seg.type === 'line'"
-                      :x1="seg.x1"
-                      :y1="seg.y1"
-                      :x2="seg.x2"
-                      :y2="seg.y2"
-                      stroke="#333"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <circle
-                      v-else-if="seg && seg.type === 'circle'"
-                      :cx="seg.cx"
-                      :cy="seg.cy"
-                      :r="seg.r"
-                      stroke="#333"
-                      fill="none"
-                      vector-effect="non-scaling-stroke"
-                    />
-                    <polyline
-                      v-else-if="seg && seg.type === 'polyline'"
-                      :points="polylinePoints(seg.points)"
-                      stroke="#333"
-                      fill="none"
-                      vector-effect="non-scaling-stroke"
-                    />
-                  </template>
-                </g>
-                <g class="hidden-edges" vector-effect="non-scaling-stroke">
-                  <template v-for="(seg, i) in pv.hiddenEdges" :key="`h${i}`">
-                    <line
-                      v-if="seg && seg.type === 'line'"
-                      :x1="seg.x1"
-                      :y1="seg.y1"
-                      :x2="seg.x2"
-                      :y2="seg.y2"
-                      stroke="#999"
-                      stroke-width="0.8"
-                      stroke-dasharray="3,2"
-                      vector-effect="non-scaling-stroke"
-                    />
-                  </template>
-                </g>
+              <g class="hidden-edges" vector-effect="non-scaling-stroke">
+                <template v-for="(seg, i) in pv.hiddenEdges" :key="`h${i}`">
+                  <line
+                    v-if="seg && seg.type === 'line'"
+                    :x1="seg.x1"
+                    :y1="seg.y1"
+                    :x2="seg.x2"
+                    :y2="seg.y2"
+                    stroke="#999"
+                    stroke-width="0.8"
+                    stroke-dasharray="3,2"
+                    vector-effect="non-scaling-stroke"
+                  />
+                </template>
               </g>
             </g>
 
@@ -898,7 +850,6 @@ import { Upload, ZoomIn, ZoomOut, Delete, DocumentAdd, Loading, Printer, ArrowDo
 import { polylinePoints } from '@/dimensions/geometry.js'
 import { useCanvasTransform } from '@/composables/useCanvasTransform'
 import { useTouchCanvas } from '@/composables/useTouchCanvas'
-import { parseBreakSpec, breakShift, wavePaths } from '@/views/breakView.js'
 import { useStyleConfig, TABLE_STYLE } from '@/composables/useStyleConfig'
 import { useTablePresets } from '@/composables/useTablePresets'
 import { usePlacedViews } from '@/composables/usePlacedViews'
@@ -996,12 +947,8 @@ useStyleConfig().applyToRoot()
 const sheetSizeOptions = ['A4', 'A3', 'A2', 'A1', 'A0']
 function onSheetSizeChange(name) {
   setSheetSize(name)
-  fitToSheet(sheetWidth.value, sheetHeight.value)
-}
-
-/** 供模板判断视图是否断裂;解析结果只读,不修改 view */
-function breakOf(view) {
-  return parseBreakSpec(view?.break)
+  // 视图与标注位置已固定在 sheet 像素坐标,切换尺寸后仍按当前坐标渲染,
+  // 用户可手动调整视图放置位置
 }
 
 // ===== 已放置视图:放置/删除/全局比例 =====
@@ -1009,7 +956,7 @@ const {
   placedViews, selectedViewId, globalScale, selectedView, placedViewNames,
   placeView, selectView, deleteSelectedView: removeSelectedView, clearViews, resetScale,
   setViews,
-  onViewScaleChange, resetCanvas, fitToSheet
+  onViewScaleChange, resetCanvas
 } = usePlacedViews({ sheetWidth, sheetHeight })
 
 // ===== 图纸坐标换算与边线引用 =====
