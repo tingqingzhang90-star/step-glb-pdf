@@ -141,3 +141,40 @@ def test_rebind_single_mode_keeps_its_own_value():
         _motor_ann("single"), [], {}, profile, {"view_1": _placement()}, {})
     assert r["status"] == "motor"
     assert "span_mm" not in r
+
+
+def test_foldback_motor_bbox_same_for_l100_and_l200():
+    """折返电机侧不随行程移动,L100 与 L200 的电机包络必须一致"""
+    def body(code):
+        return next(a for a in ar.resolve_anchors(code)["anchors"]
+                    if a["id"] == "motor.body")
+
+    short = body("250-F-H2K1-L100-5.5KW电机")
+    long = body("250-F-H2K1-L200-5.5KW电机")
+    for field in ("bbox_min", "bbox_max", "size"):
+        assert long[field] == pytest.approx(short[field], abs=0.01)
+    assert long["bbox_min"][2] == pytest.approx(-137.0, abs=0.01)
+    assert long["size"][2] == pytest.approx(457.5, abs=0.01)
+
+
+def test_displace_parts_exempts_motor_side():
+    """位移补偿排除配置里的电机侧零件,推杆侧仍随缸体伸长"""
+    import json
+
+    from core import paths, rebuild_assembly as rb
+
+    config = rb.load_config("250折返")
+    exempt = rb.motor_side_bases(config, "D55")
+    assert exempt == {"AB180", "5.5kw"}
+    with open(paths.transform_json("250折返"), encoding="utf-8") as f:
+        original = json.load(f)
+
+    moved = ar.displace_parts(original, 2, 0.0, 100.0, exempt)
+
+    def z(data, key):
+        return data[key]["transform_matrix"][11] * 1000.0
+
+    assert z(moved, "5.5kw-1") == pytest.approx(63.0)     # 电机本体不动
+    assert z(moved, "AB180-1") == pytest.approx(-137.0)   # 减速机不动
+    assert z(moved, "250推杆-1") == pytest.approx(465.0)  # 推杆侧 +100
+    assert z(original, "5.5kw-1") == pytest.approx(63.0)  # 输入未被修改

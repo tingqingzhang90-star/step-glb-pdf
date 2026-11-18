@@ -130,6 +130,19 @@ def resolve_motor(config, motor):
     return key
 
 
+def motor_side_bases(config, motor_code):
+    """电机侧零件基名集合,缸体伸长时这些零件必须留在后端不动
+
+    折返系列电机本体的安装坐标在缸体正侧(5.5kw z=+63,缸体 z=0),仅凭
+    "安装坐标 > 缸体安装坐标" 判断远端会把它当成推杆侧零件平移 delta_mm,
+    而同属电机侧的减速机/连接板/轴承座(z=-137)不动,电机与减速机被拉开。
+    用选型配置的 motor.<code>.on 显式标出电机侧零件,排除这个误判。
+    """
+    if not motor_code:
+        return set()
+    return set((config.get("motor", {}).get(motor_code) or {}).get("on", []))
+
+
 def check_env():
     """检查 pythonOCC 和 trimesh 是否可用"""
     missing = []
@@ -1273,23 +1286,26 @@ def build_assembly(model_code, motor=None, series=None):
                 log(f"  ✓ 主流程 {key} 沿 {axis_name} 轴拉伸 ×{scale:.3f}"
                     f" (主轴位移 {delta_mm:+.1f}mm)")
 
-                # 配合零件位移补偿: 沿主轴方向坐标 > 缸体中心的零件同步位移
+                # 配合零件位移补偿: 沿主轴方向坐标 > 缸体中心的零件同步位移。
+                # 电机侧零件排除在外:折返电机安装坐标在缸体正侧,但不是远端件
                 if abs(delta_mm) > 0.01:
                     cyl_center_mm = parts_data[key]["transform_matrix"][9 + axis] * 1000.0
                     delta_m = delta_mm / 1000.0  # 变换矩阵平移单位是米
+                    motor_parts = motor_side_bases(config, motor)
                     adjusted = 0
                     for pkey, pinfo in parts_data.items():
                         if pinfo.get("suppressed", False):
                             continue
                         pm = _KEY_RE.match(pkey)
                         pbase = pm.group(1) if pm else pkey
-                        if pbase == cyl_part_name:
+                        if pbase == cyl_part_name or pbase in motor_parts:
                             continue
                         pcoord_mm = pinfo["transform_matrix"][9 + axis] * 1000.0
                         if pcoord_mm > cyl_center_mm:
                             pinfo["transform_matrix"][9 + axis] += delta_m
                             adjusted += 1
-                    log(f"  ✓ 配合零件位移补偿: {adjusted} 件 沿 {axis_name} 轴 × {delta_mm:+.1f}mm")
+                    log(f"  ✓ 配合零件位移补偿: {adjusted} 件 沿 {axis_name} 轴 × {delta_mm:+.1f}mm"
+                        f" (电机侧排除 {sorted(motor_parts)})")
                 break
     elif cyl and not cyl_part_name:
         log("  ⚠ 配置缺少 cylinder_part, 跳过缸体拉伸(请重新运行 build_config.py)")

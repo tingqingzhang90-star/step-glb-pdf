@@ -71,17 +71,20 @@ def compute_cylinder_anchors(t_mm, axis_idx, local_min, local_max, radius, scale
     }
 
 
-def displace_parts(parts_data, axis_idx, cyl_axis_coord_mm, delta_mm):
+def displace_parts(parts_data, axis_idx, cyl_axis_coord_mm, delta_mm,
+                   exempt_bases=()):
     """配合零件位移补偿(纯函数,返回深拷贝)
 
     与 build_assembly 规则一致: 未抑制且主轴安装坐标大于缸体安装坐标
-    的零件,沿主轴平移 delta_mm(拉伸引起的缸体延伸量)。
+    的零件,沿主轴平移 delta_mm(拉伸引起的缸体延伸量)。电机侧零件除外:
+    折返电机安装坐标在缸体正侧,但缸体伸长时它必须跟减速机留在后端。
 
     Args:
         parts_data: parts_transform.json 数据
         axis_idx: 主轴索引
         cyl_axis_coord_mm: 缸体安装平移的主轴分量 mm
         delta_mm: 位移量 mm(正值沿主轴正向)
+        exempt_bases: 不参与位移的零件基名集合(电机侧)
 
     Returns:
         dict: 位移后的 parts_data 副本
@@ -89,8 +92,10 @@ def displace_parts(parts_data, axis_idx, cyl_axis_coord_mm, delta_mm):
     data = copy.deepcopy(parts_data)
     if abs(delta_mm) < 1e-6:
         return data
-    for info in data.values():
+    for key, info in data.items():
         if info.get("suppressed", False):
+            continue
+        if _base_name(key) in exempt_bases:
             continue
         coord = info["transform_matrix"][9 + axis_idx] * 1000.0
         if coord > cyl_axis_coord_mm:
@@ -489,7 +494,8 @@ def resolve_anchors(model_code):
     cyl = compute_cylinder_anchors(t_mm, axis_idx, local_min, local_max,
                                    radius, scale)
     delta_mm = (local_max - local_min) * (scale - 1.0)
-    data = displace_parts(parts_data, axis_idx, t_mm[axis_idx], delta_mm)
+    data = displace_parts(parts_data, axis_idx, t_mm[axis_idx], delta_mm,
+                          rb.motor_side_bases(config, motor))
 
     motor_bbox = _resolve_motor_bbox(data, config, motor)
     if motor_bbox:
